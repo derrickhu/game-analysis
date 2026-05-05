@@ -109,6 +109,14 @@ export interface DashboardSummary {
   inferredActiveUsersToday: number;
   /** 当前时间往前 60 分钟内 last_write_at 落在区间内的去重玩家（存档写入近似，非并发在线） */
   lastWriteWithinHourUsers: number;
+  /** 次日留存率：目标日前 1 天首日活跃 cohort，在目标日再次活跃的占比 */
+  retentionD1Rate: number | null;
+  retentionD1CohortUsers: number;
+  retentionD1ReturnedUsers: number;
+  /** 7 日留存率：目标日前 7 天首日活跃 cohort，在目标日再次活跃的占比 */
+  retentionD7Rate: number | null;
+  retentionD7CohortUsers: number;
+  retentionD7ReturnedUsers: number;
   avgLevel: number;
   avgDiamond: number;
   totalMergeCount: number;

@@ -16,6 +16,12 @@ const emptyData: DashboardData = {
     activeUsers: 0,
     inferredActiveUsersToday: 0,
     lastWriteWithinHourUsers: 0,
+    retentionD1Rate: null,
+    retentionD1CohortUsers: 0,
+    retentionD1ReturnedUsers: 0,
+    retentionD7Rate: null,
+    retentionD7CohortUsers: 0,
+    retentionD7ReturnedUsers: 0,
     avgLevel: 0,
     avgDiamond: 0,
     totalMergeCount: 0,
@@ -41,6 +47,10 @@ const emptyData: DashboardData = {
 
 function formatNumber(value: number): string {
   return Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 1 }) : '0';
+}
+
+function formatRetentionRate(value: number | null): string {
+  return value === null ? '-' : (value * 100).toFixed(1);
 }
 
 function formatTime(timestamp: number): string {
@@ -441,7 +451,7 @@ export function App() {
         type="info"
         showIcon
         message="实时趋势用于观察投流后玩家活跃变化"
-        description="「最近小时活跃」为北京时间的整点桶内、有存档变更的去重玩家；「近1小时写入玩家」为滚动 60 分钟内 last_write_at 落在窗口内的玩家数。上方第一张趋势图为核心：活跃、新增与广告权益增量（权益为存档字段差分，非 SDK 总调用）。第二张为合成与订单交付的增量趋势。首单类指标见花花妙屋-订单经营。"
+        description="「最近小时活跃」为北京时间的整点桶内、有存档变更的去重玩家；「近1小时写入玩家」为滚动 60 分钟内 last_write_at 落在窗口内的玩家数。次留/7留按首日活跃 cohort 近似计算：目标日前 1/7 天首次写档的玩家，在目标日是否再次写档。第一张趋势图为核心：活跃、新增与广告权益增量；第二张为合成与订单交付增量。"
       />
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8} xl={4}>
@@ -465,6 +475,28 @@ export function App() {
           <Card>
             <Statistic title="今日活跃" value={data.summary.inferredActiveUsersToday} suffix="人" />
             <Text type="secondary">{data.summary.latestDate || '-'}</Text>
+          </Card>
+        </Col>
+        <Col xs={24} md={8} xl={4}>
+          <Card>
+            <Tooltip title={`目标日 ${data.summary.latestDate || '-'}：前 1 天首日活跃 cohort ${data.summary.retentionD1CohortUsers} 人，其中 ${data.summary.retentionD1ReturnedUsers} 人目标日再次写档。快照版留存，非登录事件留存。`}>
+              <Statistic
+                title="次留"
+                value={formatRetentionRate(data.summary.retentionD1Rate)}
+                suffix={data.summary.retentionD1Rate === null ? '' : '%'}
+              />
+            </Tooltip>
+          </Card>
+        </Col>
+        <Col xs={24} md={8} xl={4}>
+          <Card>
+            <Tooltip title={`目标日 ${data.summary.latestDate || '-'}：前 7 天首日活跃 cohort ${data.summary.retentionD7CohortUsers} 人，其中 ${data.summary.retentionD7ReturnedUsers} 人目标日再次写档。快照历史不足 7 天时会显示为空。`}>
+              <Statistic
+                title="7留"
+                value={formatRetentionRate(data.summary.retentionD7Rate)}
+                suffix={data.summary.retentionD7Rate === null ? '' : '%'}
+              />
+            </Tooltip>
           </Card>
         </Col>
         <Col xs={24} md={8} xl={4}>

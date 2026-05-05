@@ -2,6 +2,13 @@ import type { DashboardData, DashboardSummary, DailyMetric, HuahuaSpecificMetric
 import { getGameConfig, getMetricCatalog } from '../shared/game-config';
 import { getConfig } from './config';
 import { getDb, getQualityCounts, listHourlyMetrics, listIngestRuns } from './db';
+import { toShanghaiDateKey } from './time';
+
+interface RetentionResult {
+  rate: number | null;
+  cohortUsers: number;
+  returnedUsers: number;
+}
 
 function mapMetric(row: any): DailyMetric {
   return {
@@ -46,6 +53,47 @@ function mapPlayer(row: any): PlayerFacts {
   };
 }
 
+function addDays(dateKey: string, offsetDays: number): string {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + offsetDays));
+  return date.toISOString().slice(0, 10);
+}
+
+function calculateRetention(database: ReturnType<typeof getDb>, gameKey: string, targetDate: string, dayOffset: number): RetentionResult {
+  if (!targetDate) return { rate: null, cohortUsers: 0, returnedUsers: 0 };
+
+  const cohortDate = addDays(targetDate, -dayOffset);
+  const rows = database.prepare(`
+    SELECT user_id, last_write_at
+    FROM raw_snapshot_history
+    WHERE game_key = ? AND last_write_at > 0
+    ORDER BY last_write_at ASC
+  `).all(gameKey) as Array<{ user_id: string; last_write_at: number }>;
+
+  const firstActiveDateByUser = new Map<string, string>();
+  const activeDatesByUser = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const activeDate = toShanghaiDateKey(Number(row.last_write_at));
+    const dates = activeDatesByUser.get(row.user_id) ?? new Set<string>();
+    dates.add(activeDate);
+    activeDatesByUser.set(row.user_id, dates);
+    if (!firstActiveDateByUser.has(row.user_id)) {
+      firstActiveDateByUser.set(row.user_id, activeDate);
+    }
+  }
+
+  const cohortUsers = [...firstActiveDateByUser.entries()]
+    .filter(([, firstActiveDate]) => firstActiveDate === cohortDate)
+    .map(([userId]) => userId);
+  const returnedUsers = cohortUsers.filter((userId) => activeDatesByUser.get(userId)?.has(targetDate)).length;
+
+  return {
+    rate: cohortUsers.length > 0 ? returnedUsers / cohortUsers.length : null,
+    cohortUsers: cohortUsers.length,
+    returnedUsers,
+  };
+}
+
 export function getDashboardData(gameKey: string): DashboardData {
   const gameConfig = getGameConfig(gameKey);
   const database = getDb();
@@ -75,6 +123,8 @@ export function getDashboardData(gameKey: string): DashboardData {
     FROM player_facts
     WHERE game_key = ? AND last_write_at >= ?
   `).get(gameKey, oneHourAgo) as any;
+  const retentionD1 = calculateRetention(database, gameKey, latestMetric?.metricDate || '', 1);
+  const retentionD7 = calculateRetention(database, gameKey, latestMetric?.metricDate || '', 7);
 
   const summary: DashboardSummary = {
     latestDate: latestMetric?.metricDate || '',
@@ -83,6 +133,12 @@ export function getDashboardData(gameKey: string): DashboardData {
     activeUsers: latestMetric?.activeUsers || 0,
     inferredActiveUsersToday: latestMetric?.activeUsers || 0,
     lastWriteWithinHourUsers: Number(writeWindowRow?.c || 0),
+    retentionD1Rate: retentionD1.rate,
+    retentionD1CohortUsers: retentionD1.cohortUsers,
+    retentionD1ReturnedUsers: retentionD1.returnedUsers,
+    retentionD7Rate: retentionD7.rate,
+    retentionD7CohortUsers: retentionD7.cohortUsers,
+    retentionD7ReturnedUsers: retentionD7.returnedUsers,
     avgLevel: Number(summaryRow?.avgLevel || 0),
     avgDiamond: Number(summaryRow?.avgDiamond || 0),
     totalMergeCount: Number(summaryRow?.totalMergeCount || 0),
