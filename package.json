@@ -1,0 +1,45 @@
+{
+  "name": "game-analysis",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "api": "tsx src/server/index.ts",
+    "ingest:file": "tsx src/server/jobs/ingest-file.ts",
+    "ingest:cloudbase": "tsx src/server/jobs/ingest-cloudbase.ts",
+    "metrics": "tsx src/server/jobs/recompute-metrics.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run typecheck && vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@cloudbase/node-sdk": "^3.18.1",
+    "@tanstack/react-table": "^8.21.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "antd": "^6.3.7",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^17.4.2",
+    "echarts": "^6.0.0",
+    "echarts-for-react": "^3.0.6",
+    "fastify": "^5.8.5",
+    "mysql2": "^3.22.3",
+    "node-cron": "^4.2.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.6.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3"
+  }
+}

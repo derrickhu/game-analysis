@@ -1,0 +1,54 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 1200px;
+  background: #f5f7fb;
+  color: #1f2933;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: #f5f7fb;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: auto;
+  padding: 20px 28px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.app-title {
+  margin: 0 0 4px;
+}
+
+.game-input {
+  width: 220px;
+}
+
+.app-content {
+  padding: 24px 28px 40px;
+}
+
+.metric-note {
+  margin-bottom: 16px;
+}
+
+.chart-row {
+  margin-top: 16px;
+}
+
+.table-card {
+  margin-top: 16px;
+}
