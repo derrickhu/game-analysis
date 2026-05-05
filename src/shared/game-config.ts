@@ -85,6 +85,24 @@ export const METRIC_CATALOG: MetricCatalogItem[] = [
     precision: 'planned',
     common: true,
   },
+  {
+    key: 'hotpot_max_level',
+    name: '最高关卡',
+    description: '来自 hotpot_bowl_progress.maxUnlockedLevelIndex，表示玩家最高解锁关卡。',
+    unit: '关',
+    source: 'snapshot',
+    precision: 'exact',
+    common: false,
+  },
+  {
+    key: 'hotpot_badge_level',
+    name: '徽章进度',
+    description: '来自 hotpot_bowl_progress.maxUnlockedBadgeLevelNumber，表示徽章解锁进度。',
+    unit: '关',
+    source: 'snapshot',
+    precision: 'exact',
+    common: false,
+  },
 ];
 
 const COMMON_MODULES: DashboardModuleConfig[] = [
@@ -162,6 +180,45 @@ export const GAME_CONFIGS: GameConfig[] = [
       'adEntitlementUsedToday',
       'checkinTotalDays',
       'questWeeklyPoints',
+    ],
+  },
+  {
+    gameKey: 'hotpot',
+    displayName: '别捞水果',
+    payloadPrefix: 'hotpot',
+    collectionName: 'hotpot_playerData',
+    cloudEnv: 'rosa-env-d7grf78r5dbd37323',
+    ingestCron: '0 * * * *',
+    commonMetricKeys: ['users_total', 'snapshot_inferred_active', 'avg_level'],
+    dashboardModules: [
+      {
+        key: 'hotpot-overview',
+        title: '经营概览',
+        kind: 'overview',
+        metricKeys: ['users_total', 'snapshot_inferred_active', 'avg_level'],
+        description: 'hot-pot 当前基于云存档快照展示玩家规模与关卡进度。',
+      },
+      {
+        key: 'hotpot-activity',
+        title: '活跃趋势',
+        kind: 'activity',
+        metricKeys: ['snapshot_inferred_active', 'real_dau'],
+        description: '当前使用快照变化推导活跃，真实 DAU 等事件接入。',
+      },
+      {
+        key: 'hotpot-progress',
+        title: '关卡进度',
+        kind: 'hotpotProgress',
+        metricKeys: ['hotpot_max_level', 'hotpot_badge_level'],
+        description: '基于 hotpot_bowl_progress 的当前关卡、最高解锁关卡和徽章进度。',
+      },
+    ],
+    playerColumns: [
+      'userId',
+      'platform',
+      'activeDate',
+      'level',
+      'star',
     ],
   },
 ];

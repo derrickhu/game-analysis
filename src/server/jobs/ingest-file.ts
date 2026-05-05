@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getConfig } from '../config';
-import { upsertRawSnapshot } from '../db';
+import { closeStorage, upsertRawSnapshot, upsertSnapshotHistory } from '../db';
 import { normalizeSnapshotDoc } from '../importers/snapshot-normalizer';
-import { recomputeDailyMetrics } from '../metrics';
+import { recomputeDailyMetrics, recomputeHourlyMetrics } from '../metrics';
 
 function readArg(name: string, fallback = ''): string {
   const prefix = `--${name}=`;
@@ -29,8 +29,12 @@ if (!Array.isArray(docs)) {
 }
 
 for (const doc of docs) {
-  upsertRawSnapshot(normalizeSnapshotDoc(doc, gameKey, collectionName));
+  const snapshot = normalizeSnapshotDoc(doc, gameKey, collectionName);
+  await upsertRawSnapshot(snapshot);
+  await upsertSnapshotHistory(snapshot);
 }
 
-const metrics = recomputeDailyMetrics(gameKey);
-console.log(`导入完成: game=${gameKey}, snapshots=${docs.length}, metricDays=${metrics.length}`);
+const dailyMetrics = await recomputeDailyMetrics(gameKey);
+const hourlyMetrics = await recomputeHourlyMetrics(gameKey);
+console.log(`导入完成: game=${gameKey}, snapshots=${docs.length}, metricDays=${dailyMetrics.length}, metricHours=${hourlyMetrics.length}`);
+await closeStorage();

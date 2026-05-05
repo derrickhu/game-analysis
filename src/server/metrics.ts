@@ -1,14 +1,13 @@
 import type { DailyMetric, PlayerFacts, RawSnapshot } from '../shared/types';
 import type { HourlyMetric } from '../shared/types';
 import {
-  getDb,
   listRawSnapshots,
   listSnapshotHistoryRows,
   replaceDailyMetrics,
   replaceHourlyMetrics,
   upsertPlayerFacts,
 } from './db';
-import { parseHuahuaSnapshot } from './adapters/huahua';
+import { getSnapshotAdapter } from './adapters';
 import { toShanghaiHourKey } from './time';
 
 function average(values: number[]): number {
@@ -36,20 +35,16 @@ function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
 
-export function parseSnapshots(gameKey: string): PlayerFacts[] {
-  const parser = gameKey === 'huahua' ? parseHuahuaSnapshot : parseHuahuaSnapshot;
-  const facts = listRawSnapshots(gameKey).map(parser);
+export async function parseSnapshots(gameKey: string): Promise<PlayerFacts[]> {
+  const adapter = getSnapshotAdapter(gameKey);
+  const facts = (await listRawSnapshots(gameKey)).map((snapshot) => adapter.parseSnapshot(snapshot));
 
-  const database = getDb();
-  database.transaction(() => {
-    for (const item of facts) upsertPlayerFacts(item);
-  })();
-
+  for (const item of facts) await upsertPlayerFacts(item);
   return facts;
 }
 
-export function recomputeDailyMetrics(gameKey: string): DailyMetric[] {
-  const facts = parseSnapshots(gameKey);
+export async function recomputeDailyMetrics(gameKey: string): Promise<DailyMetric[]> {
+  const facts = await parseSnapshots(gameKey);
   const byDate = new Map<string, PlayerFacts[]>();
 
   for (const item of facts) {
@@ -76,13 +71,13 @@ export function recomputeDailyMetrics(gameKey: string): DailyMetric[] {
       updatedAt: Date.now(),
     }));
 
-  replaceDailyMetrics(gameKey, metrics);
+  await replaceDailyMetrics(gameKey, metrics);
   return metrics;
 }
 
-export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
-  const rows = listSnapshotHistoryRows(gameKey);
-  const parser = gameKey === 'huahua' ? parseHuahuaSnapshot : parseHuahuaSnapshot;
+export async function recomputeHourlyMetrics(gameKey: string): Promise<HourlyMetric[]> {
+  const rows = await listSnapshotHistoryRows(gameKey);
+  const adapter = getSnapshotAdapter(gameKey);
   const byHour = new Map<string, {
     users: Set<string>;
     changed: number;
@@ -91,11 +86,13 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
     orderDelta: number;
     mergeDelta: number;
     adEntitlementDelta: number;
+    levelDelta: number;
+    badgeDelta: number;
   }>();
   const previousByUser = new Map<string, PlayerFacts>();
 
   for (const row of rows) {
-    const hour = toShanghaiHourKey(Number(row.changed_at));
+    const hour = toShanghaiHourKey(Number(row.last_write_at || row.changed_at));
     const bucket = byHour.get(hour) ?? {
       users: new Set<string>(),
       changed: 0,
@@ -104,6 +101,8 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
       orderDelta: 0,
       mergeDelta: 0,
       adEntitlementDelta: 0,
+      levelDelta: 0,
+      badgeDelta: 0,
     };
     const snapshot: RawSnapshot = {
       gameKey: row.game_key,
@@ -115,10 +114,10 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
       updatedAt: Number(row.updated_at || 0),
       lastWriteAt: Number(row.last_write_at || 0),
       payloadKeys: [],
-      payload: JSON.parse(row.payload_json || '{}'),
+      payload: typeof row.payload_json === 'string' ? JSON.parse(row.payload_json || '{}') : (row.payload_json || {}),
       importedAt: Number(row.changed_at || 0),
     };
-    const current = parser(snapshot);
+    const current = adapter.parseSnapshot(snapshot);
     const previous = previousByUser.get(current.userId);
 
     bucket.users.add(current.userId);
@@ -131,6 +130,8 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
       bucket.orderDelta += orderDelta;
       bucket.mergeDelta += mergeDelta;
       bucket.adEntitlementDelta += adEntitlementUsedDelta(previous, current);
+      bucket.levelDelta += Math.max(0, current.level - previous.level);
+      bucket.badgeDelta += Math.max(0, current.star - previous.star);
       if (previous.deliveredOrdersTotal === 0 && current.deliveredOrdersTotal > 0) {
         bucket.firstOrderUsers++;
       }
@@ -152,9 +153,11 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
       orderDelta: bucket.orderDelta,
       mergeDelta: bucket.mergeDelta,
       adEntitlementDelta: bucket.adEntitlementDelta,
+      levelDelta: bucket.levelDelta,
+      badgeDelta: bucket.badgeDelta,
       updatedAt: Date.now(),
     }));
 
-  replaceHourlyMetrics(gameKey, metrics);
+  await replaceHourlyMetrics(gameKey, metrics);
   return metrics;
 }

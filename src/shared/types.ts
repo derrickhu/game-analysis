@@ -52,6 +52,7 @@ export type DashboardModuleKind =
   | 'checkinQuest'
   | 'eventsCollection'
   | 'adEntitlement'
+  | 'hotpotProgress'
   | 'quality';
 
 export interface MetricCatalogItem {
@@ -98,6 +99,10 @@ export interface HourlyMetric {
   mergeDelta: number;
   /** 快照对比得到的广告权益当日已用量增量（见 huahua_ad_entitlements，非全量广告请求次数） */
   adEntitlementDelta: number;
+  /** 快照对比得到的关卡进度增量，适用于 hotpot 等关卡制游戏 */
+  levelDelta?: number;
+  /** 快照对比得到的徽章进度增量，适用于 hotpot */
+  badgeDelta?: number;
   updatedAt: number;
 }
 
@@ -164,6 +169,16 @@ export interface HuahuaSpecificMetrics {
   totalAdEntitlementUsed: number;
 }
 
+export interface HotpotSpecificMetrics {
+  currentLevelAvg: number;
+  maxUnlockedLevelAvg: number;
+  maxUnlockedLevel: number;
+  maxUnlockedBadgeLevel: number;
+  playersStarted: number;
+  musicEnabledUsers: number;
+  soundEnabledUsers: number;
+}
+
 export interface DashboardData {
   summary: DashboardSummary;
   dailyMetrics: DailyMetric[];
@@ -175,5 +190,6 @@ export interface DashboardData {
   quality: QualitySummary;
   gameSpecific: {
     huahua?: HuahuaSpecificMetrics;
+    hotpot?: HotpotSpecificMetrics;
   };
 }

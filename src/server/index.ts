@@ -1,11 +1,10 @@
 import Fastify from 'fastify';
 
 import { getConfig } from './config';
-import { getDb } from './db';
+import { initializeStorage } from './db';
 import { getDashboardData } from './dashboard';
 import { ingestCloudbaseSnapshots } from './cloudbase-ingest';
-import { recomputeDailyMetrics } from './metrics';
-import { createMysqlPool } from './mysql';
+import { recomputeDailyMetrics, recomputeHourlyMetrics } from './metrics';
 import { startScheduler } from './scheduler';
 
 const config = getConfig();
@@ -25,8 +24,9 @@ app.get('/api/dashboard', async (request) => {
 app.post('/api/metrics/recompute', async (request) => {
   const body = request.body as { game?: string } | undefined;
   const gameKey = body?.game || config.defaultGameKey;
-  const metrics = recomputeDailyMetrics(gameKey);
-  return { ok: true, gameKey, metricDays: metrics.length };
+  const dailyMetrics = await recomputeDailyMetrics(gameKey);
+  const hourlyMetrics = await recomputeHourlyMetrics(gameKey);
+  return { ok: true, gameKey, metricDays: dailyMetrics.length, metricHours: hourlyMetrics.length };
 });
 
 app.post('/api/ingest/cloudbase', async (request) => {
@@ -46,9 +46,9 @@ app.post('/api/ingest/cloudbase', async (request) => {
   return { ok: true, ...result };
 });
 
-getDb();
-void createMysqlPool().catch((error) => {
-  app.log.error(error, 'MySQL 初始化失败，将继续使用 SQLite');
+void initializeStorage().catch((error) => {
+  app.log.error(error, '存储初始化失败');
+  process.exit(1);
 });
 startScheduler();
 

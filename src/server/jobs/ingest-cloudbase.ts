@@ -1,4 +1,5 @@
 import { getConfig } from '../config';
+import { closeStorage } from '../db';
 import { ingestCloudbaseSnapshots } from '../cloudbase-ingest';
 
 function readArg(name: string, fallback = ''): string {
@@ -23,3 +24,4 @@ const result = await ingestCloudbaseSnapshots(
 console.log(
   `CloudBase 导入完成: game=${gameKey}, snapshots=${result.imported}, changed=${result.changed}, metricDays=${result.metricDays}, metricHours=${result.metricHours}`,
 );
+await closeStorage();

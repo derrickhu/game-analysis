@@ -50,7 +50,7 @@ export async function ingestCloudbaseSnapshots(
     sessionToken: sessionToken || undefined,
   });
   const db = app.database();
-  const runId = createIngestRun(options.gameKey, options.collectionName);
+  const runId = await createIngestRun(options.gameKey, options.collectionName);
   let offset = 0;
   let imported = 0;
   let changed = 0;
@@ -63,8 +63,8 @@ export async function ingestCloudbaseSnapshots(
 
       for (const doc of docs) {
         const snapshot = normalizeSnapshotDoc(doc, options.gameKey, options.collectionName);
-        upsertRawSnapshot(snapshot);
-        if (upsertSnapshotHistory(snapshot)) changed++;
+        await upsertRawSnapshot(snapshot);
+        if (await upsertSnapshotHistory(snapshot)) changed++;
       }
 
       imported += docs.length;
@@ -74,9 +74,9 @@ export async function ingestCloudbaseSnapshots(
       if (docs.length < pageSize) break;
     }
 
-    const dailyMetrics = recomputeDailyMetrics(options.gameKey);
-    const hourlyMetrics = recomputeHourlyMetrics(options.gameKey);
-    finishIngestRun(runId, 'success', imported, changed);
+    const dailyMetrics = await recomputeDailyMetrics(options.gameKey);
+    const hourlyMetrics = await recomputeHourlyMetrics(options.gameKey);
+    await finishIngestRun(runId, 'success', imported, changed);
     return {
       gameKey: options.gameKey,
       collectionName: options.collectionName,
@@ -86,7 +86,7 @@ export async function ingestCloudbaseSnapshots(
       metricHours: hourlyMetrics.length,
     };
   } catch (error) {
-    finishIngestRun(runId, 'failed', imported, changed, error instanceof Error ? error.message : String(error));
+    await finishIngestRun(runId, 'failed', imported, changed, error instanceof Error ? error.message : String(error));
     throw error;
   }
 }

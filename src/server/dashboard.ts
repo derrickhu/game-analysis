@@ -1,7 +1,17 @@
-import type { DashboardData, DashboardSummary, DailyMetric, HuahuaSpecificMetrics, LevelBucket, PlayerFacts } from '../shared/types';
+import type { DashboardData, DashboardSummary, HourlyMetric, HotpotSpecificMetrics, HuahuaSpecificMetrics } from '../shared/types';
 import { getGameConfig, getMetricCatalog } from '../shared/game-config';
 import { getConfig } from './config';
-import { getDb, getQualityCounts, listHourlyMetrics, listIngestRuns } from './db';
+import {
+  countRecentWrites,
+  getQualityCounts,
+  getSummaryFacts,
+  listDailyMetrics,
+  listHourlyMetrics,
+  listIngestRuns,
+  listLevelBuckets,
+  listPlayerFacts,
+  listSnapshotHistoryRows,
+} from './db';
 import { toShanghaiDateKey } from './time';
 
 interface RetentionResult {
@@ -10,65 +20,60 @@ interface RetentionResult {
   returnedUsers: number;
 }
 
-function mapMetric(row: any): DailyMetric {
-  return {
-    gameKey: row.game_key,
-    metricDate: row.metric_date,
-    usersTotal: row.users_total,
-    activeUsers: row.active_users,
-    avgLevel: row.avg_level,
-    p50Level: row.p50_level,
-    avgDiamond: row.avg_diamond,
-    avgEnergy: row.avg_energy,
-    totalMergeCount: row.total_merge_count,
-    totalDeliveredOrders: row.total_delivered_orders,
-    totalAdEntitlementUsed: row.total_ad_entitlement_used,
-    updatedAt: row.updated_at,
-  };
-}
-
-function mapPlayer(row: any): PlayerFacts {
-  return {
-    gameKey: row.game_key,
-    userId: row.user_id,
-    platform: row.platform,
-    snapshotUpdatedAt: row.snapshot_updated_at,
-    lastWriteAt: row.last_write_at,
-    level: row.level,
-    star: row.star,
-    flowerWish: row.flower_wish,
-    diamond: row.diamond,
-    energy: row.energy,
-    mergeCountTotal: row.merge_count_total,
-    mergeCountToday: row.merge_count_today,
-    deliveredOrdersTotal: row.delivered_orders_total,
-    checkinTotalDays: row.checkin_total_days,
-    checkinStreakDays: row.checkin_streak_days,
-    questWeeklyPoints: row.quest_weekly_points,
-    eventPoints: row.event_points,
-    adEntitlementUsedToday: row.ad_entitlement_used_today,
-    tutorialStep: row.tutorial_step,
-    activeDate: row.active_date,
-    raw: JSON.parse(row.raw_json || '{}'),
-  };
-}
-
 function addDays(dateKey: string, offsetDays: number): string {
   const [year, month, day] = dateKey.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day + offsetDays));
   return date.toISOString().slice(0, 10);
 }
 
-function calculateRetention(database: ReturnType<typeof getDb>, gameKey: string, targetDate: string, dayOffset: number): RetentionResult {
+function shanghaiHourKeyToUtcMs(hourKey: string): number {
+  const [datePart, hourPart] = hourKey.split('T');
+  if (!datePart || !hourPart) return 0;
+  const [year, month, day] = datePart.split('-').map(Number);
+  const hour = Number(hourPart);
+  return Date.UTC(year, month - 1, day, hour - 8);
+}
+
+function utcMsToShanghaiHourKey(timestamp: number): string {
+  return new Date(timestamp + 8 * 60 * 60 * 1000).toISOString().slice(0, 13);
+}
+
+function fillHourlyGaps(gameKey: string, metrics: HourlyMetric[]): HourlyMetric[] {
+  if (metrics.length <= 1) return metrics;
+
+  const byHour = new Map(metrics.map((metric) => [metric.metricHour, metric]));
+  const start = shanghaiHourKeyToUtcMs(metrics[0]!.metricHour);
+  const end = shanghaiHourKeyToUtcMs(metrics.at(-1)!.metricHour);
+  if (!start || !end || end < start) return metrics;
+
+  const filled: HourlyMetric[] = [];
+  for (let ts = start; ts <= end; ts += 60 * 60 * 1000) {
+    const metricHour = utcMsToShanghaiHourKey(ts);
+    filled.push(byHour.get(metricHour) ?? {
+      gameKey,
+      metricHour,
+      inferredActiveUsers: 0,
+      changedSnapshots: 0,
+      newUsers: 0,
+      firstOrderUsers: 0,
+      orderDelta: 0,
+      mergeDelta: 0,
+      adEntitlementDelta: 0,
+      levelDelta: 0,
+      badgeDelta: 0,
+      updatedAt: Date.now(),
+    });
+  }
+  return filled;
+}
+
+async function calculateRetention(gameKey: string, targetDate: string, dayOffset: number): Promise<RetentionResult> {
   if (!targetDate) return { rate: null, cohortUsers: 0, returnedUsers: 0 };
 
   const cohortDate = addDays(targetDate, -dayOffset);
-  const rows = database.prepare(`
-    SELECT user_id, last_write_at
-    FROM raw_snapshot_history
-    WHERE game_key = ? AND last_write_at > 0
-    ORDER BY last_write_at ASC
-  `).all(gameKey) as Array<{ user_id: string; last_write_at: number }>;
+  const rows = (await listSnapshotHistoryRows(gameKey))
+    .filter((row) => Number(row.last_write_at) > 0)
+    .sort((a, b) => Number(a.last_write_at) - Number(b.last_write_at)) as Array<{ user_id: string; last_write_at: number }>;
 
   const firstActiveDateByUser = new Map<string, string>();
   const activeDatesByUser = new Map<string, Set<string>>();
@@ -94,37 +99,23 @@ function calculateRetention(database: ReturnType<typeof getDb>, gameKey: string,
   };
 }
 
-export function getDashboardData(gameKey: string): DashboardData {
+export async function getDashboardData(gameKey: string): Promise<DashboardData> {
   const gameConfig = getGameConfig(gameKey);
-  const database = getDb();
-  const dailyMetrics = (database.prepare(`
-    SELECT * FROM daily_metrics
-    WHERE game_key = ?
-    ORDER BY metric_date ASC
-  `).all(gameKey) as any[]).map(mapMetric);
-
+  const metricKeys = [
+    ...gameConfig.commonMetricKeys,
+    ...gameConfig.dashboardModules.flatMap((module) => module.metricKeys),
+  ];
+  const dailyMetrics = await listDailyMetrics(gameKey);
   const latestMetric = dailyMetrics.at(-1);
-  const hourlyMetrics = listHourlyMetrics(gameKey);
-  const latestHourlyMetric = hourlyMetrics.at(-1);
-  const summaryRow = database.prepare(`
-    SELECT
-      COUNT(*) AS usersTotal,
-      AVG(level) AS avgLevel,
-      AVG(diamond) AS avgDiamond,
-      SUM(merge_count_total) AS totalMergeCount,
-      SUM(delivered_orders_total) AS totalDeliveredOrders
-    FROM player_facts
-    WHERE game_key = ?
-  `).get(gameKey) as any;
+  const rawHourlyMetrics = await listHourlyMetrics(gameKey);
+  const latestHourlyMetric = rawHourlyMetrics.at(-1);
+  const hourlyMetrics = fillHourlyGaps(gameKey, rawHourlyMetrics);
+  const summaryRow = await getSummaryFacts(gameKey);
 
   const oneHourAgo = Date.now() - 60 * 60 * 1000;
-  const writeWindowRow = database.prepare(`
-    SELECT COUNT(*) AS c
-    FROM player_facts
-    WHERE game_key = ? AND last_write_at >= ?
-  `).get(gameKey, oneHourAgo) as any;
-  const retentionD1 = calculateRetention(database, gameKey, latestMetric?.metricDate || '', 1);
-  const retentionD7 = calculateRetention(database, gameKey, latestMetric?.metricDate || '', 7);
+  const writeWindowUsers = await countRecentWrites(gameKey, oneHourAgo);
+  const retentionD1 = await calculateRetention(gameKey, latestMetric?.metricDate || '', 1);
+  const retentionD7 = await calculateRetention(gameKey, latestMetric?.metricDate || '', 7);
 
   const summary: DashboardSummary = {
     latestDate: latestMetric?.metricDate || '',
@@ -132,7 +123,7 @@ export function getDashboardData(gameKey: string): DashboardData {
     usersTotal: Number(summaryRow?.usersTotal || 0),
     activeUsers: latestMetric?.activeUsers || 0,
     inferredActiveUsersToday: latestMetric?.activeUsers || 0,
-    lastWriteWithinHourUsers: Number(writeWindowRow?.c || 0),
+    lastWriteWithinHourUsers: writeWindowUsers,
     retentionD1Rate: retentionD1.rate,
     retentionD1CohortUsers: retentionD1.cohortUsers,
     retentionD1ReturnedUsers: retentionD1.returnedUsers,
@@ -145,19 +136,8 @@ export function getDashboardData(gameKey: string): DashboardData {
     totalDeliveredOrders: Number(summaryRow?.totalDeliveredOrders || 0),
   };
 
-  const levelBuckets = database.prepare(`
-    SELECT level, COUNT(*) AS users
-    FROM player_facts
-    WHERE game_key = ?
-    GROUP BY level
-    ORDER BY level ASC
-  `).all(gameKey) as LevelBucket[];
-
-  const recentPlayers = (database.prepare(`
-    SELECT * FROM player_facts
-    WHERE game_key = ?
-    ORDER BY last_write_at DESC
-  `).all(gameKey) as any[]).map(mapPlayer);
+  const levelBuckets = await listLevelBuckets(gameKey);
+  const recentPlayers = await listPlayerFacts(gameKey);
 
   const huahua: HuahuaSpecificMetrics = {
     totalOrders: recentPlayers.reduce((sum, item) => sum + item.deliveredOrdersTotal, 0),
@@ -170,10 +150,23 @@ export function getDashboardData(gameKey: string): DashboardData {
     totalEventPoints: recentPlayers.reduce((sum, item) => sum + item.eventPoints, 0),
     totalAdEntitlementUsed: recentPlayers.reduce((sum, item) => sum + item.adEntitlementUsedToday, 0),
   };
+  const hotpot: HotpotSpecificMetrics = {
+    currentLevelAvg: recentPlayers.length > 0
+      ? recentPlayers.reduce((sum, item) => sum + Number((item.raw.progress as any)?.currentLevel || item.level), 0) / recentPlayers.length
+      : 0,
+    maxUnlockedLevelAvg: recentPlayers.length > 0
+      ? recentPlayers.reduce((sum, item) => sum + item.level, 0) / recentPlayers.length
+      : 0,
+    maxUnlockedLevel: recentPlayers.reduce((max, item) => Math.max(max, item.level), 0),
+    maxUnlockedBadgeLevel: recentPlayers.reduce((max, item) => Math.max(max, item.star), 0),
+    playersStarted: recentPlayers.filter((item) => item.level > 1 || item.star > 0).length,
+    musicEnabledUsers: recentPlayers.filter((item) => (item.raw.settings as any)?.musicEnabled !== false).length,
+    soundEnabledUsers: recentPlayers.filter((item) => (item.raw.settings as any)?.soundEnabled !== false).length,
+  };
 
-  const runs = listIngestRuns(gameKey, 1);
+  const runs = await listIngestRuns(gameKey, 1);
   const latestRun = runs[0];
-  const qualityCounts = getQualityCounts(gameKey);
+  const qualityCounts = await getQualityCounts(gameKey);
 
   return {
     summary,
@@ -181,7 +174,7 @@ export function getDashboardData(gameKey: string): DashboardData {
     hourlyMetrics,
     levelBuckets,
     recentPlayers,
-    metricCatalog: getMetricCatalog(),
+    metricCatalog: getMetricCatalog([...new Set(metricKeys)]),
     modules: gameConfig.dashboardModules,
     quality: {
       storageMode: getConfig().storageMode,
@@ -192,6 +185,7 @@ export function getDashboardData(gameKey: string): DashboardData {
     },
     gameSpecific: {
       huahua: gameKey === 'huahua' ? huahua : undefined,
+      hotpot: gameKey === 'hotpot' ? hotpot : undefined,
     },
   };
 }

@@ -5,11 +5,12 @@
   "type": "module",
   "description": "",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host 0.0.0.0",
     "api": "tsx src/server/index.ts",
     "ingest:file": "tsx src/server/jobs/ingest-file.ts",
     "ingest:cloudbase": "tsx src/server/jobs/ingest-cloudbase.ts",
     "metrics": "tsx src/server/jobs/recompute-metrics.ts",
+    "migrate:mysql": "tsx src/server/jobs/migrate-sqlite-to-mysql.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "npm run typecheck && vite build"
   },
