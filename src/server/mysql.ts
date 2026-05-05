@@ -2,6 +2,21 @@ import mysql from 'mysql2/promise';
 
 import { getConfig } from './config';
 
+async function ensureMysqlColumn(
+  pool: mysql.Pool,
+  tableName: string,
+  columnName: string,
+  definitionSql: string,
+): Promise<void> {
+  const [rows] = await pool.query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [tableName, columnName],
+  );
+  if (!Array.isArray(rows) || rows.length > 0) return;
+  await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${definitionSql}`);
+}
+
 export async function createMysqlPool(): Promise<mysql.Pool | null> {
   const config = getConfig();
   if (config.storageMode !== 'mysql') return null;
@@ -79,10 +94,13 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       first_order_users INT NOT NULL DEFAULT 0,
       order_delta INT NOT NULL,
       merge_delta INT NOT NULL,
+      ad_entitlement_delta INT NOT NULL DEFAULT 0,
       updated_at BIGINT NOT NULL,
       PRIMARY KEY (game_key, metric_hour)
     )
   `);
+
+  await ensureMysqlColumn(pool, 'metric_hourly', 'ad_entitlement_delta', 'INT NOT NULL DEFAULT 0');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS metric_daily (

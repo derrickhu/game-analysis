@@ -69,12 +69,20 @@ export function getDashboardData(gameKey: string): DashboardData {
     WHERE game_key = ?
   `).get(gameKey) as any;
 
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const writeWindowRow = database.prepare(`
+    SELECT COUNT(*) AS c
+    FROM player_facts
+    WHERE game_key = ? AND last_write_at >= ?
+  `).get(gameKey, oneHourAgo) as any;
+
   const summary: DashboardSummary = {
     latestDate: latestMetric?.metricDate || '',
     latestHour: latestHourlyMetric?.metricHour || '',
     usersTotal: Number(summaryRow?.usersTotal || 0),
     activeUsers: latestMetric?.activeUsers || 0,
     inferredActiveUsersToday: latestMetric?.activeUsers || 0,
+    lastWriteWithinHourUsers: Number(writeWindowRow?.c || 0),
     avgLevel: Number(summaryRow?.avgLevel || 0),
     avgDiamond: Number(summaryRow?.avgDiamond || 0),
     totalMergeCount: Number(summaryRow?.totalMergeCount || 0),

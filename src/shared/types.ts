@@ -96,6 +96,8 @@ export interface HourlyMetric {
   firstOrderUsers: number;
   orderDelta: number;
   mergeDelta: number;
+  /** 快照对比得到的广告权益当日已用量增量（见 huahua_ad_entitlements，非全量广告请求次数） */
+  adEntitlementDelta: number;
   updatedAt: number;
 }
 
@@ -105,6 +107,8 @@ export interface DashboardSummary {
   usersTotal: number;
   activeUsers: number;
   inferredActiveUsersToday: number;
+  /** 当前时间往前 60 分钟内 last_write_at 落在区间内的去重玩家（存档写入近似，非并发在线） */
+  lastWriteWithinHourUsers: number;
   avgLevel: number;
   avgDiamond: number;
   totalMergeCount: number;

@@ -144,12 +144,14 @@ function migrate(database: Database.Database): void {
       first_order_users INTEGER NOT NULL DEFAULT 0,
       order_delta INTEGER NOT NULL,
       merge_delta INTEGER NOT NULL,
+      ad_entitlement_delta INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY(game_key, metric_hour)
     );
   `);
   ensureColumn(database, 'metric_hourly', 'new_users', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'metric_hourly', 'first_order_users', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'metric_hourly', 'ad_entitlement_delta', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 function ensureColumn(
@@ -347,10 +349,10 @@ export function replaceHourlyMetrics(gameKey: string, metrics: HourlyMetric[]): 
   const insert = database.prepare(`
     INSERT INTO metric_hourly (
       game_key, metric_hour, inferred_active_users, changed_snapshots,
-      new_users, first_order_users, order_delta, merge_delta, updated_at
+      new_users, first_order_users, order_delta, merge_delta, ad_entitlement_delta, updated_at
     ) VALUES (
       @gameKey, @metricHour, @inferredActiveUsers, @changedSnapshots,
-      @newUsers, @firstOrderUsers, @orderDelta, @mergeDelta, @updatedAt
+      @newUsers, @firstOrderUsers, @orderDelta, @mergeDelta, @adEntitlementDelta, @updatedAt
     )
   `);
 
@@ -376,6 +378,7 @@ export function listHourlyMetrics(gameKey: string): HourlyMetric[] {
     firstOrderUsers: row.first_order_users,
     orderDelta: row.order_delta,
     mergeDelta: row.merge_delta,
+    adEntitlementDelta: Number(row.ad_entitlement_delta ?? 0),
     updatedAt: row.updated_at,
   }));
 }

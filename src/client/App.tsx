@@ -15,6 +15,7 @@ const emptyData: DashboardData = {
     usersTotal: 0,
     activeUsers: 0,
     inferredActiveUsersToday: 0,
+    lastWriteWithinHourUsers: 0,
     avgLevel: 0,
     avgDiamond: 0,
     totalMergeCount: 0,
@@ -163,17 +164,21 @@ export function App() {
     ],
   }), [data.dailyMetrics]);
 
-  const hourlyOption = useMemo(() => ({
+  const hourlyCoreOption = useMemo(() => ({
     tooltip: { trigger: 'axis' },
-    legend: { data: ['实时活跃用户', '新增玩家', '合成增量', '订单增量', '首次订单玩家'] },
+    legend: { data: ['实时活跃用户', '新增玩家', '广告权益增量'] },
     xAxis: { type: 'category', data: data.hourlyMetrics.map((item) => formatHourLabel(item.metricHour)) },
-    yAxis: [{ type: 'value' }],
+    yAxis: [
+      { type: 'value', name: '人数' },
+      { type: 'value', name: '权益增量', splitLine: { show: false } },
+    ],
     series: [
       {
         name: '实时活跃用户',
         type: 'line',
         smooth: true,
-        areaStyle: {},
+        symbolSize: 8,
+        yAxisIndex: 0,
         data: data.hourlyMetrics.map((item) => item.inferredActiveUsers),
       },
       {
@@ -181,26 +186,39 @@ export function App() {
         type: 'line',
         smooth: true,
         symbolSize: 8,
+        yAxisIndex: 0,
         data: data.hourlyMetrics.map((item) => item.newUsers),
       },
+      {
+        name: '广告权益增量',
+        type: 'line',
+        smooth: true,
+        yAxisIndex: 1,
+        data: data.hourlyMetrics.map((item) => item.adEntitlementDelta ?? 0),
+      },
+    ],
+  }), [data.hourlyMetrics]);
+
+  /** 合成 / 交付订单的环比快照增量，量级与活跃不同，单独成图更易读 */
+  const hourlyCommerceOption = useMemo(() => ({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['合成增量', '订单增量'] },
+    xAxis: { type: 'category', data: data.hourlyMetrics.map((item) => formatHourLabel(item.metricHour)) },
+    yAxis: [{ type: 'value', name: '次 / 单' }],
+    series: [
       {
         name: '合成增量',
         type: 'line',
         smooth: true,
+        symbolSize: 8,
         data: data.hourlyMetrics.map((item) => item.mergeDelta),
       },
       {
         name: '订单增量',
         type: 'line',
         smooth: true,
-        data: data.hourlyMetrics.map((item) => item.orderDelta),
-      },
-      {
-        name: '首次订单玩家',
-        type: 'line',
-        smooth: true,
         symbolSize: 8,
-        data: data.hourlyMetrics.map((item) => item.firstOrderUsers),
+        data: data.hourlyMetrics.map((item) => item.orderDelta),
       },
     ],
   }), [data.hourlyMetrics]);
@@ -370,6 +388,16 @@ export function App() {
             <Col span={8}><Statistic title="累计订单" value={huahua?.totalOrders || 0} /></Col>
             <Col span={8}><Statistic title="今日订单" value={huahua?.todayOrders || 0} /></Col>
             <Col span={8}><Statistic title="订单玩家" value={huahua?.playersWithOrders || 0} /></Col>
+            <Col span={24}>
+              <Tooltip title="按快照历史：该小时内有玩家从累计 0 单变为大于 0 的去重人数。老玩家多早已首单，该值经常为 0，属正常。">
+                <Statistic
+                  title="当前小时首次完成订单"
+                  value={data.hourlyMetrics.at(-1)?.firstOrderUsers ?? 0}
+                  suffix="人"
+                />
+              </Tooltip>
+              <Text type="secondary">日历小时 {formatHourLabel(data.summary.latestHour) || '-'}</Text>
+            </Col>
           </Row>
         </Card>
       </Col>
@@ -413,7 +441,7 @@ export function App() {
         type="info"
         showIcon
         message="实时趋势用于观察投流后玩家活跃变化"
-        description="当前按小时统计活跃用户。由于游戏尚未接入启动事件，活跃来自玩家云存档更新推导；后续接入登录/启动事件后可升级为标准实时 DAU/在线趋势。"
+        description="「最近小时活跃」为北京时间的整点桶内、有存档变更的去重玩家；「近1小时写入玩家」为滚动 60 分钟内 last_write_at 落在窗口内的玩家数。上方第一张趋势图为核心：活跃、新增与广告权益增量（权益为存档字段差分，非 SDK 总调用）。第二张为合成与订单交付的增量趋势。首单类指标见花花妙屋-订单经营。"
       />
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8} xl={4}>
@@ -424,6 +452,13 @@ export function App() {
               suffix="人"
             />
             <Text type="secondary">{formatHourLabel(data.summary.latestHour)}</Text>
+          </Card>
+        </Col>
+        <Col xs={24} md={8} xl={4}>
+          <Card>
+            <Tooltip title="当前时刻往前 60 分钟内，全量玩家快照中 last_write_at 落在该区间的去重人数；随刷新与调度更新，用于观察「最近动过存档」的规模，不等同游戏内并发在线。">
+              <Statistic title="近1小时写入玩家" value={data.summary.lastWriteWithinHourUsers} suffix="人" />
+            </Tooltip>
           </Card>
         </Col>
         <Col xs={24} md={8} xl={4}>
@@ -449,12 +484,37 @@ export function App() {
         </Col>
         <Col xs={24} md={8} xl={4}>
           <Card>
-            <Statistic title="首次订单玩家" value={data.hourlyMetrics.at(-1)?.firstOrderUsers || 0} suffix="人" />
+            <Tooltip title="该小时内各玩家「今日广告权益已用量」相对上一版快照的增量之和；跨日时按新日累计近似。反映权益消耗节奏，不是全渠道广告调用数。">
+              <Statistic
+                title="广告权益增量"
+                value={data.hourlyMetrics.at(-1)?.adEntitlementDelta ?? 0}
+                suffix="次"
+              />
+            </Tooltip>
           </Card>
         </Col>
         <Col span={24}>
-          <Card title="实时活跃趋势" extra={<Tooltip title="小时级活跃用户，当前由云存档更新推导。">口径说明</Tooltip>}>
-            {data.hourlyMetrics.length > 0 ? <ReactECharts option={hourlyOption} /> : <Empty description="暂无实时趋势，下一次数据同步后会生成" />}
+          <Card
+            title="核心趋势（活跃 · 新增 · 广告）"
+            extra={<Tooltip title="左侧轴：人数；右侧轴：广告权益增量（当日已用量快照差分，非全渠道广告次数）。">口径说明</Tooltip>}
+          >
+            {data.hourlyMetrics.length > 0 ? (
+              <ReactECharts option={hourlyCoreOption} />
+            ) : (
+              <Empty description="暂无实时趋势，下一次数据同步后会生成" />
+            )}
+          </Card>
+        </Col>
+        <Col span={24}>
+          <Card
+            title="合成与订单增量"
+            extra={<Tooltip title="按小时汇总：玩家累计合成次数、累计交付订单数的快照差分，与核心活跃图分开展示以免量级差异难读。">口径说明</Tooltip>}
+          >
+            {data.hourlyMetrics.length > 0 ? (
+              <ReactECharts option={hourlyCommerceOption} />
+            ) : (
+              <Empty description="暂无实时趋势，下一次数据同步后会生成" />
+            )}
           </Card>
         </Col>
       </Row>

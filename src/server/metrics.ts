@@ -23,6 +23,15 @@ function percentile(values: number[], ratio: number): number {
   return sorted[index];
 }
 
+/** 今日权益已用量在相邻快照间的增量；跨自然日时今日字段会重置，仅按新日累计近似 */
+function adEntitlementUsedDelta(previous: PlayerFacts | undefined, current: PlayerFacts): number {
+  if (!previous) return 0;
+  if (previous.activeDate !== current.activeDate) {
+    return Math.max(0, current.adEntitlementUsedToday);
+  }
+  return Math.max(0, current.adEntitlementUsedToday - previous.adEntitlementUsedToday);
+}
+
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
@@ -81,6 +90,7 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
     firstOrderUsers: number;
     orderDelta: number;
     mergeDelta: number;
+    adEntitlementDelta: number;
   }>();
   const previousByUser = new Map<string, PlayerFacts>();
 
@@ -93,6 +103,7 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
       firstOrderUsers: 0,
       orderDelta: 0,
       mergeDelta: 0,
+      adEntitlementDelta: 0,
     };
     const snapshot: RawSnapshot = {
       gameKey: row.game_key,
@@ -119,6 +130,7 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
       const mergeDelta = Math.max(0, current.mergeCountTotal - previous.mergeCountTotal);
       bucket.orderDelta += orderDelta;
       bucket.mergeDelta += mergeDelta;
+      bucket.adEntitlementDelta += adEntitlementUsedDelta(previous, current);
       if (previous.deliveredOrdersTotal === 0 && current.deliveredOrdersTotal > 0) {
         bucket.firstOrderUsers++;
       }
@@ -139,6 +151,7 @@ export function recomputeHourlyMetrics(gameKey: string): HourlyMetric[] {
       firstOrderUsers: bucket.firstOrderUsers,
       orderDelta: bucket.orderDelta,
       mergeDelta: bucket.mergeDelta,
+      adEntitlementDelta: bucket.adEntitlementDelta,
       updatedAt: Date.now(),
     }));
 
