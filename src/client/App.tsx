@@ -78,7 +78,9 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(0);
+  const [playerPagination, setPlayerPagination] = useState({ current: 1, pageSize: 20 });
   const gameConfig = getGameConfig(gameKey);
+  const progressLabel = gameKey === 'hotpot' ? '关卡' : '等级';
 
   async function loadDashboard(nextGameKey = gameKey) {
     setLoading(true);
@@ -141,6 +143,10 @@ export function App() {
   useEffect(() => {
     void loadDashboard('huahua');
   }, []);
+
+  useEffect(() => {
+    setPlayerPagination((prev) => ({ ...prev, current: 1 }));
+  }, [gameKey]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -273,7 +279,12 @@ export function App() {
 
   const levelOption = useMemo(() => ({
     tooltip: { trigger: 'axis' },
-    xAxis: { type: 'category', data: data.levelBuckets.map((item) => `Lv.${item.level}`) },
+    xAxis: {
+      type: 'category',
+      data: data.levelBuckets.map((item) => (
+        gameKey === 'hotpot' ? `第${item.level}关` : `Lv.${item.level}`
+      )),
+    },
     yAxis: { type: 'value' },
     series: [
       {
@@ -282,7 +293,7 @@ export function App() {
         data: data.levelBuckets.map((item) => item.users),
       },
     ],
-  }), [data.levelBuckets]);
+  }), [data.levelBuckets, gameKey]);
 
   const columnMap = useMemo<Record<string, any>>(() => ({
     userId: {
@@ -420,8 +431,8 @@ export function App() {
           </Card>
         </Col>
         <Col xs={24} xl={10}>
-          <Card title="等级分布">
-            {data.levelBuckets.length > 0 ? <ReactECharts option={levelOption} /> : <Empty description="暂无等级数据" />}
+          <Card title={`${progressLabel}分布`}>
+            {data.levelBuckets.length > 0 ? <ReactECharts option={levelOption} /> : <Empty description={`暂无${progressLabel}数据`} />}
           </Card>
         </Col>
       </Row>
@@ -518,7 +529,19 @@ export function App() {
         dataSource={data.recentPlayers}
         columns={columns}
         locale={{ emptyText: <Empty description="暂无玩家数据" /> }}
-        pagination={{ pageSize: 20, showSizeChanger: true }}
+        pagination={{
+          current: playerPagination.current,
+          pageSize: playerPagination.pageSize,
+          total: data.recentPlayers.length,
+          showSizeChanger: true,
+          showTotal: (total) => `共 ${total} 条`,
+          onChange: (current, pageSize) => {
+            setPlayerPagination({ current, pageSize });
+          },
+          onShowSizeChange: (_, pageSize) => {
+            setPlayerPagination({ current: 1, pageSize });
+          },
+        }}
         scroll={{ x: 1300 }}
       />
     </Card>

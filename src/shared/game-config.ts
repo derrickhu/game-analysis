@@ -189,13 +189,13 @@ export const GAME_CONFIGS: GameConfig[] = [
     collectionName: 'hotpot_playerData',
     cloudEnv: 'rosa-env-d7grf78r5dbd37323',
     ingestCron: '0 * * * *',
-    commonMetricKeys: ['users_total', 'snapshot_inferred_active', 'avg_level'],
+    commonMetricKeys: ['users_total', 'snapshot_inferred_active'],
     dashboardModules: [
       {
         key: 'hotpot-overview',
         title: '经营概览',
         kind: 'overview',
-        metricKeys: ['users_total', 'snapshot_inferred_active', 'avg_level'],
+        metricKeys: ['users_total', 'snapshot_inferred_active'],
         description: 'hot-pot 当前基于云存档快照展示玩家规模与关卡进度。',
       },
       {
