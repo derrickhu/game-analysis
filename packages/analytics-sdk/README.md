@@ -46,13 +46,49 @@ Analytics.track(EVENT_NAMES.AD_SHOW, {
 Analytics.setUserId('openid_xxx');
 ```
 
-## 标准事件名（业务可自定义，下方为推荐常量）
+## SOP 标准事件清单
 
-- 通用：`session_start` `session_end` `app_error`
-- 关卡：`level_start` `level_clear` `level_fail`
-- 广告：`ad_request` `ad_show` `ad_click` `ad_close` `ad_error`
-- 经济：`coin_change` `diamond_change`
-- SDK 自监控：`sdk_dropped`
+> 经分团队定义的「标准操作规程」事件，**所有接入 SDK 的游戏必须按以下口径打点**，
+> 否则 dashboard 的 DAU / 留存 / 关卡 / 广告等公共指标无法对齐。
+> 业务自定义事件（命名建议 snake_case）不受限制，但**先把 SOP 必接的打全**。
+>
+> 事件等级：
+> - **必接 ★**：经分公共指标依赖，每个游戏都要接
+> - **关卡 ◆**：有关卡 / 进度系统的游戏必接（消除 / 模拟经营 / 闯关都算）
+> - **按需 ○**：业务需要时再接，不强制
+> - **SDK 自动 ⚙**：SDK 内部触发，业务**不要**手工打
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ★ | `session_start` | `initAnalytics` 完成 **且** `setAnalyticsUserId` 之后打 1 次（一次冷启动 / 切前台） | — | `entry`(从哪进入)、`with_user_id`(bool) | DAU / 留存 / 新增的锚点 |
+| ★ | `session_end` | `Platform.onHide` 切后台时 | `reason` | — | 反向校验异常退出比例 |
+| ★ ⚙ | `login` | `setAnalyticsUserId(uid)` 内部自动打 + 立即 flush | `from_anonymous`(bool) | — | 业务侧**不需要**手工 track，SDK 内部已经处理 |
+| ◆ | `level_start` | 关卡开始（玩家点开始 / 自动重开） | `level_id` | `level_name` | 关卡漏斗 / 失败率 |
+| ◆ | `level_clear` | 关卡通关 | `level_id`, `duration_ms` | `level_name` | 平均通关时长、最高关 |
+| ◆ | `level_fail` | 关卡失败 / 玩家放弃 | `level_id`, `duration_ms`, `reason` | `level_name`、业务进度字段（如 `orders_remaining`） | `reason` 区分 `give_up`/`time_out`/`hp_zero` 等 |
+| ★ | `ad_request` | 调 `wx.createRewardedVideoAd().load()` 时 | `ad_unit_id`, `ad_type`, `scene` | `level_id` | 广告收益估算源数据 |
+| ★ | `ad_show` | 广告 onLoad 成功 / 重播成功 | `ad_unit_id`, `ad_type`, `scene` | `level_id` | **eCPM × 曝光数 = 估算广告收入** |
+| ★ | `ad_close` | 广告 onClose | `ad_unit_id`, `ad_type`, `scene`, `is_ended`(完整看完=true) | `level_id` | 是否发奖励的判定锚 |
+| ★ | `ad_error` | 广告 onError / load fail | `ad_unit_id`, `ad_type`, `scene`, `err_code`, `err_msg` | — | 广告位健康度 |
+| ○ | `ad_click` | 广告点击（部分平台拿不到） | `ad_unit_id`, `ad_type`, `scene` | — | 微信小游戏当前无回调，可忽略 |
+| ○ | `coin_change` | 金币增减（默认 10% 采样） | `amount`(±), `balance_after`, `source` | — | 经济模型分析 |
+| ○ | `diamond_change` | 钻石增减（默认 10% 采样） | `amount`(±), `balance_after`, `source` | — | 同上 |
+| ○ | `app_error` | 客户端致命异常 | `err_code`, `err_msg` | `stack`(裁剪) | 业务侧装一个全局 try/catch 触发 |
+| ⚙ | `sdk_dropped` | SDK 降采样 / 限流 / 队列溢出时自动打 | — | — | 自监控用，业务**不要**手工 track |
+
+### 接入自检清单（联调上线前对一遍）
+
+- [ ] `initAnalytics` 在主流程一开始就调用，确保 SDK 开始接收事件
+- [ ] `setAnalyticsUserId` 在 CloudSync / 登录拿到 openid 后**立即**调用
+- [ ] `session_start` **必须**在 `setAnalyticsUserId` 之后再 track，且带 `with_user_id`
+      （否则 user_id='' 与登录后 user_id=xxx 会被算成两个不同 uk，DAU 翻倍）
+- [ ] `session_end` 在 `Platform.onHide` 触发，未漏接
+- [ ] 所有广告位都通过统一封装的 `showXxxRewardedAd`（参考 hot-pot `src/utils/rewardedAd.ts`）走，
+      不要在多个文件里散打 `ad_request` / `ad_show`，否则 scene 口径混乱
+- [ ] 关卡三件套（`level_start` / `level_clear` / `level_fail`）都打，且 `level_id` **统一从 1 开始**
+- [ ] `duration_ms` 是「玩家进入这一关到结算」的真实时长，不是会话累计
+- [ ] `reason` 在团队内统一取值：`give_up` / `time_out` / `hp_zero` / `quit_to_home`，避免每个游戏写不同字符串
+- [ ] dashboard 选中本游戏后，能在「原始事件」Tab 看到自己的事件，且 `user_id` 字段非空（除登录失败的离群样本外）
 
 ## 数据流
 
@@ -127,8 +163,37 @@ export function initAnalytics() {
     lifecycle: { onHide: Platform.onHide.bind(Platform) },
     debug: false,
   });
-  Analytics.track(EVENT_NAMES.SESSION_START);
+  // 注意：不要在 initAnalytics 里立刻 track(SESSION_START)！
+  // 此时业务还没拿到 openid，事件 user_id='' 只会挂在 anonymous_id 上，
+  // 后端会把同一玩家算成 anonymous + user_id 两个 uk，DAU 直接翻倍。
+  // 正确做法见游戏入口 main 里的「先 setUserId，再 track session_start」。
 }
+
+export function setAnalyticsUserId(uid: string) {
+  Analytics.setUserId(uid);     // SDK 内部会自动 track(LOGIN) 并立即 flush
+}
+
+export const analytics = Analytics;
+```
+
+**游戏入口 `main.ts` 的标准启动顺序（务必按此顺序）：**
+
+```ts
+initAnalytics();
+// ... 启动 CloudSync / 登录 ...
+const startup = await CloudSyncManager.awaitAuthoritativeStartup();
+if (CloudSyncManager.userId) {
+  setAnalyticsUserId(CloudSyncManager.userId);  // 自动打 login + flush
+}
+// 等到这一步再打 session_start，session_start 就直接带 user_id 入库
+analytics.track(EVENT_NAMES.SESSION_START, {
+  entry: 'main',
+  with_user_id: !!CloudSyncManager.userId,
+});
+
+Platform.onHide(() => {
+  analytics.track(EVENT_NAMES.SESSION_END, { reason: 'app-hide' });
+});
 ```
 
 ### 3. 把新 game_key 加进云函数白名单（防止上报被拒）
