@@ -32,6 +32,7 @@ interface AdSummary {
   total_revenue_estimated_cny: number;
   ctr: number;
   completion_rate: number;
+  avg_ecpm_cny: number;
 }
 
 interface AdBreakdown {
@@ -41,6 +42,7 @@ interface AdBreakdown {
   ad_click_cnt: number;
   ad_complete_cnt: number;
   ad_revenue_estimated_cny: number;
+  ecpm_cny: number;
 }
 
 interface AdRevenueResponse {
@@ -255,6 +257,16 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     },
     {
       title: (
+        <Tooltip title={'按 (game.adType.scene) → (game.adType) → (game._default) → (_default.adType) → (_default) 五级回退查表得到。配置见 server/config/ecpm.ts'}>
+          <span>eCPM(元/千曝光) <Tag color="purple" style={{ marginLeft: 4 }}>口径</Tag></span>
+        </Tooltip>
+      ),
+      dataIndex: 'ecpm_cny',
+      key: 'ecpm_cny',
+      render: (v: number) => formatNumber(v),
+    },
+    {
+      title: (
         <span>
           估算收益(元)
           <Tag color="orange" style={{ marginLeft: 6 }}>估算</Tag>
@@ -278,6 +290,22 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
       <Card
         size="small"
         title={`实时广告收益（估算） · ${gameKey}`}
+        extra={
+          <Tooltip
+            title={
+              <div style={{ lineHeight: 1.7 }}>
+                <div><b>估算收入 = 曝光数 ÷ 1000 × eCPM</b></div>
+                <div>eCPM 来自配置表 <code>server/config/ecpm.ts</code>，按下列五级回退查找：</div>
+                <div>(game.adType.scene) → (game.adType) → (game._default) → (_default.adType) → (_default)</div>
+                <div style={{ marginTop: 4 }}>不同 (ad_type, scene) eCPM 不同，下表「eCPM」列展示每个场景实际命中的口径。</div>
+              </div>
+            }
+          >
+            <Tag color="blue" style={{ cursor: 'help', fontSize: 13, padding: '2px 10px' }}>
+              加权平均 eCPM ≈ ¥{(data?.summary.avg_ecpm_cny ?? 0).toFixed(2)} / 千曝光 ⓘ
+            </Tag>
+          </Tooltip>
+        }
       >
         <Row gutter={16}>
           <Col span={4}>

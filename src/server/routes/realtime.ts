@@ -12,6 +12,7 @@ import {
   listRecentIngestRuns,
   type AdMinuteRow,
 } from '../analytics-db';
+import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
 import { recomputeRealtimeAdMinute } from '../metrics/realtime-ad';
 import { getOverview } from '../metrics/realtime-overview';
@@ -49,6 +50,8 @@ interface AdRevenueSummary {
   total_revenue_estimated_cny: number;
   ctr: number;
   completion_rate: number;
+  /** 整窗口加权平均 eCPM（元/千曝光），= total_revenue / total_show * 1000，便于 dashboard 一眼看出量级 */
+  avg_ecpm_cny: number;
 }
 
 interface AdRevenueBreakdown {
@@ -58,6 +61,8 @@ interface AdRevenueBreakdown {
   ad_click_cnt: number;
   ad_complete_cnt: number;
   ad_revenue_estimated_cny: number;
+  /** 该 (ad_type, scene) 命中的 eCPM 配置（元/千曝光），让用户能反查到底是哪个口径算出来的 */
+  ecpm_cny: number;
 }
 
 interface AdRevenueResponse {
@@ -113,7 +118,7 @@ function buildContinuousSeries(
   return series;
 }
 
-function buildBreakdown(rows: AdMinuteRow[]): AdRevenueBreakdown[] {
+function buildBreakdown(gameKey: string, rows: AdMinuteRow[]): AdRevenueBreakdown[] {
   const map = new Map<string, AdRevenueBreakdown>();
   for (const row of rows) {
     const key = `${row.ad_type}|${row.scene}`;
@@ -124,6 +129,8 @@ function buildBreakdown(rows: AdMinuteRow[]): AdRevenueBreakdown[] {
       ad_click_cnt: 0,
       ad_complete_cnt: 0,
       ad_revenue_estimated_cny: 0,
+      // (ad_type, scene) 命中的 eCPM 是固定值，所以同一行所有 row 应当一致；这里用任意一行查表都行
+      ecpm_cny: getEstimatedEcpm(gameKey, row.ad_type, row.scene),
     };
     item.ad_show_cnt += row.ad_show_cnt;
     item.ad_click_cnt += row.ad_click_cnt;
@@ -153,7 +160,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
 
     const rows = await listAdMinute(gameKey, fromMinute, toMinute);
     const series = buildContinuousSeries(rows, fromMinute, toMinute);
-    const breakdown = buildBreakdown(rows);
+    const breakdown = buildBreakdown(gameKey, rows);
 
     let totalShow = 0;
     let totalClick = 0;
@@ -171,11 +178,13 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     }
     const ctr = totalShow > 0 ? Math.round((totalClick / totalShow) * 10000) / 100 : 0;
     const completionRate = totalShow > 0 ? Math.round((totalComplete / totalShow) * 10000) / 100 : 0;
+    // 反向算回平均 eCPM：场景之间 eCPM 不一样时，用按曝光数加权得出的"实际"eCPM 比单看一个场景更代表整体收益密度
+    const avgEcpm = totalShow > 0 ? Math.round((totalRevenue / totalShow) * 1000 * 100) / 100 : 0;
 
     const response: AdRevenueResponse = {
       ok: true,
       estimated: true,
-      notice: '所有金额均为基于预估 eCPM 的估算值，并非真实结算收入；以微信流量主结算数据为准。',
+      notice: '所有金额均为基于预估 eCPM 的估算值（按 (game.adType.scene)→(game.adType)→兜底 多级查表），并非真实结算收入；以微信流量主结算数据为准。',
       query: { game_key: gameKey, from: fromMinute, to: toMinute, window_minutes: windowMinutes },
       summary: {
         game_key: gameKey,
@@ -189,6 +198,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
         total_revenue_estimated_cny: Math.round(totalRevenue * 100) / 100,
         ctr,
         completion_rate: completionRate,
+        avg_ecpm_cny: avgEcpm,
       },
       series,
       breakdown_by_scene: breakdown,
