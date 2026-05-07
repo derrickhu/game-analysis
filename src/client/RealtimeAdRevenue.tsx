@@ -95,6 +95,24 @@ function formatMinuteLabel(minute: string): string {
   return `${pad(utcDate.getMonth() + 1)}-${pad(utcDate.getDate())} ${pad(utcDate.getHours())}:${pad(utcDate.getMinutes())}`;
 }
 
+/**
+ * 各游戏广告场景中文名映射。
+ * key 与客户端打点的 scene 字段保持一致，便于经分人员一眼读懂场景含义。
+ * 兼容历史/拼写差异：unlock_next_order_place（旧拼写）与 unlock_next_order_plate 同义。
+ */
+const SCENE_LABELS: Record<string, Record<string, string>> = {
+  hotpot: {
+    level_fail_revive: '关卡失败复活',
+    tool_help_free: '道具免费使用',
+    unlock_next_order_plate: '解锁下一个订单碟',
+    unlock_next_order_place: '解锁下一个订单碟',
+  },
+};
+
+function getSceneLabel(gameKey: string, scene: string): string {
+  return SCENE_LABELS[gameKey]?.[scene] ?? '-';
+}
+
 interface RealtimeAdRevenueProps {
   /** 必填：当前选中的游戏（由 App 顶部全局选择器决定），本组件随之刷新 */
   fixedGameKey: string;
@@ -237,6 +255,15 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
   const breakdownColumns = [
     { title: '广告类型', dataIndex: 'ad_type', key: 'ad_type' },
     { title: '场景', dataIndex: 'scene', key: 'scene' },
+    {
+      title: '场景说明',
+      dataIndex: 'scene',
+      key: 'scene_label',
+      render: (v: string) => {
+        const label = getSceneLabel(gameKey, v);
+        return label === '-' ? <Typography.Text type="secondary">-</Typography.Text> : label;
+      },
+    },
     {
       title: '曝光',
       dataIndex: 'ad_show_cnt',
