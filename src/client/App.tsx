@@ -193,7 +193,13 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  /** 顶部「立即拉取」按钮：直接走后端 ingest-now，结束后再触发一次全局刷新 */
+  /**
+   * 顶部「立即拉取并刷新」按钮：
+   * 1) 后端走一次 CloudBase 增量拉取（绕过 5 分钟 cron）
+   * 2) 拉取成功后立即 setRefreshToken+1，触发所有子面板重新 fetch
+   * 3) 按钮 loading 多保留 ~800ms，给子组件 fetch 留一个视觉窗口，
+   *    避免「按钮 loading 一闪就停 / 但下方面板还在静默加载」的割裂感
+   */
   const triggerIngestNow = useCallback(async () => {
     setIngestingNow(true);
     try {
@@ -204,8 +210,11 @@ export function App() {
       });
       const json = await res.json();
       if (json.ok) {
-        message.success(`立即拉取完成：fetched=${json.fetched ?? 0}, inserted=${json.inserted ?? 0}`);
         setRefreshToken((t) => t + 1);
+        message.success(
+          `已拉取 ${json.fetched ?? 0} 条新事件（入库 ${json.inserted ?? 0}），所有面板已自动刷新`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 800));
       } else {
         message.error(`立即拉取失败：${json.error || '未知错误'}`);
       }
@@ -579,8 +588,13 @@ export function App() {
             刷新
           </Button>
           <Tooltip title="手动从 CloudBase 增量拉取一次事件到本地（绕过 5 分钟 cron），完成后自动刷新所有面板">
-            <Button onClick={() => void triggerIngestNow()} loading={ingestingNow} disabled={!isIntegrated}>
-              立即拉取
+            <Button
+              type="primary"
+              onClick={() => void triggerIngestNow()}
+              loading={ingestingNow}
+              disabled={!isIntegrated}
+            >
+              立即拉取并刷新
             </Button>
           </Tooltip>
           <Text type="secondary">自动 5 分钟 · {formatTime(lastRefreshedAt)}</Text>
