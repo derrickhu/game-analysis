@@ -26,6 +26,47 @@ function addDays(dateKey: string, offsetDays: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** 已下线的存档差分链路在前端不再被调用，但 /api/dashboard 路由保留以防被外部脚本误调，
+ *  这种情况下统一返回一个全空的 DashboardData，让调用方降级而不是 500。 */
+function getEmptyDashboardData(): DashboardData {
+  return {
+    summary: {
+      latestDate: '',
+      latestHour: '',
+      usersTotal: 0,
+      activeUsers: 0,
+      inferredActiveUsersToday: 0,
+      lastWriteWithinHourUsers: 0,
+      retentionD1Rate: null,
+      retentionD1CohortUsers: 0,
+      retentionD1ReturnedUsers: 0,
+      retentionD7Rate: null,
+      retentionD7CohortUsers: 0,
+      retentionD7ReturnedUsers: 0,
+      avgLevel: 0,
+      avgDiamond: 0,
+      totalMergeCount: 0,
+      totalDeliveredOrders: 0,
+    },
+    dailyMetrics: [],
+    hourlyMetrics: [],
+    levelBuckets: [],
+    recentPlayers: [],
+    metricCatalog: [],
+    modules: [],
+    quality: {
+      storageMode: 'sqlite',
+      lastIngestAt: 0,
+      nextIngestAt: 0,
+      snapshotCount: 0,
+      historyCount: 0,
+      changedSnapshotCount: 0,
+      parseFailedCount: 0,
+    },
+    gameSpecific: {},
+  };
+}
+
 function shanghaiHourKeyToUtcMs(hourKey: string): number {
   const [datePart, hourPart] = hourKey.split('T');
   if (!datePart || !hourPart) return 0;
@@ -101,6 +142,11 @@ async function calculateRetention(gameKey: string, targetDate: string, dayOffset
 
 export async function getDashboardData(gameKey: string): Promise<DashboardData> {
   const gameConfig = getGameConfig(gameKey);
+  // 老链路全部下线后 GAME_CONFIGS 为空，gameConfig 会是 undefined
+  // 这里保留路由不抛错，前端如果还调到这里会拿到一个空 dashboard
+  if (!gameConfig) {
+    return getEmptyDashboardData();
+  }
   const metricKeys = [
     ...gameConfig.commonMetricKeys,
     ...gameConfig.dashboardModules.flatMap((module) => module.metricKeys),

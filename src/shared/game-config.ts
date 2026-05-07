@@ -105,126 +105,18 @@ export const METRIC_CATALOG: MetricCatalogItem[] = [
   },
 ];
 
-const COMMON_MODULES: DashboardModuleConfig[] = [
-  {
-    key: 'common-overview',
-    title: '经营概览',
-    kind: 'overview',
-    metricKeys: ['users_total', 'snapshot_inferred_active', 'avg_level', 'avg_diamond'],
-    description: '跨游戏复用的核心经营概览。',
-  },
-  {
-    key: 'common-activity',
-    title: '活跃趋势',
-    kind: 'activity',
-    metricKeys: ['snapshot_inferred_active', 'real_dau'],
-    description: '当前使用快照变化推导活跃，真实 DAU 等事件接入。',
-  },
-];
+/**
+ * GAME_CONFIGS：玩家存档快照（player snapshot）拉取链路用的配置，是【已下线的老链路】。
+ * - 全部游戏均已迁移到 @gp/analytics-sdk 标准化打点，dashboard 完全由 analytics_events 驱动
+ * - 该数组现已为空。保留 type / METRIC_CATALOG 供后端老路由（/api/dashboard 等）兜底返回
+ *   空响应时不会编译报错；scheduler 看到空数组会自然跳过老 cron
+ * - 如需重新启用某个游戏的存档快照差分，只需把它加回数组并保证表 schema 仍然存在；
+ *   但更推荐沿用 SDK 链路，避免维护两套并存数据通道
+ */
+export const GAME_CONFIGS: GameConfig[] = [];
 
-export const GAME_CONFIGS: GameConfig[] = [
-  {
-    gameKey: 'huahua',
-    displayName: '花花妙屋',
-    payloadPrefix: 'huahua',
-    collectionName: 'huahua_playerData',
-    cloudEnv: 'rosa-env-d7grf78r5dbd37323',
-    ingestCron: '0 * * * *',
-    commonMetricKeys: ['users_total', 'snapshot_inferred_active', 'avg_level', 'avg_diamond'],
-    dashboardModules: [
-      ...COMMON_MODULES,
-      {
-        key: 'huahua-merge',
-        title: '合成经营',
-        kind: 'merge',
-        metricKeys: ['total_merges'],
-        description: '合成次数、今日合成和合成增长。',
-      },
-      {
-        key: 'huahua-orders',
-        title: '订单经营',
-        kind: 'orders',
-        metricKeys: ['total_orders'],
-        description: '订单交付、订单玩家占比和订单增长。',
-      },
-      {
-        key: 'huahua-checkin-quest',
-        title: '签到任务',
-        kind: 'checkinQuest',
-        metricKeys: [],
-        description: '签到、连续签到、每日任务和周积分。',
-      },
-      {
-        key: 'huahua-events-collection',
-        title: '活动收集',
-        kind: 'eventsCollection',
-        metricKeys: [],
-        description: '活动积分、活动进度和收集装扮深度。',
-      },
-      {
-        key: 'huahua-ad',
-        title: '广告权益',
-        kind: 'adEntitlement',
-        metricKeys: ['ad_entitlement_used'],
-        description: '广告权益消耗统计，不等于广告完成。',
-      },
-    ],
-    playerColumns: [
-      'userId',
-      'platform',
-      'activeDate',
-      'level',
-      'diamond',
-      'mergeCountTotal',
-      'deliveredOrdersTotal',
-      'adEntitlementUsedToday',
-      'checkinTotalDays',
-      'questWeeklyPoints',
-    ],
-  },
-  {
-    gameKey: 'hotpot',
-    displayName: '别捞水果',
-    payloadPrefix: 'hotpot',
-    collectionName: 'hotpot_playerData',
-    cloudEnv: 'rosa-env-d7grf78r5dbd37323',
-    ingestCron: '0 * * * *',
-    commonMetricKeys: ['users_total', 'snapshot_inferred_active'],
-    dashboardModules: [
-      {
-        key: 'hotpot-overview',
-        title: '经营概览',
-        kind: 'overview',
-        metricKeys: ['users_total', 'snapshot_inferred_active'],
-        description: 'hot-pot 当前基于云存档快照展示玩家规模与关卡进度。',
-      },
-      {
-        key: 'hotpot-activity',
-        title: '活跃趋势',
-        kind: 'activity',
-        metricKeys: ['snapshot_inferred_active', 'real_dau'],
-        description: '当前使用快照变化推导活跃，真实 DAU 等事件接入。',
-      },
-      {
-        key: 'hotpot-progress',
-        title: '关卡进度',
-        kind: 'hotpotProgress',
-        metricKeys: ['hotpot_max_level', 'hotpot_badge_level'],
-        description: '基于 hotpot_bowl_progress 的当前关卡、最高解锁关卡和徽章进度。',
-      },
-    ],
-    playerColumns: [
-      'userId',
-      'platform',
-      'activeDate',
-      'level',
-      'star',
-    ],
-  },
-];
-
-export function getGameConfig(gameKey: string): GameConfig {
-  return GAME_CONFIGS.find((item) => item.gameKey === gameKey) ?? GAME_CONFIGS[0];
+export function getGameConfig(gameKey: string): GameConfig | undefined {
+  return GAME_CONFIGS.find((item) => item.gameKey === gameKey);
 }
 
 export function getMetricCatalog(keys?: string[]): MetricCatalogItem[] {

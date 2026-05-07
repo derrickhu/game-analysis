@@ -39,7 +39,7 @@ export function getConfig(): AppConfig {
       ? path.resolve(process.env.GA_DB_PATH)
       : path.join(dataDir, 'game-analysis.sqlite'),
     apiPort: readNumber('GA_API_PORT', 8787),
-    defaultGameKey: process.env.GA_GAME_KEY || 'huahua',
+    defaultGameKey: process.env.GA_GAME_KEY || 'hotpot',
     storageMode: process.env.GA_STORAGE === 'mysql' ? 'mysql' : 'sqlite',
     mysql: {
       host: process.env.MYSQL_HOST || '127.0.0.1',

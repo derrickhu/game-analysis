@@ -1,56 +1,99 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Col, Descriptions, Empty, Layout, Row, Select, Space, Statistic, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Card, Col, Empty, Layout, Result, Row, Select, Space, Statistic, Tabs, Tag, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
-import type { DashboardData, MetricCatalogItem, PlayerFacts } from '../shared/types';
-import { GAME_CONFIGS, getGameConfig } from '../shared/game-config';
+import { ALL_GAMES, getDefaultGameKey, getGameDescriptor } from '../shared/games';
+import { EventsExplorer } from './EventsExplorer';
+import { RealtimeAdRevenue } from './RealtimeAdRevenue';
+import { DEFAULT_WINDOW, WINDOW_OPTIONS, type WindowValue, buildWindowQuery } from './timeWindow';
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 
-const emptyData: DashboardData = {
-  summary: {
-    latestDate: '',
-    latestHour: '',
-    usersTotal: 0,
-    activeUsers: 0,
-    inferredActiveUsersToday: 0,
-    lastWriteWithinHourUsers: 0,
-    retentionD1Rate: null,
-    retentionD1CohortUsers: 0,
-    retentionD1ReturnedUsers: 0,
-    retentionD7Rate: null,
-    retentionD7CohortUsers: 0,
-    retentionD7ReturnedUsers: 0,
-    avgLevel: 0,
-    avgDiamond: 0,
-    totalMergeCount: 0,
-    totalDeliveredOrders: 0,
-  },
-  dailyMetrics: [],
-  hourlyMetrics: [],
-  levelBuckets: [],
-  recentPlayers: [],
-  metricCatalog: [],
-  modules: [],
-  quality: {
-    storageMode: 'sqlite',
-    lastIngestAt: 0,
-    nextIngestAt: 0,
-    snapshotCount: 0,
-    historyCount: 0,
-    changedSnapshotCount: 0,
-    parseFailedCount: 0,
-  },
-  gameSpecific: {},
-};
+/**
+ * 游戏经营分析 dashboard
+ *
+ * 架构（已切到 SDK 打点流水驱动）：
+ * - 大盘 KPI / 活跃趋势 / 新增曲线 → /api/realtime/overview （from analytics_events）
+ * - 广告事件流（5min 粒度）       → /api/realtime/ad-revenue
+ * - hot-pot 关卡进度（游戏独有）   → /api/realtime/hotpot-progress （hotpot only）
+ *
+ * 已下线（不再调用）：
+ * - /api/dashboard、/api/metrics/recompute、/api/ingest/cloudbase
+ *   这些是老的「存档快照差分」链路，hot-pot 接入 SDK 后不再使用。
+ *   接入方按 README.md 复用 SDK，DB 拉取链路彻底退役。
+ */
 
-function formatNumber(value: number): string {
-  return Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 1 }) : '0';
+/**
+ * 自动刷新周期。
+ *
+ * 后端 cron 是 `*\/5 * * * *`（每 5 分钟整点拉一次 events 入库 + 重算 ad bucket），
+ * 前端拉得比 5 分钟更勤是浪费（拿到的是同一份数据）；拉得比 5 分钟更少又会漏掉新桶。
+ * 所以前端也按 5 分钟节奏自动刷新，跟后端对齐。
+ *
+ * 用户主动点「刷新」/「立即拉取」时不受此节奏限制，立即触发 refreshToken++。
+ */
+const AUTO_REFRESH_MS = 5 * 60_000;
+
+interface OverviewKpi {
+  dau: number;
+  active_users_1h: number;
+  new_users_today: number;
+  retention_d1_rate: number | null;
+  retention_d7_rate: number | null;
+  computed_at: number;
 }
 
-function formatRetentionRate(value: number | null): string {
-  return value === null ? '-' : (value * 100).toFixed(1);
+interface OverviewSeriesPoint {
+  bucket: string;
+  ts: number;
+  active_users: number;
+  new_users: number;
+}
+
+interface OverviewResponse {
+  ok: boolean;
+  query?: { game_key: string; from: string; to: string; window_minutes: number };
+  kpi?: OverviewKpi;
+  series?: OverviewSeriesPoint[];
+  code?: string;
+  error?: string;
+}
+
+interface ProgressKpi {
+  total_starts: number;
+  total_clears: number;
+  total_fails: number;
+  max_cleared_level: number;
+  avg_clear_duration_ms: number;
+  clear_rate: number | null;
+  computed_at: number;
+}
+
+interface LevelDistributionRow {
+  level_id: number;
+  start_users: number;
+  clear_users: number;
+  fail_users: number;
+  pass_rate: number | null;
+}
+
+interface ProgressSeriesPoint {
+  bucket: string;
+  ts: number;
+  start_cnt: number;
+  clear_cnt: number;
+  fail_cnt: number;
+}
+
+interface ProgressResponse {
+  ok: boolean;
+  query?: { game_key: string; from: string; to: string; window_minutes: number };
+  kpi?: ProgressKpi;
+  distribution?: LevelDistributionRow[];
+  series?: ProgressSeriesPoint[];
+  code?: string;
+  error?: string;
 }
 
 function formatTime(timestamp: number): string {
@@ -58,653 +101,440 @@ function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleString('zh-CN');
 }
 
-function formatHourLabel(hourKey: string): string {
-  if (!hourKey) return '-';
-  const [date, hour] = hourKey.split('T');
-  if (!date || !hour) return hourKey;
-  const [, month, day] = date.split('-');
-  return `${month}-${day} ${hour}:00`;
+function formatRetentionRate(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '-';
+  return (value * 100).toFixed(1);
 }
 
-function precisionColor(item: MetricCatalogItem): string {
-  if (item.precision === 'exact') return 'green';
-  if (item.precision === 'inferred') return 'orange';
-  return 'default';
+function formatDuration(ms: number): string {
+  if (!ms) return '-';
+  const sec = Math.round(ms / 1000);
+  const min = Math.floor(sec / 60);
+  const remain = sec % 60;
+  return `${min}m ${remain}s`;
+}
+
+/**
+ * 5 分钟桶字符串转本地时区标签，给 X 轴用。
+ * 后端 tsToBucket 给的是 UTC 字符串（"YYYY-MM-DDTHH:mm" + 隐含 Z），
+ * 直接 slice(11) 显示出来是 UTC 时间，会让北京用户看到偏移 8 小时的奇怪刻度。
+ * 这里转成本地时区的 MM-DD HH:mm，与 RealtimeAdRevenue 内部 formatMinuteLabel 同款。
+ */
+function bucketShort(bucket: string): string {
+  if (!bucket) return '';
+  const utcDate = new Date(`${bucket}:00.000Z`);
+  if (isNaN(utcDate.getTime())) return bucket;
+  const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  return `${pad(utcDate.getMonth() + 1)}-${pad(utcDate.getDate())} ${pad(utcDate.getHours())}:${pad(utcDate.getMinutes())}`;
 }
 
 export function App() {
-  const [gameKey, setGameKey] = useState('huahua');
-  const [data, setData] = useState<DashboardData>(emptyData);
+  const [gameKey, setGameKey] = useState(getDefaultGameKey());
+  // windowSel / refreshToken 都是【全局状态】，由顶部 Header 上的 Select / 刷新 / 立即拉取统一驱动；
+  // 所有面板（overview KPI、广告、关卡进度）都跟随刷新，不再各自维护时间窗口
+  const [windowSel, setWindowSel] = useState<WindowValue>(DEFAULT_WINDOW);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [overview, setOverview] = useState<OverviewResponse | null>(null);
+  const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [ingesting, setIngesting] = useState(false);
+  const [ingestingNow, setIngestingNow] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(0);
-  const [playerPagination, setPlayerPagination] = useState({ current: 1, pageSize: 20 });
-  const gameConfig = getGameConfig(gameKey);
-  const progressLabel = gameKey === 'hotpot' ? '关卡' : '等级';
+  const requestSeqRef = useRef(0);
 
-  async function loadDashboard(nextGameKey = gameKey) {
+  const gameDescriptor = getGameDescriptor(gameKey);
+  const isIntegrated = gameDescriptor?.hasAnalyticsSdk === true;
+  const isHotpot = gameKey === 'hotpot';
+
+  const loadAll = useCallback(async (nextGameKey: string, nextWindow: WindowValue) => {
+    const desc = getGameDescriptor(nextGameKey);
+    if (!desc?.hasAnalyticsSdk) {
+      // 未接入 SDK，dashboard 完全无数据可拉，直接置空
+      setOverview(null);
+      setProgress(null);
+      setLastRefreshedAt(Date.now());
+      return;
+    }
+    const seq = ++requestSeqRef.current;
     setLoading(true);
     try {
-      const res = await fetch(`/api/dashboard?game=${encodeURIComponent(nextGameKey)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const queryStr = buildWindowQuery(nextWindow);
+      const overviewPromise = fetch(`/api/realtime/overview?game=${encodeURIComponent(nextGameKey)}&${queryStr}`).then((r) => r.json() as Promise<OverviewResponse>);
+      const progressPromise = nextGameKey === 'hotpot'
+        ? fetch(`/api/realtime/hotpot-progress?game=${encodeURIComponent(nextGameKey)}&${queryStr}`).then((r) => r.json() as Promise<ProgressResponse>)
+        : Promise.resolve<ProgressResponse | null>(null);
+      const [ovRes, pgRes] = await Promise.all([overviewPromise, progressPromise]);
+      // 防止竞态：仅最新一次请求结果生效
+      if (seq !== requestSeqRef.current) return;
+      if (!ovRes.ok) {
+        message.error(`获取 overview 失败: ${ovRes.error || ovRes.code}`);
+      }
+      setOverview(ovRes);
+      setProgress(pgRes);
       setLastRefreshedAt(Date.now());
     } catch (error) {
+      if (seq !== requestSeqRef.current) return;
       message.error(`加载看板失败: ${String(error)}`);
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) setLoading(false);
     }
-  }
-
-  async function recomputeMetrics() {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/metrics/recompute', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ game: gameKey }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await loadDashboard();
-      message.success('指标已重算');
-    } catch (error) {
-      message.error(`重算失败: ${String(error)}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function ingestLatestCloudbaseData() {
-    setIngesting(true);
-    try {
-      const res = await fetch('/api/ingest/cloudbase', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          game: gameKey,
-          collection: gameConfig.collectionName,
-          env: gameConfig.cloudEnv,
-          limit: 100,
-        }),
-      });
-      const result = await res.json();
-      if (!res.ok || result.ok !== true) {
-        throw new Error(result?.message || result?.error || `HTTP ${res.status}`);
-      }
-      await loadDashboard();
-      message.success(`${gameConfig.displayName} 数据补跑完成：同步 ${result.imported} 名玩家，变更 ${result.changed} 条，小时指标 ${result.metricHours}`);
-    } catch (error) {
-      message.error(`数据补跑失败: ${String(error)}`);
-    } finally {
-      setIngesting(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadDashboard('huahua');
   }, []);
 
+  // 任何 game / window / refreshToken 变化都会触发统一的全局刷新；自动定时器也是改 refreshToken
   useEffect(() => {
-    setPlayerPagination((prev) => ({ ...prev, current: 1 }));
-  }, [gameKey]);
+    void loadAll(gameKey, windowSel);
+  }, [gameKey, windowSel, refreshToken, loadAll]);
 
+  // 自动 5 分钟刷新：与后端 cron */5 对齐，避免出现"前端先拉、cron 还没跑、看到老桶"的尴尬窗口
+  // 首次进入时不再立即多触发一次刷新（loadAll 已经在 mount 时跑过了），等满 5 分钟才滚动
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void loadDashboard(gameKey);
-    }, 60_000);
+      setRefreshToken((t) => t + 1);
+    }, AUTO_REFRESH_MS);
     return () => window.clearInterval(timer);
+  }, []);
+
+  /** 顶部「立即拉取」按钮：直接走后端 ingest-now，结束后再触发一次全局刷新 */
+  const triggerIngestNow = useCallback(async () => {
+    setIngestingNow(true);
+    try {
+      const res = await fetch('/api/realtime/ingest-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game: gameKey }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        message.success(`立即拉取完成：fetched=${json.fetched ?? 0}, inserted=${json.inserted ?? 0}`);
+        setRefreshToken((t) => t + 1);
+      } else {
+        message.error(`立即拉取失败：${json.error || '未知错误'}`);
+      }
+    } catch (err) {
+      message.error(`立即拉取异常：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIngestingNow(false);
+    }
   }, [gameKey]);
 
-  const trendOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['快照活跃玩家', '玩家总量'] },
-    xAxis: { type: 'category', data: data.dailyMetrics.map((item) => item.metricDate) },
-    yAxis: [{ type: 'value' }],
-    series: [
-      {
-        name: '快照活跃玩家',
-        type: 'line',
-        smooth: true,
-        data: data.dailyMetrics.map((item) => item.activeUsers),
+  // 活跃 / 新增双线（5 分钟桶）
+  const activeChartOption = useMemo(() => {
+    const series = overview?.series || [];
+    const xAxis = series.map((p) => bucketShort(p.bucket));
+    // 5 分钟桶 1 小时 = 12 桶；今日窗口最多 ~288 桶。
+    // 默认 zoom 到最近 60 桶（约 5 小时），避免标签过密；用户拖 slider 查看全天
+    const zoomStart = series.length > 60 ? Math.max(0, 100 - (60 / series.length) * 100) : 0;
+    return {
+      tooltip: { trigger: 'axis' },
+      legend: {
+        data: ['活跃用户', '新增用户'],
+        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
       },
-      {
-        name: '玩家总量',
-        type: 'line',
-        smooth: true,
-        data: data.dailyMetrics.map((item) => item.usersTotal),
+      grid: { left: 50, right: 30, top: 50, bottom: 60 },
+      xAxis: {
+        type: 'category',
+        data: xAxis,
+        axisLabel: { hideOverlap: true },
       },
-    ],
-  }), [data.dailyMetrics]);
+      yAxis: {
+        type: 'value',
+        name: '人数',
+        minInterval: 1,
+      },
+      dataZoom: [
+        { type: 'inside', start: zoomStart, end: 100 },
+        { type: 'slider', height: 18, bottom: 10, start: zoomStart, end: 100 },
+      ],
+      series: [
+        {
+          name: '活跃用户',
+          type: 'bar',
+          barMaxWidth: 18,
+          itemStyle: { color: '#3b82f6', borderRadius: [4, 4, 0, 0] },
+          data: series.map((p) => p.active_users),
+        },
+        {
+          name: '新增用户',
+          type: 'line',
+          smooth: true,
+          symbolSize: 6,
+          itemStyle: { color: '#f59e0b' },
+          areaStyle: { opacity: 0.15 },
+          data: series.map((p) => p.new_users),
+        },
+      ],
+    };
+  }, [overview?.series]);
 
-  const hourlyCoreOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['实时活跃用户', '新增玩家', '广告权益增量'] },
-    xAxis: { type: 'category', data: data.hourlyMetrics.map((item) => formatHourLabel(item.metricHour)) },
-    yAxis: [
-      { type: 'value', name: '人数' },
-      { type: 'value', name: '权益增量', splitLine: { show: false } },
-    ],
-    series: [
-      {
-        name: '实时活跃用户',
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        yAxisIndex: 0,
-        data: data.hourlyMetrics.map((item) => item.inferredActiveUsers),
+  // 关卡分布柱图（hotpot 独有）
+  const levelDistOption = useMemo(() => {
+    const dist = progress?.distribution || [];
+    const xAxis = dist.map((d) => `第${d.level_id}关`);
+    return {
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          if (!Array.isArray(params) || params.length === 0) return '';
+          const lv = params[0].axisValue;
+          const row = dist[params[0].dataIndex];
+          if (!row) return lv;
+          const passText = row.pass_rate === null ? '-' : `${(row.pass_rate * 100).toFixed(1)}%`;
+          return `${lv}<br/>尝试用户: ${row.start_users}<br/>通关用户: ${row.clear_users}<br/>放弃用户: ${row.fail_users}<br/>通关率: ${passText}`;
+        },
       },
-      {
-        name: '新增玩家',
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        yAxisIndex: 0,
-        data: data.hourlyMetrics.map((item) => item.newUsers),
+      legend: {
+        data: ['尝试', '通关', '放弃'],
+        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
       },
-      {
-        name: '广告权益增量',
-        type: 'line',
-        smooth: true,
-        yAxisIndex: 1,
-        data: data.hourlyMetrics.map((item) => item.adEntitlementDelta ?? 0),
-      },
-    ],
-  }), [data.hourlyMetrics]);
+      grid: { left: 50, right: 30, top: 50, bottom: 60 },
+      xAxis: { type: 'category', data: xAxis },
+      yAxis: { type: 'value', name: '人数', minInterval: 1 },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 10 }],
+      series: [
+        {
+          name: '尝试',
+          type: 'bar',
+          barMaxWidth: 18,
+          itemStyle: { color: '#94a3b8', borderRadius: [4, 4, 0, 0] },
+          data: dist.map((d) => d.start_users),
+        },
+        {
+          name: '通关',
+          type: 'bar',
+          barMaxWidth: 18,
+          itemStyle: { color: '#10b981', borderRadius: [4, 4, 0, 0] },
+          data: dist.map((d) => d.clear_users),
+        },
+        {
+          name: '放弃',
+          type: 'bar',
+          barMaxWidth: 18,
+          itemStyle: { color: '#ef4444', borderRadius: [4, 4, 0, 0] },
+          data: dist.map((d) => d.fail_users),
+        },
+      ],
+    };
+  }, [progress?.distribution]);
 
-  /** 合成 / 交付订单的环比快照增量，量级与活跃不同，单独成图更易读 */
-  const hourlyCommerceOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['合成增量', '订单增量'] },
-    xAxis: { type: 'category', data: data.hourlyMetrics.map((item) => formatHourLabel(item.metricHour)) },
-    yAxis: [{ type: 'value', name: '次 / 单' }],
-    series: [
-      {
-        name: '合成增量',
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        data: data.hourlyMetrics.map((item) => item.mergeDelta),
+  // 通关 / 失败时间趋势（5 分钟桶）
+  const levelTrendOption = useMemo(() => {
+    const series = progress?.series || [];
+    const xAxis = series.map((p) => bucketShort(p.bucket));
+    const zoomStart = series.length > 60 ? Math.max(0, 100 - (60 / series.length) * 100) : 0;
+    return {
+      tooltip: { trigger: 'axis' },
+      legend: {
+        data: ['开始', '通关', '失败'],
+        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
       },
-      {
-        name: '订单增量',
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        data: data.hourlyMetrics.map((item) => item.orderDelta),
-      },
-    ],
-  }), [data.hourlyMetrics]);
+      grid: { left: 50, right: 30, top: 50, bottom: 60 },
+      xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
+      yAxis: { type: 'value', name: '次数', minInterval: 1 },
+      dataZoom: [
+        { type: 'inside', start: zoomStart, end: 100 },
+        { type: 'slider', height: 18, bottom: 10, start: zoomStart, end: 100 },
+      ],
+      series: [
+        {
+          name: '开始',
+          type: 'line',
+          smooth: true,
+          itemStyle: { color: '#94a3b8' },
+          data: series.map((p) => p.start_cnt),
+        },
+        {
+          name: '通关',
+          type: 'line',
+          smooth: true,
+          itemStyle: { color: '#10b981' },
+          data: series.map((p) => p.clear_cnt),
+        },
+        {
+          name: '失败',
+          type: 'line',
+          smooth: true,
+          itemStyle: { color: '#ef4444' },
+          data: series.map((p) => p.fail_cnt),
+        },
+      ],
+    };
+  }, [progress?.series]);
 
-  const hourlyHotpotOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['实时活跃用户', '新增玩家', '关卡进度增量', '徽章进度增量'] },
-    xAxis: { type: 'category', data: data.hourlyMetrics.map((item) => formatHourLabel(item.metricHour)) },
-    yAxis: [
-      { type: 'value', name: '人数' },
-      { type: 'value', name: '进度增量', splitLine: { show: false } },
-    ],
-    series: [
-      {
-        name: '实时活跃用户',
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        yAxisIndex: 0,
-        data: data.hourlyMetrics.map((item) => item.inferredActiveUsers),
-      },
-      {
-        name: '新增玩家',
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        yAxisIndex: 0,
-        data: data.hourlyMetrics.map((item) => item.newUsers),
-      },
-      {
-        name: '关卡进度增量',
-        type: 'line',
-        smooth: true,
-        yAxisIndex: 1,
-        data: data.hourlyMetrics.map((item) => item.levelDelta ?? 0),
-      },
-      {
-        name: '徽章进度增量',
-        type: 'line',
-        smooth: true,
-        yAxisIndex: 1,
-        data: data.hourlyMetrics.map((item) => item.badgeDelta ?? 0),
-      },
-    ],
-  }), [data.hourlyMetrics]);
+  const overviewKpi = overview?.kpi;
+  const progressKpi = progress?.kpi;
 
-  const levelOption = useMemo(() => ({
-    tooltip: { trigger: 'axis' },
-    xAxis: {
-      type: 'category',
-      data: data.levelBuckets.map((item) => (
-        gameKey === 'hotpot' ? `第${item.level}关` : `Lv.${item.level}`
-      )),
-    },
-    yAxis: { type: 'value' },
-    series: [
-      {
-        name: '玩家数',
-        type: 'bar',
-        data: data.levelBuckets.map((item) => item.users),
-      },
-    ],
-  }), [data.levelBuckets, gameKey]);
-
-  const columnMap = useMemo<Record<string, any>>(() => ({
-    userId: {
-      title: '用户 ID',
-      dataIndex: 'userId',
-      width: 280,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.userId.localeCompare(b.userId),
-      render: (value: string) => <Text code copyable>{value}</Text>,
-    },
-    platform: {
-      title: '平台',
-      dataIndex: 'platform',
-      width: 90,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.platform.localeCompare(b.platform),
-    },
-    activeDate: {
-      title: '活跃日期',
-      dataIndex: 'activeDate',
-      width: 120,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.activeDate.localeCompare(b.activeDate),
-      defaultSortOrder: 'descend' as const,
-    },
-    level: {
-      title: (
-        <Tooltip title={gameKey === 'hotpot' ? '来自 hotpot_bowl_progress.maxUnlockedLevelIndex + 1。' : '来自存档快照中的玩家等级字段。'}>
-          {gameKey === 'hotpot' ? '最高关卡' : '等级'}
-        </Tooltip>
-      ),
-      dataIndex: 'level',
-      width: 90,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.level - b.level,
-    },
-    star: {
-      title: (
-        <Tooltip title={gameKey === 'hotpot' ? '来自 hotpot_bowl_progress.maxUnlockedBadgeLevelNumber。' : '来自存档快照中的星级字段。'}>
-          {gameKey === 'hotpot' ? '徽章关卡' : '星级'}
-        </Tooltip>
-      ),
-      dataIndex: 'star',
-      width: 110,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.star - b.star,
-    },
-    diamond: {
-      title: <Tooltip title="来自存档快照中的钻石余额，表示当前余额，不是收入流水。">钻石</Tooltip>,
-      dataIndex: 'diamond',
-      width: 100,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.diamond - b.diamond,
-      render: formatNumber,
-    },
-    mergeCountTotal: {
-      title: <Tooltip title="来自 huahua_merge_stats.totalMerges。">累计合成</Tooltip>,
-      dataIndex: 'mergeCountTotal',
-      width: 120,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.mergeCountTotal - b.mergeCountTotal,
-      render: formatNumber,
-    },
-    deliveredOrdersTotal: {
-      title: <Tooltip title="来自 huahua_merge_stats.totalOrders，表示累计交付订单。">累计订单</Tooltip>,
-      dataIndex: 'deliveredOrdersTotal',
-      width: 120,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.deliveredOrdersTotal - b.deliveredOrdersTotal,
-      render: formatNumber,
-    },
-    adEntitlementUsedToday: {
-      title: (
-        <Tooltip title="来自 huahua_ad_entitlements：把 used / dailyUsed 里的各权益当日已用次数求和。它表示广告权益消耗，不等于全量广告展示或广告完成次数。">
-          广告权益使用
-        </Tooltip>
-      ),
-      dataIndex: 'adEntitlementUsedToday',
-      width: 140,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.adEntitlementUsedToday - b.adEntitlementUsedToday,
-      render: formatNumber,
-    },
-    checkinTotalDays: {
-      title: '签到天数',
-      dataIndex: 'checkinTotalDays',
-      width: 110,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.checkinTotalDays - b.checkinTotalDays,
-    },
-    questWeeklyPoints: {
-      title: '周积分',
-      dataIndex: 'questWeeklyPoints',
-      width: 100,
-      sorter: (a: PlayerFacts, b: PlayerFacts) => a.questWeeklyPoints - b.questWeeklyPoints,
-    },
-  }), [gameKey]);
-
-  const columns = useMemo(
-    () => gameConfig.playerColumns.map((key) => columnMap[key]).filter(Boolean),
-    [columnMap, gameConfig.playerColumns],
-  );
-
-  const metricTags = (
-    <Space wrap>
-      {data.metricCatalog.map((item) => (
-        <Tooltip key={item.key} title={item.description}>
-          <Tag color={precisionColor(item)}>{item.name}</Tag>
-        </Tooltip>
-      ))}
-    </Space>
-  );
-
-  const commonDashboard = (
-    <>
+  const overviewSection = (
+    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Alert
-        className="metric-note"
         type="info"
         showIcon
-        message={`当前游戏：${gameConfig.displayName}，数据前缀：${gameConfig.payloadPrefix}，集合：${gameConfig.collectionName}`}
-        description="活跃趋势优先使用定时快照变化推导；若玩家打开游戏但没有触发云保存，仍可能无法感知。真实 DAU 需要后续接入登录或启动事件。"
+        message="实时趋势 · 5 分钟粒度"
+        description={(
+          <Space direction="vertical" size={0}>
+            <Text>数据来源：@gp/analytics-sdk 打点流水（analytics_events），cron 每 5 分钟增量拉取并聚合。</Text>
+            <Text type="secondary">用户身份：优先 user_id（业务 openid），未登录时降级到 anonymous_id；活跃用 session_start 去重，留存为前一日 / 七日前 cohort 在今日有事件比例。</Text>
+          </Space>
+        )}
       />
+
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={8} lg={4}>
-          <Card><Statistic title="玩家总量" value={data.summary.usersTotal} /></Card>
-        </Col>
-        <Col xs={24} md={8} lg={4}>
+        <Col xs={12} md={8} xl={4}>
           <Card>
-            <Statistic title="快照推导活跃" value={data.summary.inferredActiveUsersToday} />
-            <Text type="secondary">{data.summary.latestDate || '-'}</Text>
+            <Statistic title="今日 DAU" value={overviewKpi?.dau ?? 0} suffix="人" />
+            <Text type="secondary">基于 session_start 去重</Text>
           </Card>
         </Col>
-        <Col xs={24} md={8} lg={4}>
+        <Col xs={12} md={8} xl={4}>
           <Card>
-            <Tooltip title="当前时刻往前 60 分钟内，全量玩家快照中 last_write_at 落在该区间的去重人数。">
-              <Statistic title="近1小时写入玩家" value={data.summary.lastWriteWithinHourUsers} suffix="人" />
+            <Statistic title="近 1 小时活跃" value={overviewKpi?.active_users_1h ?? 0} suffix="人" />
+            <Text type="secondary">所有事件去重</Text>
+          </Card>
+        </Col>
+        <Col xs={12} md={8} xl={4}>
+          <Card>
+            <Statistic title="今日新增" value={overviewKpi?.new_users_today ?? 0} suffix="人" />
+            <Text type="secondary">全表首次出现</Text>
+          </Card>
+        </Col>
+        <Col xs={12} md={8} xl={4}>
+          <Card>
+            <Tooltip title="昨日 DAU 中今日仍有事件的比例。冷启动期 cohort 较小时波动会大，请结合绝对值判断。">
+              <Statistic
+                title="次留 D1"
+                value={formatRetentionRate(overviewKpi?.retention_d1_rate)}
+                suffix={overviewKpi?.retention_d1_rate ? '%' : ''}
+              />
             </Tooltip>
           </Card>
         </Col>
-      </Row>
-      <Row gutter={[16, 16]} className="chart-row">
-        <Col xs={24} xl={14}>
-          <Card title="通用日趋势" extra={<Tooltip title="仅展示跨游戏通用的玩家规模与快照活跃，不包含关卡、订单、合成等游戏专属指标。">口径说明</Tooltip>}>
-            {data.dailyMetrics.length > 0 ? <ReactECharts option={trendOption} /> : <Empty description="暂无指标数据" />}
+        <Col xs={12} md={8} xl={4}>
+          <Card>
+            <Tooltip title="7 天前 DAU 中今日仍有事件的比例。打点不足 7 天时显示为 -。">
+              <Statistic
+                title="7 留 D7"
+                value={formatRetentionRate(overviewKpi?.retention_d7_rate)}
+                suffix={overviewKpi?.retention_d7_rate ? '%' : ''}
+              />
+            </Tooltip>
           </Card>
         </Col>
-        <Col xs={24} xl={10}>
-          <Card title={`${progressLabel}分布`}>
-            {data.levelBuckets.length > 0 ? <ReactECharts option={levelOption} /> : <Empty description={`暂无${progressLabel}数据`} />}
-          </Card>
-        </Col>
-      </Row>
-    </>
-  );
-
-  const huahua = data.gameSpecific.huahua;
-  const hotpot = data.gameSpecific.hotpot;
-  const hotpotSpecificDashboard = (
-    <Row gutter={[16, 16]}>
-      <Col xs={24} lg={12}>
-        <Card title="关卡进度">
-          <Row gutter={16}>
-            <Col span={12}><Statistic title="平均当前关卡" value={hotpot?.currentLevelAvg || 0} precision={1} suffix="关" /></Col>
-            <Col span={12}><Statistic title="平均最高关卡" value={hotpot?.maxUnlockedLevelAvg || 0} precision={1} suffix="关" /></Col>
-            <Col span={12}><Statistic title="全服最高关卡" value={hotpot?.maxUnlockedLevel || 0} suffix="关" /></Col>
-            <Col span={12}><Statistic title="已开始玩家" value={hotpot?.playersStarted || 0} suffix="人" /></Col>
-          </Row>
-        </Card>
-      </Col>
-      <Col xs={24} lg={12}>
-        <Card title="徽章与设置">
-          <Row gutter={16}>
-            <Col span={12}><Statistic title="最高徽章关卡" value={hotpot?.maxUnlockedBadgeLevel || 0} suffix="关" /></Col>
-            <Col span={12}><Statistic title="音乐开启玩家" value={hotpot?.musicEnabledUsers || 0} suffix="人" /></Col>
-            <Col span={12}><Statistic title="音效开启玩家" value={hotpot?.soundEnabledUsers || 0} suffix="人" /></Col>
-          </Row>
-        </Card>
-      </Col>
-      <Col span={24}>
-        <Alert
-          type="info"
-          showIcon
-          message="hot-pot 第一阶段使用定时快照推导实时趋势"
-          description="当前云存档只有关卡进度和设置，订单、失败、复活、广告等经营指标需要后续在游戏端新增计数字段或事件后才能准确统计。"
-        />
-      </Col>
-    </Row>
-  );
-  const gameSpecificDashboard = (
-    <Row gutter={[16, 16]}>
-      <Col xs={24} lg={12}>
-        <Card title="合成经营">
-          <Row gutter={16}>
-            <Col span={12}><Statistic title="累计合成" value={huahua?.totalMerges || 0} /></Col>
-            <Col span={12}><Statistic title="今日合成" value={huahua?.todayMerges || 0} /></Col>
-          </Row>
-        </Card>
-      </Col>
-      <Col xs={24} lg={12}>
-        <Card title="订单经营">
-          <Row gutter={16}>
-            <Col span={8}><Statistic title="累计订单" value={huahua?.totalOrders || 0} /></Col>
-            <Col span={8}><Statistic title="今日订单" value={huahua?.todayOrders || 0} /></Col>
-            <Col span={8}><Statistic title="订单玩家" value={huahua?.playersWithOrders || 0} /></Col>
-            <Col span={24}>
-              <Tooltip title="按快照历史：该小时内有玩家从累计 0 单变为大于 0 的去重人数。老玩家多早已首单，该值经常为 0，属正常。">
-                <Statistic
-                  title="当前小时首次完成订单"
-                  value={data.hourlyMetrics.at(-1)?.firstOrderUsers ?? 0}
-                  suffix="人"
-                />
-              </Tooltip>
-              <Text type="secondary">日历小时 {formatHourLabel(data.summary.latestHour) || '-'}</Text>
-            </Col>
-          </Row>
-        </Card>
-      </Col>
-      <Col xs={24} lg={12}>
-        <Card title="签到任务">
-          <Row gutter={16}>
-            <Col span={12}><Statistic title="累计签到天数" value={huahua?.totalCheckinDays || 0} /></Col>
-            <Col span={12}><Statistic title="任务周积分" value={huahua?.totalQuestWeeklyPoints || 0} /></Col>
-          </Row>
-        </Card>
-      </Col>
-      <Col xs={24} lg={12}>
-        <Card title="活动收集与广告权益">
-          <Row gutter={16}>
-            <Col span={12}><Statistic title="活动积分" value={huahua?.totalEventPoints || 0} /></Col>
-            <Col span={12}><Statistic title="广告权益使用" value={huahua?.totalAdEntitlementUsed || 0} /></Col>
-          </Row>
-        </Card>
-      </Col>
-    </Row>
-  );
-  const activeGameSpecificDashboard = gameKey === 'hotpot' ? hotpotSpecificDashboard : gameSpecificDashboard;
-
-  const playerDetail = (
-    <Card title="玩家快照明细" className="table-card">
-      <Table<PlayerFacts>
-        rowKey="userId"
-        loading={loading}
-        dataSource={data.recentPlayers}
-        columns={columns}
-        locale={{ emptyText: <Empty description="暂无玩家数据" /> }}
-        pagination={{
-          current: playerPagination.current,
-          pageSize: playerPagination.pageSize,
-          total: data.recentPlayers.length,
-          showSizeChanger: true,
-          showTotal: (total) => `共 ${total} 条`,
-          onChange: (current, pageSize) => {
-            setPlayerPagination({ current, pageSize });
-          },
-          onShowSizeChange: (_, pageSize) => {
-            setPlayerPagination({ current: 1, pageSize });
-          },
-        }}
-        scroll={{ x: 1300 }}
-      />
-    </Card>
-  );
-
-  const trendDashboard = (
-    <>
-      <Alert
-        className="metric-note"
-        type="info"
-        showIcon
-        message="实时趋势用于观察投流后玩家活跃变化"
-        description="「最近小时活跃」为北京时间整点桶内、last_write_at 落在该小时且快照发生变化的去重玩家；「近1小时写入玩家」为滚动 60 分钟内 last_write_at 落在窗口内的玩家数。次留/7留按首日活跃 cohort 近似计算。趋势图使用玩家写档时间归因，避免拉取时间造成小时错位。"
-      />
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={8} xl={4}>
+        <Col xs={12} md={8} xl={4}>
           <Card>
             <Statistic
-              title="最近小时活跃"
-              value={data.hourlyMetrics.at(-1)?.inferredActiveUsers || 0}
-              suffix="人"
+              title="计算时刻"
+              value={overviewKpi?.computed_at ? new Date(overviewKpi.computed_at).toLocaleTimeString('zh-CN') : '-'}
             />
-            <Text type="secondary">{formatHourLabel(data.summary.latestHour)}</Text>
+            <Text type="secondary">{overview?.query?.from?.slice(0, 10) || '-'}</Text>
           </Card>
         </Col>
-        <Col xs={24} md={8} xl={4}>
-          <Card>
-            <Tooltip title="当前时刻往前 60 分钟内，全量玩家快照中 last_write_at 落在该区间的去重人数；随刷新与调度更新，用于观察「最近动过存档」的规模，不等同游戏内并发在线。">
-              <Statistic title="近1小时写入玩家" value={data.summary.lastWriteWithinHourUsers} suffix="人" />
-            </Tooltip>
-          </Card>
-        </Col>
-        <Col xs={24} md={8} xl={4}>
-          <Card>
-            <Statistic title="今日活跃" value={data.summary.inferredActiveUsersToday} suffix="人" />
-            <Text type="secondary">{data.summary.latestDate || '-'}</Text>
-          </Card>
-        </Col>
-        <Col xs={24} md={8} xl={4}>
-          <Card>
-            <Tooltip title={`目标日 ${data.summary.latestDate || '-'}：前 1 天首日活跃 cohort ${data.summary.retentionD1CohortUsers} 人，其中 ${data.summary.retentionD1ReturnedUsers} 人目标日再次写档。快照版留存，非登录事件留存。`}>
-              <Statistic
-                title="次留"
-                value={formatRetentionRate(data.summary.retentionD1Rate)}
-                suffix={data.summary.retentionD1Rate === null ? '' : '%'}
-              />
-            </Tooltip>
-          </Card>
-        </Col>
-        <Col xs={24} md={8} xl={4}>
-          <Card>
-            <Tooltip title={`目标日 ${data.summary.latestDate || '-'}：前 7 天首日活跃 cohort ${data.summary.retentionD7CohortUsers} 人，其中 ${data.summary.retentionD7ReturnedUsers} 人目标日再次写档。快照历史不足 7 天时会显示为空。`}>
-              <Statistic
-                title="7留"
-                value={formatRetentionRate(data.summary.retentionD7Rate)}
-                suffix={data.summary.retentionD7Rate === null ? '' : '%'}
-              />
-            </Tooltip>
-          </Card>
-        </Col>
-        <Col xs={24} md={8} xl={4}>
-          <Card>
-            <Statistic title="最近小时新增" value={data.hourlyMetrics.at(-1)?.newUsers || 0} suffix="人" />
-          </Card>
-        </Col>
-        {gameKey === 'huahua' && (
-          <>
-            <Col xs={24} md={8} xl={4}>
-              <Card>
-                <Statistic title="合成增量" value={data.hourlyMetrics.at(-1)?.mergeDelta || 0} suffix="次" />
-              </Card>
-            </Col>
-            <Col xs={24} md={8} xl={4}>
-              <Card>
-                <Statistic title="订单增量" value={data.hourlyMetrics.at(-1)?.orderDelta || 0} suffix="单" />
-              </Card>
-            </Col>
-            <Col xs={24} md={8} xl={4}>
-              <Card>
-                <Tooltip title="该小时内各玩家「今日广告权益已用量」相对上一版快照的增量之和；跨日时按新日累计近似。反映权益消耗节奏，不是全渠道广告调用数。">
-                  <Statistic title="广告权益增量" value={data.hourlyMetrics.at(-1)?.adEntitlementDelta ?? 0} suffix="次" />
-                </Tooltip>
-              </Card>
-            </Col>
-          </>
-        )}
-        {gameKey === 'hotpot' && (
-          <>
-            <Col xs={24} md={8} xl={4}>
-              <Card>
-                <Statistic title="关卡进度增量" value={data.hourlyMetrics.at(-1)?.levelDelta ?? 0} suffix="关" />
-              </Card>
-            </Col>
-            <Col xs={24} md={8} xl={4}>
-              <Card>
-                <Statistic title="徽章进度增量" value={data.hourlyMetrics.at(-1)?.badgeDelta ?? 0} suffix="关" />
-              </Card>
-            </Col>
-          </>
-        )}
         <Col span={24}>
-          <Card
-            title={gameKey === 'hotpot' ? '核心趋势（活跃 · 新增 · 关卡）' : '核心趋势（活跃 · 新增 · 广告）'}
-            extra={<Tooltip title={gameKey === 'hotpot' ? '左侧轴：人数；右侧轴：关卡和徽章进度增量，按玩家写档时间归因。' : '左侧轴：人数；右侧轴：广告权益增量（当日已用量快照差分，非全渠道广告次数）。'}>口径说明</Tooltip>}
-          >
-            {data.hourlyMetrics.length > 0 ? (
-              <ReactECharts option={gameKey === 'hotpot' ? hourlyHotpotOption : hourlyCoreOption} />
+          <Card title="活跃 / 新增趋势（5 分钟桶 · 当日）">
+            {(overview?.series?.length || 0) > 0 ? (
+              <ReactECharts option={activeChartOption} style={{ height: 320 }} />
             ) : (
-              <Empty description="暂无实时趋势，下一次数据同步后会生成" />
+              <Empty description="暂无打点数据，请确认游戏端已上报 session_start 事件" />
             )}
           </Card>
         </Col>
-        {gameKey === 'huahua' && (
-          <Col span={24}>
-            <Card
-              title="合成与订单增量"
-              extra={<Tooltip title="按小时汇总：玩家累计合成次数、累计交付订单数的快照差分，与核心活跃图分开展示以免量级差异难读。">口径说明</Tooltip>}
-            >
-              {data.hourlyMetrics.length > 0 ? (
-                <ReactECharts option={hourlyCommerceOption} />
-              ) : (
-                <Empty description="暂无实时趋势，下一次数据同步后会生成" />
-              )}
-            </Card>
-          </Col>
-        )}
       </Row>
-    </>
+    </Space>
   );
 
-  const qualityDashboard = (
-    <Row gutter={[16, 16]}>
-      <Col xs={24} lg={12}>
-        <Card title="数据质量">
-          <Descriptions column={1} size="small">
-            <Descriptions.Item label="存储模式">{data.quality.storageMode}</Descriptions.Item>
-            <Descriptions.Item label="最后拉取">{formatTime(data.quality.lastIngestAt)}</Descriptions.Item>
-            <Descriptions.Item label="玩家快照数">{data.quality.snapshotCount}</Descriptions.Item>
-            <Descriptions.Item label="小时趋势样本">{data.quality.historyCount}</Descriptions.Item>
-            <Descriptions.Item label="活跃样本玩家">{data.quality.changedSnapshotCount}</Descriptions.Item>
-            <Descriptions.Item label="解析失败数">{data.quality.parseFailedCount}</Descriptions.Item>
-          </Descriptions>
+  const hotpotProgressSection = isHotpot && (
+    <Card
+      title={(
+        <Space>
+          <span>关卡进度（hotpot 独有）</span>
+          <Tag color="purple">游戏独立</Tag>
+        </Space>
+      )}
+      extra={<Text type="secondary">数据源：level_start / level_clear / level_fail</Text>}
+    >
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Row gutter={[16, 16]}>
+          <Col xs={12} md={6}>
+            <Card size="small">
+              <Statistic title="总尝试" value={progressKpi?.total_starts ?? 0} suffix="次" />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small">
+              <Statistic title="总通关" value={progressKpi?.total_clears ?? 0} suffix="次" />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small">
+              <Tooltip title="= 通关次数 / 开始次数。失败重试也算独立尝试。">
+                <Statistic
+                  title="通关率"
+                  value={progressKpi?.clear_rate !== null && progressKpi?.clear_rate !== undefined
+                    ? (progressKpi.clear_rate * 100).toFixed(1)
+                    : '-'}
+                  suffix={progressKpi?.clear_rate ? '%' : ''}
+                />
+              </Tooltip>
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small">
+              <Statistic title="全服最高已通关" value={progressKpi?.max_cleared_level ?? 0} suffix="关" />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small">
+              <Statistic title="平均通关耗时" value={formatDuration(progressKpi?.avg_clear_duration_ms ?? 0)} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small">
+              <Statistic title="放弃次数" value={progressKpi?.total_fails ?? 0} suffix="次" />
+            </Card>
+          </Col>
+        </Row>
+
+        <Card type="inner" title="各关卡用户分布">
+          {(progress?.distribution?.length || 0) > 0 ? (
+            <ReactECharts option={levelDistOption} style={{ height: 320 }} />
+          ) : (
+            <Empty description="暂无关卡数据，请玩 hotpot 触发 level_start" />
+          )}
         </Card>
-      </Col>
-      <Col xs={24} lg={12}>
-        <Card title="最近拉取任务">
-          {data.quality.latestRun ? (
-            <Descriptions column={1} size="small">
-              <Descriptions.Item label="状态">{data.quality.latestRun.status}</Descriptions.Item>
-              <Descriptions.Item label="集合">{data.quality.latestRun.collectionName}</Descriptions.Item>
-              <Descriptions.Item label="开始时间">{formatTime(data.quality.latestRun.startedAt)}</Descriptions.Item>
-              <Descriptions.Item label="结束时间">{formatTime(data.quality.latestRun.finishedAt)}</Descriptions.Item>
-              <Descriptions.Item label="拉取数量">{data.quality.latestRun.fetchedCount}</Descriptions.Item>
-              <Descriptions.Item label="活跃样本">{data.quality.latestRun.changedCount}</Descriptions.Item>
-              <Descriptions.Item label="未更新玩家">{data.quality.latestRun.unchangedCount}</Descriptions.Item>
-            </Descriptions>
-          ) : <Empty description="暂无拉取记录" />}
+
+        <Card type="inner" title="关卡事件趋势（5 分钟桶 · 当日）">
+          {(progress?.series?.length || 0) > 0 ? (
+            <ReactECharts option={levelTrendOption} style={{ height: 280 }} />
+          ) : (
+            <Empty description="今日还没有 level_* 事件" />
+          )}
         </Card>
-      </Col>
-      <Col span={24}>
-        <Card title="指标目录">{metricTags}</Card>
-      </Col>
-    </Row>
+      </Space>
+    </Card>
+  );
+
+  // 实时趋势页：通用 overview + 广告 + （hot-pot）关卡独立模块
+  // 三个面板都共用顶部全局的 windowSel / refreshToken，不再各自维护刷新逻辑
+  const trendDashboard = (
+    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      {overviewSection}
+      <RealtimeAdRevenue fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
+      {hotpotProgressSection}
+    </Space>
+  );
+
+  // 未接入打点 SDK 的游戏：dashboard 完全无数据，给接入引导
+  const notIntegratedNotice = (
+    <Result
+      status="info"
+      title={`${gameDescriptor?.displayName ?? gameKey} 暂未接入打点 SDK`}
+      subTitle="该游戏还没有标准化的打点流水，dashboard 暂时无数据可展示。请先在游戏端接入 @gp/analytics-sdk。"
+      extra={(
+        <Space direction="vertical" size="small" align="start">
+          <Text>接入步骤详见 <Text code>game-analysis/packages/analytics-sdk/README.md</Text>，约 30 分钟可完成。</Text>
+          <Text type="secondary">关键步骤：① 项目内 import @gp/analytics-sdk → ② 注入 Platform Adapter（参考 hot-pot 写法） → ③ 启动尽早调用 <Text code>initAnalytics()</Text> → ④ 业务打点用 <Text code>analytics.track(...)</Text>。</Text>
+          <Text type="secondary">接入完成后，把 <Text code>shared/games.ts</Text> 中本游戏的 <Text code>hasAnalyticsSdk</Text> 翻 true，并把 <Text code>server/config/analytics-games.ts</Text> 中的 <Text code>enabled</Text> 也翻 true，cron 会自动开始拉取。</Text>
+        </Space>
+      )}
+    />
   );
 
   return (
@@ -712,40 +542,72 @@ export function App() {
       <Header className="app-header">
         <div>
           <Title level={3} className="app-title">游戏经营分析</Title>
-          <Text type="secondary">本地内部看板，当前数据来自 CloudBase 存档快照解析</Text>
+          <Text type="secondary">已接入 @gp/analytics-sdk 的游戏从打点流水拉数据，未接入的请先按指引接入</Text>
         </div>
-        <Space>
+        {/*
+          顶部统一控制台：游戏切换 + 时间窗口 + 全局刷新 + 立即拉取
+          所有面板共用这套筛选器，避免各 Card 内再单独维护
+        */}
+        <Space wrap>
           <Select
             value={gameKey}
-            onChange={(value) => {
-              setGameKey(value);
-              void loadDashboard(value);
-            }}
+            onChange={(value) => setGameKey(value)}
             className="game-input"
-            options={GAME_CONFIGS.map((item) => ({
+            style={{ minWidth: 200 }}
+            options={ALL_GAMES.map((item) => ({
               value: item.gameKey,
-              label: `${item.displayName}（${item.payloadPrefix}）`,
+              label: (
+                <Space>
+                  <span>{item.displayName}</span>
+                  {!item.hasAnalyticsSdk && <Tag color="default" style={{ marginInlineEnd: 0 }}>未接入</Tag>}
+                </Space>
+              ),
             }))}
           />
-          <Button onClick={() => void loadDashboard()} loading={loading}>刷新</Button>
-          <Text type="secondary">自动刷新：60秒 / {formatTime(lastRefreshedAt)}</Text>
-          <Button onClick={() => void ingestLatestCloudbaseData()} loading={ingesting}>
-            数据补跑（当前游戏）
+          <Select
+            value={windowSel}
+            onChange={(v) => setWindowSel(v)}
+            options={WINDOW_OPTIONS}
+            style={{ width: 160 }}
+            disabled={!isIntegrated}
+          />
+          <Button
+            onClick={() => setRefreshToken((t) => t + 1)}
+            loading={loading}
+            disabled={!isIntegrated}
+          >
+            刷新
           </Button>
-          <Button type="primary" onClick={() => void recomputeMetrics()} loading={loading}>重算指标</Button>
+          <Tooltip title="手动从 CloudBase 增量拉取一次事件到本地（绕过 5 分钟 cron），完成后自动刷新所有面板">
+            <Button onClick={() => void triggerIngestNow()} loading={ingestingNow} disabled={!isIntegrated}>
+              立即拉取
+            </Button>
+          </Tooltip>
+          <Text type="secondary">自动 5 分钟 · {formatTime(lastRefreshedAt)}</Text>
         </Space>
       </Header>
 
       <Content className="app-content">
-        <Tabs
-          items={[
-            { key: 'trend', label: `${gameConfig.displayName}实时趋势`, children: trendDashboard },
-            { key: 'common', label: '通用看板', children: commonDashboard },
-            { key: 'game', label: `${gameConfig.displayName}专属`, children: activeGameSpecificDashboard },
-            { key: 'players', label: '玩家明细', children: playerDetail },
-            { key: 'quality', label: '数据质量', children: qualityDashboard },
-          ]}
-        />
+        {isIntegrated ? (
+          <Tabs
+            items={[
+              { key: 'trend', label: `${gameDescriptor?.displayName ?? gameKey} 实时趋势`, children: trendDashboard },
+              {
+                key: 'events',
+                label: '原始事件',
+                children: (
+                  <EventsExplorer
+                    fixedGameKey={gameKey}
+                    windowSel={windowSel}
+                    refreshToken={refreshToken}
+                  />
+                ),
+              },
+            ]}
+          />
+        ) : (
+          notIntegratedNotice
+        )}
       </Content>
     </Layout>
   );

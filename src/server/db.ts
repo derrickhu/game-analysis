@@ -13,6 +13,16 @@ function useMysql(): boolean {
   return getConfig().storageMode === 'mysql';
 }
 
+/** 暴露给 analytics 等子模块共享存储后端选择 */
+export function isMysqlMode(): boolean {
+  return useMysql();
+}
+
+/** 暴露给 analytics 等子模块复用同一个 mysql 连接池，避免双连接竞争 */
+export async function getMysqlPool(): Promise<mysql.Pool> {
+  return getPool();
+}
+
 export function getDb(): Database.Database {
   if (sqliteDb) return sqliteDb;
 

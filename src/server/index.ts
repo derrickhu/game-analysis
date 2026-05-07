@@ -6,6 +6,7 @@ import { getDashboardData } from './dashboard';
 import { ingestCloudbaseSnapshots } from './cloudbase-ingest';
 import { recomputeDailyMetrics, recomputeHourlyMetrics } from './metrics';
 import { startScheduler } from './scheduler';
+import { registerRealtimeRoutes } from './routes/realtime';
 
 const config = getConfig();
 const app = Fastify({ logger: true });
@@ -44,6 +45,10 @@ app.post('/api/ingest/cloudbase', async (request) => {
     pageSize: body?.limit || 100,
   });
   return { ok: true, ...result };
+});
+
+void registerRealtimeRoutes(app).catch((error) => {
+  app.log.error(error, '实时路由注册失败');
 });
 
 void initializeStorage().catch((error) => {
