@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, Empty, Layout, Result, Row, Select, Space, Statistic, Tabs, Tag, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, DatePicker, Empty, Layout, Result, Row, Select, Space, Statistic, Tabs, Tag, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
+import dayjs, { type Dayjs } from 'dayjs';
 
 import { ALL_GAMES, getDefaultGameKey, getGameDescriptor } from '../shared/games';
 import { EventsExplorer } from './EventsExplorer';
 import { RealtimeAdRevenue } from './RealtimeAdRevenue';
-import { DEFAULT_WINDOW, WINDOW_OPTIONS, type WindowValue, buildWindowQuery } from './timeWindow';
+import { RealtimeShare } from './RealtimeShare';
+import { DEFAULT_WINDOW, WINDOW_OPTIONS, type WindowValue, buildWindowQuery, isCustomRange, resolveWindow } from './timeWindow';
+
+const { RangePicker } = DatePicker;
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -15,6 +19,7 @@ const { Title, Text } = Typography;
  *
  * 架构（已切到 SDK 打点流水驱动）：
  * - 大盘 KPI / 活跃趋势 / 新增曲线 → /api/realtime/overview （from analytics_events）
+ * - 分享传播（通用）              → /api/realtime/share
  * - 广告事件流（5min 粒度）       → /api/realtime/ad-revenue
  * - hot-pot 关卡进度（游戏独有）   → /api/realtime/hotpot-progress （hotpot only）
  *
@@ -573,6 +578,7 @@ export function App() {
   const trendDashboard = (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       {overviewSection}
+      <RealtimeShare fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
       <RealtimeAdRevenue fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
       {hotpotProgressSection}
     </Space>
@@ -621,13 +627,58 @@ export function App() {
               ),
             }))}
           />
+          {/*
+            时间窗口快捷下拉：仅承载预设档位（自然日 / 近 N 分钟 / 7 天 / 30 天），
+            自定义时间范围由右侧 RangePicker 接管。当前是自定义状态时，下拉清空显示，
+            提示用户区间已由 RangePicker 决定。
+          */}
           <Select
-            value={windowSel}
-            onChange={(v) => setWindowSel(v)}
+            value={isCustomRange(windowSel) ? undefined : windowSel}
+            placeholder="自定义时间窗口"
+            onChange={(v) => setWindowSel(v as WindowValue)}
             options={WINDOW_OPTIONS}
             style={{ width: 160 }}
             disabled={!isIntegrated}
+            allowClear={false}
           />
+          {/*
+            外置 RangePicker：
+            - 永远展示，value 由当前 windowSel 解析得到（快捷档实时映射成 from~now，自定义档保持手选区间）
+            - 用户手动改区间 → 切到自定义模式；点快捷预设回到时间相对档
+            - 故意不开 showTime：开启时间选择后 antd 会强制让用户多按一次"确定"，
+              而本场景重点是"长周期观察"，按天精度足够；去掉后两次单击就能完成区间选择
+            - 起点统一取 startOf('day')、终点取 endOf('day')，避开"今日 00:00 ~ 00:00"这种空窗
+            - 7/30 天的快捷预设也单独放到 panel 里，省去切两次的麻烦
+          */}
+          {(() => {
+            const resolved = resolveWindow(windowSel);
+            return (
+              <RangePicker
+                format="YYYY-MM-DD"
+                allowClear={false}
+                disabled={!isIntegrated}
+                value={[dayjs(resolved.fromTs), dayjs(resolved.toTs)] as [Dayjs, Dayjs]}
+                onChange={(range) => {
+                  if (!range || !range[0] || !range[1]) return;
+                  // 用户在日历里选 5/3 ~ 5/8 时，落地为 5/3 00:00 ~ 5/8 23:59:59，
+                  // 而不是两端都对齐到 00:00（否则末日整天的数据会被裁掉）
+                  const fromTs = range[0].startOf('day').valueOf();
+                  const toTs = range[1].endOf('day').valueOf();
+                  if (toTs <= fromTs) {
+                    message.warning('结束时间必须晚于开始时间');
+                    return;
+                  }
+                  setWindowSel({ kind: 'range', fromTs, toTs });
+                }}
+                presets={[
+                  { label: '今天', value: [dayjs().startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs] },
+                  { label: '昨天', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] as [Dayjs, Dayjs] },
+                  { label: '近 7 天', value: [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs] },
+                  { label: '近 30 天', value: [dayjs().subtract(29, 'day').startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs] },
+                ]}
+              />
+            );
+          })()}
           <Button
             onClick={() => setRefreshToken((t) => t + 1)}
             loading={loading}
