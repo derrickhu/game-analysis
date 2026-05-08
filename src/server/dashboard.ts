@@ -55,7 +55,7 @@ function getEmptyDashboardData(): DashboardData {
     metricCatalog: [],
     modules: [],
     quality: {
-      storageMode: 'sqlite',
+      storageMode: 'mysql',
       lastIngestAt: 0,
       nextIngestAt: 0,
       snapshotCount: 0,

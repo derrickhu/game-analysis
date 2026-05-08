@@ -17,9 +17,8 @@ async function ensureMysqlColumn(
   await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${definitionSql}`);
 }
 
-export async function createMysqlPool(): Promise<mysql.Pool | null> {
+export async function createMysqlPool(): Promise<mysql.Pool> {
   const config = getConfig();
-  if (config.storageMode !== 'mysql') return null;
 
   const pool = mysql.createPool({
     host: config.mysql.host,

@@ -8,6 +8,13 @@ LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 cd "$ROOT_DIR"
 
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
 start_one() {
   local name="$1"
   local pid_file="$RUN_DIR/$name.pid"
@@ -63,5 +70,7 @@ start_one api npm run api
 start_one web npm run dev
 
 echo
+echo "存储模式: MySQL"
+echo "MySQL: ${MYSQL_USER:-<unset>}@${MYSQL_HOST:-<unset>}:${MYSQL_PORT:-<unset>}/${MYSQL_DATABASE:-<unset>}"
 echo "访问地址: http://192.168.3.87:5173"
 echo "停止服务: ./start.sh stop"

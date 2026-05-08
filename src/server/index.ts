@@ -11,6 +11,16 @@ import { registerRealtimeRoutes } from './routes/realtime';
 const config = getConfig();
 const app = Fastify({ logger: true });
 
+app.log.info({
+  storageMode: config.storageMode,
+  mysql: {
+    host: config.mysql.host,
+    port: config.mysql.port,
+    database: config.mysql.database,
+    user: config.mysql.user,
+  },
+}, '经分后端使用 MySQL 存储');
+
 app.get('/api/health', async () => ({
   ok: true,
   ts: Date.now(),

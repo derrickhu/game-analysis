@@ -2,14 +2,11 @@ import Database from 'better-sqlite3';
 import mysql from 'mysql2/promise';
 
 import { getConfig } from '../config';
+import { getCursor } from '../analytics-db';
 import { closeStorage, initializeStorage } from '../db';
 import { recomputeDailyMetrics, recomputeHourlyMetrics } from '../metrics';
 
 const config = getConfig();
-
-if (config.storageMode !== 'mysql') {
-  throw new Error('迁移到 MySQL 需要设置 GA_STORAGE=mysql');
-}
 
 function readArg(name: string, fallback = ''): string {
   const prefix = `--${name}=`;
@@ -19,6 +16,32 @@ function readArg(name: string, fallback = ''): string {
 function hasColumn(database: Database.Database, tableName: string, columnName: string): boolean {
   const columns = database.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
   return columns.some((column) => column.name === columnName);
+}
+
+function hasTable(database: Database.Database, tableName: string): boolean {
+  const row = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { name?: string } | undefined;
+  return Boolean(row?.name);
+}
+
+function readGameRows(database: Database.Database, tableName: string, gameKey: string): any[] {
+  if (!hasTable(database, tableName)) {
+    console.warn(`跳过迁移: SQLite 中不存在表 ${tableName}`);
+    return [];
+  }
+  return database.prepare(`SELECT * FROM ${tableName} WHERE game_key = ?`).all(gameKey);
+}
+
+function ensureJsonString(value: unknown, context: string): string | null {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? {});
+  try {
+    JSON.parse(text);
+    return text;
+  } catch {
+    console.warn(`跳过非法 JSON: ${context}`);
+    return null;
+  }
 }
 
 async function replaceRows(
@@ -53,6 +76,8 @@ const sourcePath = readArg('source', config.dbPath);
 const sqlite = new Database(sourcePath, { readonly: true });
 
 await initializeStorage();
+// analytics_* 表由 analytics-db 懒迁移创建；迁移前先触发一次，确保目标表存在。
+await getCursor(gameKey);
 const pool = mysql.createPool({
   host: config.mysql.host,
   port: config.mysql.port,
@@ -64,7 +89,7 @@ const pool = mysql.createPool({
 });
 
 try {
-  const rawSnapshots = sqlite.prepare('SELECT * FROM raw_snapshots WHERE game_key = ?').all(gameKey);
+  const rawSnapshots = readGameRows(sqlite, 'raw_snapshots', gameKey);
   await replaceRows(pool, 'raw_snapshots', rawSnapshots, [
     'id',
     'game_key',
@@ -80,7 +105,7 @@ try {
     'imported_at',
   ], 'WHERE game_key = ?', [gameKey]);
 
-  const latestSnapshots = sqlite.prepare('SELECT * FROM player_latest_snapshot WHERE game_key = ?').all(gameKey);
+  const latestSnapshots = readGameRows(sqlite, 'player_latest_snapshot', gameKey);
   await replaceRows(pool, 'player_latest_snapshot', latestSnapshots, [
     'game_key',
     'doc_id',
@@ -94,7 +119,7 @@ try {
     'seen_at',
   ], 'WHERE game_key = ?', [gameKey]);
 
-  const historyRows = sqlite.prepare('SELECT * FROM raw_snapshot_history WHERE game_key = ?').all(gameKey);
+  const historyRows = readGameRows(sqlite, 'raw_snapshot_history', gameKey);
   await replaceRows(pool, 'raw_snapshot_history', historyRows, [
     'id',
     'game_key',
@@ -109,7 +134,7 @@ try {
     'changed_at',
   ], 'WHERE game_key = ?', [gameKey]);
 
-  const playerFacts = sqlite.prepare('SELECT * FROM player_facts WHERE game_key = ?').all(gameKey);
+  const playerFacts = readGameRows(sqlite, 'player_facts', gameKey);
   await replaceRows(pool, 'player_facts', playerFacts, [
     'game_key',
     'user_id',
@@ -134,7 +159,7 @@ try {
     'raw_json',
   ], 'WHERE game_key = ?', [gameKey]);
 
-  const ingestRuns = sqlite.prepare('SELECT * FROM ingest_runs WHERE game_key = ?').all(gameKey);
+  const ingestRuns = readGameRows(sqlite, 'ingest_runs', gameKey);
   await replaceRows(pool, 'ingest_runs', ingestRuns, [
     'id',
     'game_key',
@@ -148,7 +173,7 @@ try {
     'error_message',
   ], 'WHERE game_key = ?', [gameKey]);
 
-  const hourlyRows = sqlite.prepare('SELECT * FROM metric_hourly WHERE game_key = ?').all(gameKey)
+  const hourlyRows = readGameRows(sqlite, 'metric_hourly', gameKey)
     .map((row: any) => ({
       ...row,
       level_delta: hasColumn(sqlite, 'metric_hourly', 'level_delta') ? row.level_delta : 0,
@@ -169,7 +194,7 @@ try {
     'updated_at',
   ], 'WHERE game_key = ?', [gameKey]);
 
-  const dailyRows = sqlite.prepare('SELECT * FROM daily_metrics WHERE game_key = ?').all(gameKey);
+  const dailyRows = readGameRows(sqlite, 'daily_metrics', gameKey);
   await replaceRows(pool, 'daily_metrics', dailyRows, [
     'game_key',
     'metric_date',
@@ -185,9 +210,85 @@ try {
     'updated_at',
   ], 'WHERE game_key = ?', [gameKey]);
 
+  const analyticsEvents = readGameRows(sqlite, 'analytics_events', gameKey)
+    .map((row: any) => {
+      const paramsJson = ensureJsonString(row.params_json, `analytics_events.event_id=${row.event_id}`);
+      return paramsJson ? { ...row, params_json: paramsJson } : null;
+    })
+    .filter(Boolean) as any[];
+  await replaceRows(pool, 'analytics_events', analyticsEvents, [
+    'event_id',
+    'event_name',
+    'event_ts',
+    'ingest_ts',
+    'game_key',
+    'app_version',
+    'sdk_version',
+    'platform',
+    'user_id',
+    'anonymous_id',
+    'session_id',
+    'session_seq',
+    'device_brand',
+    'device_model',
+    'device_system',
+    'device_screen_w',
+    'device_screen_h',
+    'device_network',
+    'params_json',
+    'ingested_at',
+  ], 'WHERE game_key = ?', [gameKey]);
+
+  const analyticsCursor = readGameRows(sqlite, 'analytics_cursor', gameKey);
+  await replaceRows(pool, 'analytics_cursor', analyticsCursor, [
+    'game_key',
+    'last_event_ts',
+    'last_event_id',
+    'updated_at',
+  ], 'WHERE game_key = ?', [gameKey]);
+
+  const adMinuteRows = readGameRows(sqlite, 'analytics_ad_minute', gameKey);
+  await replaceRows(pool, 'analytics_ad_minute', adMinuteRows, [
+    'game_key',
+    'minute_bucket',
+    'ad_type',
+    'scene',
+    'ad_request_cnt',
+    'ad_show_cnt',
+    'ad_click_cnt',
+    'ad_complete_cnt',
+    'ad_error_cnt',
+    'ecpm_used',
+    'ad_revenue_estimated_cny',
+    'updated_at',
+  ], 'WHERE game_key = ?', [gameKey]);
+
+  const analyticsIngestRuns = readGameRows(sqlite, 'analytics_ingest_runs', gameKey);
+  await replaceRows(pool, 'analytics_ingest_runs', analyticsIngestRuns, [
+    'id',
+    'game_key',
+    'started_at',
+    'finished_at',
+    'status',
+    'fetched',
+    'cursor_before',
+    'cursor_after',
+    'error_message',
+  ], 'WHERE game_key = ?', [gameKey]);
+
   const dailyMetrics = await recomputeDailyMetrics(gameKey);
   const hourlyMetrics = await recomputeHourlyMetrics(gameKey);
-  console.log(`迁移完成: game=${gameKey}, snapshots=${rawSnapshots.length}, history=${historyRows.length}, facts=${playerFacts.length}, metricDays=${dailyMetrics.length}, metricHours=${hourlyMetrics.length}`);
+  console.log([
+    `迁移完成: game=${gameKey}`,
+    `snapshots=${rawSnapshots.length}`,
+    `history=${historyRows.length}`,
+    `facts=${playerFacts.length}`,
+    `analyticsEvents=${analyticsEvents.length}`,
+    `adMinutes=${adMinuteRows.length}`,
+    `analyticsRuns=${analyticsIngestRuns.length}`,
+    `metricDays=${dailyMetrics.length}`,
+    `metricHours=${hourlyMetrics.length}`,
+  ].join(', '));
 } finally {
   sqlite.close();
   await pool.end();

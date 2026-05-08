@@ -12,6 +12,7 @@
     "metrics": "tsx src/server/jobs/recompute-metrics.ts",
     "seed:ad-events": "node scripts/seed-ad-events.mjs",
     "migrate:mysql": "tsx src/server/jobs/migrate-sqlite-to-mysql.ts",
+    "verify:mysql": "tsx src/server/jobs/verify-mysql-storage.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "npm run typecheck && vite build"
   },

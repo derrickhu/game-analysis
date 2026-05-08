@@ -11,7 +11,7 @@ export interface AppConfig {
   dbPath: string;
   apiPort: number;
   defaultGameKey: string;
-  storageMode: 'sqlite' | 'mysql';
+  storageMode: 'mysql';
   mysql: {
     host: string;
     port: number;
@@ -27,6 +27,30 @@ function readNumber(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function readRequiredString(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === '') {
+    throw new Error(`缺少必需的 MySQL 配置: ${name}`);
+  }
+  return value;
+}
+
+function readRequiredNumber(name: string): number {
+  const value = Number(process.env[name]);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`缺少或非法的 MySQL 配置: ${name}`);
+  }
+  return value;
+}
+
+function readMysqlPassword(): string {
+  // 密码允许为空字符串，但必须在环境变量中显式声明，避免误以为读到了 .env。
+  if (process.env.MYSQL_PASSWORD === undefined) {
+    throw new Error('缺少必需的 MySQL 配置: MYSQL_PASSWORD（如无密码请显式设置为空字符串）');
+  }
+  return process.env.MYSQL_PASSWORD;
+}
+
 export function getConfig(): AppConfig {
   const dataDir = process.env.GA_DATA_DIR
     ? path.resolve(process.env.GA_DATA_DIR)
@@ -40,13 +64,13 @@ export function getConfig(): AppConfig {
       : path.join(dataDir, 'game-analysis.sqlite'),
     apiPort: readNumber('GA_API_PORT', 8787),
     defaultGameKey: process.env.GA_GAME_KEY || 'hotpot',
-    storageMode: process.env.GA_STORAGE === 'mysql' ? 'mysql' : 'sqlite',
+    storageMode: 'mysql',
     mysql: {
-      host: process.env.MYSQL_HOST || '127.0.0.1',
-      port: readNumber('MYSQL_PORT', 3306),
-      user: process.env.MYSQL_USER || 'root',
-      password: process.env.MYSQL_PASSWORD || '',
-      database: process.env.MYSQL_DATABASE || 'game_analysis',
+      host: readRequiredString('MYSQL_HOST'),
+      port: readRequiredNumber('MYSQL_PORT'),
+      user: readRequiredString('MYSQL_USER'),
+      password: readMysqlPassword(),
+      database: readRequiredString('MYSQL_DATABASE'),
     },
     schedulerEnabled: process.env.GA_SCHEDULER_ENABLED === 'true',
   };

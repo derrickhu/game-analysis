@@ -10,7 +10,7 @@ let sqliteDb: Database.Database | null = null;
 let mysqlPool: mysql.Pool | null = null;
 
 function useMysql(): boolean {
-  return getConfig().storageMode === 'mysql';
+  return true;
 }
 
 /** 暴露给 analytics 等子模块共享存储后端选择 */
@@ -24,23 +24,11 @@ export async function getMysqlPool(): Promise<mysql.Pool> {
 }
 
 export function getDb(): Database.Database {
-  if (sqliteDb) return sqliteDb;
-
-  const config = getConfig();
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  sqliteDb = new Database(config.dbPath);
-  sqliteDb.pragma('journal_mode = WAL');
-  sqliteDb.pragma('foreign_keys = ON');
-  migrate(sqliteDb);
-  return sqliteDb;
+  throw new Error('经分后端运行时已切换为 MySQL only，不允许访问 SQLite getDb()');
 }
 
 export async function initializeStorage(): Promise<void> {
-  if (useMysql()) {
-    await getPool();
-    return;
-  }
-  getDb();
+  await getPool();
 }
 
 export async function closeStorage(): Promise<void> {
