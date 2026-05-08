@@ -40,7 +40,13 @@ interface OverviewKpi {
   active_users_1h: number;
   new_users_today: number;
   retention_d1_rate: number | null;
+  /** 分母：D-1 cohort（昨日 DAU 去重数） */
+  retention_d1_cohort: number;
+  /** 分子：cohort 中今日仍有事件的去重数 */
+  retention_d1_returned: number;
   retention_d7_rate: number | null;
+  retention_d7_cohort: number;
+  retention_d7_returned: number;
   computed_at: number;
 }
 
@@ -105,6 +111,28 @@ function formatRetentionRate(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
   return (value * 100).toFixed(1);
 }
+
+/**
+ * 把次留 / 7 留的「分子 / 分母」格式化成中文副标题。
+ * 故意用「活跃 → 今日回访」的箭头形式，让分母（cohort）和分子（回访）一眼就能看懂。
+ * cohort 为 0 时给一句明确话术，避免显示 0/0 让人误解。
+ *
+ * @param baseLabel 分母语义，例如「昨日活跃」「7 天前活跃」
+ * @param returned 分子：cohort 中今日仍有事件的去重数
+ * @param cohort 分母：cohort 去重数
+ */
+function formatRetentionFraction(
+  baseLabel: string,
+  returned: number | undefined,
+  cohort: number | undefined,
+): string {
+  if (cohort === undefined || cohort === 0) return `${baseLabel} 0 人，暂无样本`;
+  return `${baseLabel} ${cohort} 人 → 今日回访 ${returned ?? 0} 人`;
+}
+
+/** 6 张 KPI 卡片共用的容器样式：同高 + 统一 padding，避免「次留多一行副标题」造成的高度抖动 */
+const kpiCardStyle = { width: '100%', height: '100%' } as const;
+const kpiCardStyles = { body: { minHeight: 110, display: 'flex', flexDirection: 'column' as const, justifyContent: 'space-between' as const } };
 
 function formatDuration(ms: number): string {
   if (!ms) return '-';
@@ -386,27 +414,33 @@ export function App() {
         )}
       />
 
-      <Row gutter={[16, 16]}>
-        <Col xs={12} md={8} xl={4}>
-          <Card>
+      {/*
+        KPI 卡片整排：
+        - 所有 Card 用同一套 styles（统一 body minHeight）保持视觉高度对齐
+        - Col 加 display:flex，让 Card 的 height:100% 在等高 Row 中真正撑满
+        - 留存卡片在副标题位置展示「分子/分母」，便于人工核对 cohort 是否过小
+      */}
+      <Row gutter={[16, 16]} align="stretch">
+        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+          <Card style={kpiCardStyle} styles={kpiCardStyles}>
             <Statistic title="今日 DAU" value={overviewKpi?.dau ?? 0} suffix="人" />
             <Text type="secondary">基于 session_start 去重</Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4}>
-          <Card>
+        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+          <Card style={kpiCardStyle} styles={kpiCardStyles}>
             <Statistic title="近 1 小时活跃" value={overviewKpi?.active_users_1h ?? 0} suffix="人" />
             <Text type="secondary">所有事件去重</Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4}>
-          <Card>
+        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+          <Card style={kpiCardStyle} styles={kpiCardStyles}>
             <Statistic title="今日新增" value={overviewKpi?.new_users_today ?? 0} suffix="人" />
             <Text type="secondary">全表首次出现</Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4}>
-          <Card>
+        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+          <Card style={kpiCardStyle} styles={kpiCardStyles}>
             <Tooltip title="昨日 DAU 中今日仍有事件的比例。冷启动期 cohort 较小时波动会大，请结合绝对值判断。">
               <Statistic
                 title="次留 D1"
@@ -414,10 +448,17 @@ export function App() {
                 suffix={overviewKpi?.retention_d1_rate ? '%' : ''}
               />
             </Tooltip>
+            <Text type="secondary">
+              {formatRetentionFraction(
+                '昨日活跃',
+                overviewKpi?.retention_d1_returned,
+                overviewKpi?.retention_d1_cohort,
+              )}
+            </Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4}>
-          <Card>
+        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+          <Card style={kpiCardStyle} styles={kpiCardStyles}>
             <Tooltip title="7 天前 DAU 中今日仍有事件的比例。打点不足 7 天时显示为 -。">
               <Statistic
                 title="7 留 D7"
@@ -425,10 +466,17 @@ export function App() {
                 suffix={overviewKpi?.retention_d7_rate ? '%' : ''}
               />
             </Tooltip>
+            <Text type="secondary">
+              {formatRetentionFraction(
+                '7 天前活跃',
+                overviewKpi?.retention_d7_returned,
+                overviewKpi?.retention_d7_cohort,
+              )}
+            </Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4}>
-          <Card>
+        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+          <Card style={kpiCardStyle} styles={kpiCardStyles}>
             <Statistic
               title="计算时刻"
               value={overviewKpi?.computed_at ? new Date(overviewKpi.computed_at).toLocaleTimeString('zh-CN') : '-'}

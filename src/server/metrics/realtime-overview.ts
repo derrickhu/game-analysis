@@ -28,10 +28,27 @@ export interface OverviewKpi {
   new_users_today: number;
   /** 次日留存率 = 昨天 DAU ∩ 今天有事件 / 昨天 DAU */
   retention_d1_rate: number | null;
+  /** 次留 cohort（分母）：昨天 DAU 去重用户数 */
+  retention_d1_cohort: number;
+  /** 次留回访（分子）：cohort 中今天仍有事件的去重用户数 */
+  retention_d1_returned: number;
   /** 7 日留存率 = 7 天前 DAU ∩ 今天有事件 / 7 天前 DAU */
   retention_d7_rate: number | null;
+  /** 7 留 cohort（分母）：7 天前 DAU 去重用户数 */
+  retention_d7_cohort: number;
+  /** 7 留回访（分子）：cohort 中今天仍有事件的去重用户数 */
+  retention_d7_returned: number;
   /** 计算时刻：查询点的 ms 时间戳 */
   computed_at: number;
+}
+
+interface CohortStat {
+  /** 分母：cohort 中的去重用户数 */
+  cohort: number;
+  /** 分子：cohort 中今天仍有事件的去重用户数 */
+  retain: number;
+  /** 比例：cohort 为 0 时为 null（无法算） */
+  rate: number | null;
 }
 
 export interface OverviewSeriesPoint {
@@ -78,8 +95,12 @@ export async function getOverview(
       dau,
       active_users_1h: active1h,
       new_users_today: newToday,
-      retention_d1_rate: retentionD1,
-      retention_d7_rate: retentionD7,
+      retention_d1_rate: retentionD1.rate,
+      retention_d1_cohort: retentionD1.cohort,
+      retention_d1_returned: retentionD1.retain,
+      retention_d7_rate: retentionD7.rate,
+      retention_d7_cohort: retentionD7.cohort,
+      retention_d7_returned: retentionD7.retain,
       computed_at: now,
     },
     series,
@@ -168,7 +189,7 @@ async function countNewUsersInWindow(
 
 /**
  * 计算「cohort 在 baseFrom..baseTo 中的所有用户，到 retainFrom..retainTo 仍有事件的比例」
- * - 返回 null 表示 cohort 为空（没法算）
+ * 返回三元组：cohort（分母）、retain（分子）、rate（cohort=0 时为 null）。
  */
 async function cohortRetention(
   gameKey: string,
@@ -176,8 +197,9 @@ async function cohortRetention(
   baseTo: number,
   retainFrom: number,
   retainTo: number,
-): Promise<number | null> {
-  if (baseTo < baseFrom || retainTo < retainFrom) return null;
+): Promise<CohortStat> {
+  const empty: CohortStat = { cohort: 0, retain: 0, rate: null };
+  if (baseTo < baseFrom || retainTo < retainFrom) return empty;
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
@@ -197,8 +219,9 @@ async function cohortRetention(
       [gameKey, baseFrom, baseTo, gameKey, retainFrom, retainTo],
     );
     const row = (rows as Array<{ base_cnt: number; retain_cnt: number }>)[0];
-    if (!row || !row.base_cnt) return null;
-    return Number(row.retain_cnt) / Number(row.base_cnt);
+    const cohort = Number(row?.base_cnt || 0);
+    const retain = Number(row?.retain_cnt || 0);
+    return { cohort, retain, rate: cohort > 0 ? retain / cohort : null };
   }
   const db = getDb();
   const baseRows = db
@@ -208,7 +231,7 @@ async function cohortRetention(
         WHERE game_key = ? AND event_ts BETWEEN ? AND ?`,
     )
     .all(gameKey, baseFrom, baseTo) as Array<{ uk: string }>;
-  if (baseRows.length === 0) return null;
+  if (baseRows.length === 0) return empty;
   const baseSet = new Set(baseRows.map((r) => r.uk));
   const retainRows = db
     .prepare(
@@ -221,7 +244,7 @@ async function cohortRetention(
   for (const r of retainRows) {
     if (baseSet.has(r.uk)) hit++;
   }
-  return hit / baseSet.size;
+  return { cohort: baseSet.size, retain: hit, rate: hit / baseSet.size };
 }
 
 /**
