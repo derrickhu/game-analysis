@@ -31,3 +31,20 @@ export function tsToBucket(ts: number): string {
 export function bucketToTs(bucket: string): number {
   return new Date(`${bucket}:00.000Z`).getTime();
 }
+
+/** 1 小时桶专用：与 5 分钟桶共存，仅给「关键变现指标趋势」这种长尺度对比图用 */
+export const HOUR_BUCKET_SIZE_MS = 60 * 60_000;
+
+/**
+ * 时间戳对齐到小时起点（floor），返回 UTC 字符串 YYYY-MM-DDTHH:00。
+ * 输出格式与 tsToBucket 兼容（都是 YYYY-MM-DDTHH:mm，只是分钟段恒为 00），
+ * 前端 formatMinuteLabel 不需要改就能正确渲染。
+ */
+export function tsToHourBucket(ts: number): string {
+  const aligned = Math.floor(ts / HOUR_BUCKET_SIZE_MS) * HOUR_BUCKET_SIZE_MS;
+  const d = new Date(aligned);
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T` +
+    `${pad(d.getUTCHours())}:00`
+  );
+}

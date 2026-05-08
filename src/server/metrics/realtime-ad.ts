@@ -1,6 +1,6 @@
 import { isMysqlMode, getDb, getMysqlPool } from '../db';
 import { estimateRevenueCny, getEstimatedEcpm } from '../config/ecpm';
-import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
+import { BUCKET_SIZE_MS, bucketToTs, tsToBucket, tsToHourBucket } from './bucket';
 
 const AD_EVENT_NAMES = ['ad_request', 'ad_show', 'ad_click', 'ad_close', 'ad_error'] as const;
 type AdEventName = (typeof AD_EVENT_NAMES)[number];
@@ -49,6 +49,171 @@ export async function recomputeRealtimeAdMinute(
   const buckets = await aggregateBuckets(gameKey, minuteFrom, minuteTo);
   await replaceBuckets(gameKey, minuteFrom, minuteTo, buckets);
   return buckets.length;
+}
+
+/**
+ * 用户视角广告指标（看广告 UAU、DAU、渗透率、人均广告次数、ARPDAU）。
+ *
+ * 设计取舍：
+ * - 直接打 analytics_events 流水去重，避免在 analytics_ad_minute 上加 user_set 列引发的体积膨胀
+ * - 派生比例（渗透率/人均/ARPDAU）由调用方传入 totals 直接算出，不重复扫表
+ * - DAU 走 session_start 与 realtime-overview 同口径，避免两个看板出不一样的 DAU
+ * - 用户身份归一公式 COALESCE(NULLIF(user_id,''), anonymous_id) 与 overview 共用
+ */
+export interface AdUserMetrics {
+  /** 看广告 UAU：当前窗口内 ad_show 事件去重用户数 */
+  ad_uau: number;
+  /** DAU：当前窗口内 session_start 事件去重用户数（与 overview 同口径） */
+  dau: number;
+  /** 广告渗透率（%）：ad_uau / dau */
+  ad_penetration_rate: number;
+  /** 人均广告次数：total_show / ad_uau */
+  ad_show_per_uu: number;
+  /** 估算 ARPDAU（元）：total_revenue / dau，注意是估算口径，不等于真实结算 */
+  arpdau_estimated_cny: number;
+}
+
+export async function getAdUserMetrics(
+  gameKey: string,
+  fromTs: number,
+  toTs: number,
+  totalShow: number,
+  totalRevenue: number,
+): Promise<AdUserMetrics> {
+  const [adUau, dau] = await Promise.all([
+    countDistinctUsersByEvent(gameKey, fromTs, toTs, 'ad_show'),
+    countDistinctUsersByEvent(gameKey, fromTs, toTs, 'session_start'),
+  ]);
+  const adPenetrationRate = dau > 0 ? Math.round((adUau / dau) * 10000) / 100 : 0;
+  const adShowPerUu = adUau > 0 ? Math.round((totalShow / adUau) * 100) / 100 : 0;
+  const arpdauEstimatedCny = dau > 0 ? Math.round((totalRevenue / dau) * 100) / 100 : 0;
+  return {
+    ad_uau: adUau,
+    dau,
+    ad_penetration_rate: adPenetrationRate,
+    ad_show_per_uu: adShowPerUu,
+    arpdau_estimated_cny: arpdauEstimatedCny,
+  };
+}
+
+/**
+ * 桶级 ad_uau / 在线 UAU：把窗口内全部事件流水扫一次，在 JS 里折成 5 分钟桶 → user_key Set。
+ *
+ * 为什么桶级分母用「任意事件活跃用户」而不是 session_start：
+ * - session_start 仅在会话开始那一桶里出现一次，后续桶即便用户在玩、在看广告，session_start 桶级数量为 0
+ * - 这会导致桶级渗透率 = ad_uau / session_start 爆到 100%+ 甚至 200%+（用户已被前面的桶"消化"掉）
+ * - 改用「该 5 分钟桶任一事件的去重用户数」作为活跃在线 UAU，分母语义=「这 5 分钟有多少人在线」
+ *   ad_uau 必然 ≤ active_uu，渗透率自然 ≤ 100%
+ *
+ * 注意：窗口级 dau / 渗透率 / ARPDAU（在 KPI 卡里）仍由 getAdUserMetrics 走 session_start 口径，
+ *      与 realtime-overview 同口径，避免和总览看板出不一样的 DAU。
+ *
+ * 为什么用流水折桶而不是 GROUP BY：
+ * - SQL 层 5 分钟对齐折桶 SQLite/MySQL 写法差异大；JS 里 tsToBucket 已是统一函数
+ * - 当前 24h 窗口下 events 行数在万到几十万级，Map<bucket, Set<uk>> 几 MB 内存即可，单次扫描足够快
+ * - 上量后再考虑在 analytics_ad_minute 加 user_set 预聚合列
+ */
+export interface SeriesUserBuckets {
+  /** 5 分钟桶 → 看广告去重用户集合 */
+  adUau: Map<string, Set<string>>;
+  /** 5 分钟桶 → 在线 UAU 集合 */
+  activeUu: Map<string, Set<string>>;
+  /** 1 小时桶 → 看广告去重用户集合（与 5 分钟桶用户独立去重，跨桶不重叠） */
+  adUauHourly: Map<string, Set<string>>;
+  /** 1 小时桶 → 在线 UAU 集合 */
+  activeUuHourly: Map<string, Set<string>>;
+}
+
+export async function listSeriesUserBuckets(
+  gameKey: string,
+  fromTs: number,
+  toTs: number,
+): Promise<SeriesUserBuckets> {
+  const adUau = new Map<string, Set<string>>();
+  const activeUu = new Map<string, Set<string>>();
+  const adUauHourly = new Map<string, Set<string>>();
+  const activeUuHourly = new Map<string, Set<string>>();
+  if (toTs < fromTs) return { adUau, activeUu, adUauHourly, activeUuHourly };
+
+  const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id) AS uk";
+  // 不限制 event_name：每条事件都进 active_uu，ad_show 额外进 ad_uau
+  // 一次扫描同时折 5 分钟桶 + 1 小时桶，避免分别扫两遍
+  const sql = `SELECT event_ts, event_name, ${userKeySql}
+                 FROM analytics_events
+                WHERE game_key = ?
+                  AND event_ts BETWEEN ? AND ?`;
+
+  const addToSet = (map: Map<string, Set<string>>, key: string, uk: string) => {
+    let set = map.get(key);
+    if (!set) {
+      set = new Set<string>();
+      map.set(key, set);
+    }
+    set.add(uk);
+  };
+
+  const onRow = (eventTs: number, eventName: string, uk: string) => {
+    if (!uk) return;
+    const bucket5m = tsToBucket(eventTs);
+    const bucket1h = tsToHourBucket(eventTs);
+    addToSet(activeUu, bucket5m, uk);
+    addToSet(activeUuHourly, bucket1h, uk);
+    if (eventName === 'ad_show') {
+      addToSet(adUau, bucket5m, uk);
+      addToSet(adUauHourly, bucket1h, uk);
+    }
+  };
+
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [rows] = await pool.query(sql, [gameKey, fromTs, toTs]);
+    for (const r of rows as Array<{ event_ts: number; event_name: string; uk: string }>) {
+      onRow(Number(r.event_ts), String(r.event_name), String(r.uk ?? ''));
+    }
+  } else {
+    const stmt = getDb().prepare(sql);
+    for (const r of stmt.iterate(gameKey, fromTs, toTs) as IterableIterator<{
+      event_ts: number;
+      event_name: string;
+      uk: string;
+    }>) {
+      onRow(Number(r.event_ts), String(r.event_name), String(r.uk ?? ''));
+    }
+  }
+  return { adUau, activeUu, adUauHourly, activeUuHourly };
+}
+
+async function countDistinctUsersByEvent(
+  gameKey: string,
+  fromTs: number,
+  toTs: number,
+  eventName: string,
+): Promise<number> {
+  if (toTs < fromTs) return 0;
+  // 复用 realtime-overview 同款身份归一表达式：未登录的 anonymous 用户也算入分母，避免人为压低 DAU
+  const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [rows] = await pool.query(
+      `SELECT COUNT(DISTINCT ${userKeySql}) AS c
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = ?
+          AND event_ts BETWEEN ? AND ?`,
+      [gameKey, eventName, fromTs, toTs],
+    );
+    return Number((rows as Array<{ c: number }>)[0]?.c || 0);
+  }
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(DISTINCT ${userKeySql}) AS c
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = ?
+          AND event_ts BETWEEN ? AND ?`,
+    )
+    .get(gameKey, eventName, fromTs, toTs) as { c: number };
+  return Number(row?.c || 0);
 }
 
 async function aggregateBuckets(

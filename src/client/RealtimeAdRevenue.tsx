@@ -18,6 +18,12 @@ interface AdSeriesItem {
   ad_complete_cnt: number;
   ad_error_cnt: number;
   ad_revenue_estimated_cny: number;
+  // 桶级用户视角指标（plan p0 趋势化）
+  ad_uau: number;
+  dau: number;
+  ad_show_per_uu: number;
+  ad_penetration_rate: number;
+  arpdau_estimated_cny: number;
 }
 
 interface AdSummary {
@@ -33,14 +39,25 @@ interface AdSummary {
   ctr: number;
   completion_rate: number;
   avg_ecpm_cny: number;
+  // 用户维度（plan p0 新增）
+  ad_uau: number;
+  dau: number;
+  ad_penetration_rate: number;
+  ad_show_per_uu: number;
+  arpdau_estimated_cny: number;
+  // 漏斗维度（plan p0 新增）
+  fill_rate: number;
+  error_rate: number;
 }
 
 interface AdBreakdown {
   ad_type: string;
   scene: string;
+  ad_request_cnt: number;
   ad_show_cnt: number;
   ad_click_cnt: number;
   ad_complete_cnt: number;
+  ad_error_cnt: number;
   ad_revenue_estimated_cny: number;
   ecpm_cny: number;
 }
@@ -52,6 +69,8 @@ interface AdRevenueResponse {
   query: { game_key: string; from: string; to: string; window_minutes: number };
   summary: AdSummary;
   series: AdSeriesItem[];
+  /** 小时桶 series：字段同 5 分钟桶，仅给「关键变现指标趋势」长尺度对比图用 */
+  series_hourly: AdSeriesItem[];
   breakdown_by_scene: AdBreakdown[];
 }
 
@@ -106,12 +125,28 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     tool_help_free: '道具免费使用',
     unlock_next_order_plate: '解锁下一个订单碟',
     unlock_next_order_place: '解锁下一个订单碟',
+    // 图鉴页进入时触发的插屏广告，微信原生频控（默认 1 次/分钟 + 新用户保护期），无需业务节流
+    catalog_open: '图鉴页插屏',
   },
 };
 
 function getSceneLabel(gameKey: string, scene: string): string {
   return SCENE_LABELS[gameKey]?.[scene] ?? '-';
 }
+
+/**
+ * KPI 卡片同高 + 弹性布局，参考 App.tsx 留存区的写法。
+ * minHeight 选 110 与 overview 留存卡保持一致，整页两块 KPI 视觉高度对齐。
+ */
+const kpiCardStyle = { width: '100%', height: '100%' } as const;
+const kpiCardStyles = {
+  body: {
+    minHeight: 110,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    justifyContent: 'space-between' as const,
+  },
+};
 
 interface RealtimeAdRevenueProps {
   /** 必填：当前选中的游戏（由 App 顶部全局选择器决定），本组件随之刷新 */
@@ -162,9 +197,13 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     // refreshToken 变化即触发重新拉取（来自顶部刷新按钮 / 自动 5 分钟 timer / 立即拉取后强制刷新）
   }, [loadHealth, loadData, refreshToken]);
 
+  const xLabels = useMemo(
+    () => (data?.series || []).map((s) => formatMinuteLabel(s.minute)),
+    [data],
+  );
+
   const chartOption = useMemo(() => {
     const series = data?.series || [];
-    const xLabels = series.map((s) => formatMinuteLabel(s.minute));
     // 5 分钟粒度下，1 小时只有 12 桶、6 小时 72 桶，默认全展示就好
     // 仅当 24 小时这种宽窗口（288 桶）才默认缩到最近 60 桶以避免过密
     const zoomStart = series.length > 60 ? Math.max(0, 100 - (60 / series.length) * 100) : 0;
@@ -250,6 +289,115 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         },
       ],
     };
+  }, [data, xLabels]);
+
+  /**
+   * 关键变现指标趋势图：3 条折线共享 1 小时桶 x 轴，分别走 3 个 y 轴。
+   * - 改用小时桶而非 5 分钟桶：5 分钟桶在 24h 窗口下 288 点过密，发版前后对比看不清；小时桶 24 点正好够看
+   * - 三个量纲差异大（次/人、%、元），所以分 3 个 yAxis（左 1 右 2，第二个右轴 offset 60 让数字不重叠）
+   * - 桶级分母（在线 UAU）为 0 时（某小时无任何事件）派生指标显示为 0，可视为该小时无在线流量
+   * - 用法：发版时刻在心里画一根竖线，前后曲线对比即可看出趋势变化
+   */
+  const keyRatioChartOption = useMemo(() => {
+    const series = data?.series_hourly || [];
+    // 小时桶 24h 窗口 24 点、7 天窗口 168 点，168 以下默认全展示，超过才缩
+    const zoomStart = series.length > 96 ? Math.max(0, 100 - (96 / series.length) * 100) : 0;
+    const hourLabels = series.map((s) => formatMinuteLabel(s.minute));
+    return {
+      tooltip: {
+        trigger: 'axis' as const,
+        axisPointer: { type: 'cross' as const },
+        valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(2) : String(v ?? '')),
+      },
+      legend: {
+        data: ['人均广告次数', '广告渗透率(%)', 'ARPDAU(元)'],
+        top: 6,
+        itemGap: 28,
+        itemWidth: 18,
+        itemHeight: 12,
+        textStyle: { fontSize: 13, color: '#262626', fontWeight: 500 },
+      },
+      grid: { left: 64, right: 124, top: 56, bottom: 64 },
+      dataZoom: [
+        { type: 'inside' as const, start: zoomStart, end: 100 },
+        { type: 'slider' as const, height: 18, bottom: 16, start: zoomStart, end: 100 },
+      ],
+      xAxis: {
+        type: 'category' as const,
+        data: hourLabels,
+        boundaryGap: false,
+        axisLabel: { fontSize: 11, hideOverlap: true, color: '#595959' },
+        axisTick: { alignWithLabel: true },
+      },
+      yAxis: [
+        {
+          type: 'value' as const,
+          name: '次/人',
+          position: 'left' as const,
+          nameTextStyle: { fontSize: 12, color: '#5B8FF9', padding: [0, 24, 0, 0] },
+          axisLabel: { fontSize: 11, color: '#5B8FF9', formatter: (v: number) => v.toFixed(2) },
+          splitLine: { lineStyle: { type: 'dashed' as const, opacity: 0.4 } },
+        },
+        {
+          type: 'value' as const,
+          name: '%',
+          position: 'right' as const,
+          nameTextStyle: { fontSize: 12, color: '#52C41A', padding: [0, 0, 0, 24] },
+          axisLabel: { fontSize: 11, color: '#52C41A', formatter: (v: number) => v.toFixed(0) },
+          splitLine: { show: false },
+          // 渗透率自然落在 0~100，固定上限避免 5 分钟孤峰把另两条线压扁
+          min: 0,
+          max: 100,
+        },
+        {
+          type: 'value' as const,
+          name: '元',
+          position: 'right' as const,
+          // offset 让第二个右轴不与第一个重叠，数字读起来才清楚
+          offset: 60,
+          nameTextStyle: { fontSize: 12, color: '#FF8A3D', padding: [0, 0, 0, 24] },
+          axisLabel: { fontSize: 11, color: '#FF8A3D', formatter: (v: number) => v.toFixed(2) },
+          splitLine: { show: false },
+        },
+      ],
+      series: [
+        {
+          name: '人均广告次数',
+          type: 'line' as const,
+          smooth: true,
+          symbol: 'circle' as const,
+          symbolSize: 6,
+          lineStyle: { width: 2.5, color: '#5B8FF9' },
+          itemStyle: { color: '#5B8FF9' },
+          data: series.map((s) => s.ad_show_per_uu),
+          yAxisIndex: 0,
+          // 桶级分母为 0 时输出 0，发版前后看是否有突变即可
+          connectNulls: false,
+        },
+        {
+          name: '广告渗透率(%)',
+          type: 'line' as const,
+          smooth: true,
+          symbol: 'circle' as const,
+          symbolSize: 6,
+          lineStyle: { width: 2.5, color: '#52C41A' },
+          itemStyle: { color: '#52C41A' },
+          data: series.map((s) => s.ad_penetration_rate),
+          yAxisIndex: 1,
+        },
+        {
+          name: 'ARPDAU(元)',
+          type: 'line' as const,
+          smooth: true,
+          symbol: 'circle' as const,
+          symbolSize: 6,
+          lineStyle: { width: 2.5, color: '#FF8A3D' },
+          itemStyle: { color: '#FF8A3D' },
+          data: series.map((s) => s.arpdau_estimated_cny),
+          yAxisIndex: 2,
+        },
+      ],
+    };
   }, [data]);
 
   const breakdownColumns = [
@@ -265,13 +413,41 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
       },
     },
     {
+      title: (
+        <Tooltip title="ad_request 事件总数，广告漏斗的最上游">
+          <span>请求</span>
+        </Tooltip>
+      ),
+      dataIndex: 'ad_request_cnt',
+      key: 'ad_request_cnt',
+      render: (v: number) => formatNumber(v),
+    },
+    {
       title: '曝光',
       dataIndex: 'ad_show_cnt',
       key: 'ad_show_cnt',
       render: (v: number) => formatNumber(v),
     },
     {
-      title: '点击',
+      title: (
+        <Tooltip title="曝光 / 请求，<80% 通常说明上游素材紧缺或频控过严；>95% 视为健康">
+          <span>填充率</span>
+        </Tooltip>
+      ),
+      key: 'fill_rate',
+      // 现算：避免在 server 再开一列重复落库；request=0 时显示 -
+      render: (_: unknown, row: AdBreakdown) => {
+        if (!row.ad_request_cnt) return <Typography.Text type="secondary">-</Typography.Text>;
+        const rate = (row.ad_show_cnt / row.ad_request_cnt) * 100;
+        return `${rate.toFixed(2)}%`;
+      },
+    },
+    {
+      title: (
+        <Tooltip title="ad_click 事件总数。微信小游戏 SDK 当前没有点击回调（见 analytics-sdk README），本列在小游戏环境下恒为 0；保留是为了兼容未来接入第三方广告 SDK 的游戏。">
+          <span>点击</span>
+        </Tooltip>
+      ),
       dataIndex: 'ad_click_cnt',
       key: 'ad_click_cnt',
       render: (v: number) => formatNumber(v),
@@ -281,6 +457,35 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
       dataIndex: 'ad_complete_cnt',
       key: 'ad_complete_cnt',
       render: (v: number) => formatNumber(v),
+    },
+    {
+      title: (
+        <Tooltip title="完播 / 曝光，反映本场景广告完整看完率；不参与收益估算，仅用于观察广告位健康度。">
+          <span>完播率</span>
+        </Tooltip>
+      ),
+      key: 'completion_rate',
+      // 不依赖 dataIndex：直接基于 ad_show_cnt / ad_complete_cnt 现算，避免新增后端字段
+      render: (_: unknown, row: AdBreakdown) => {
+        if (!row.ad_show_cnt) return <Typography.Text type="secondary">-</Typography.Text>;
+        const rate = (row.ad_complete_cnt / row.ad_show_cnt) * 100;
+        return `${rate.toFixed(2)}%`;
+      },
+    },
+    {
+      title: (
+        <Tooltip title="错误 / 请求，>5% 通常说明 SDK 或网络异常；持续偏高可联动检查打点埋点">
+          <span>错误率</span>
+        </Tooltip>
+      ),
+      key: 'error_rate',
+      render: (_: unknown, row: AdBreakdown) => {
+        if (!row.ad_request_cnt) return <Typography.Text type="secondary">-</Typography.Text>;
+        const rate = (row.ad_error_cnt / row.ad_request_cnt) * 100;
+        // 只对超过 5% 的高错误率染红，方便发行同学一眼看出异常场景
+        const color = rate > 5 ? '#cf1322' : undefined;
+        return <span style={{ color }}>{rate.toFixed(2)}%</span>;
+      },
     },
     {
       title: (
@@ -334,41 +539,145 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           </Tooltip>
         }
       >
-        <Row gutter={16}>
-          <Col span={4}>
-            <Statistic title="曝光数" value={data?.summary.total_show ?? 0} />
+        {/*
+          KPI 卡片：3x3 共 9 张，所有卡片用同一套 styles 保持高度对齐
+          - 第 1 行：漏斗维度（曝光 / 填充率 / 错误率）
+          - 第 2 行：变现维度（完播率 / 估算收益 / ARPDAU）
+          - 第 3 行：用户维度（看广告 UAU / 渗透率 / 人均广告次数）
+
+          已下线指标说明：
+          - CTR 与点击数：依赖 ad_click 事件，但微信小游戏 SDK 没有点击回调
+            （见 packages/analytics-sdk/README.md 第 73 行），永远为 0；KPI 区下线，
+            场景表格内仍保留「点击」列以兼容未来接入第三方广告 SDK 的游戏。
+          - 完播数：信息与「完播率」重叠，绝对值仍在场景表格内可见。
+        */}
+        <Row gutter={[16, 16]} align="stretch">
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="ad_show 事件总数（按设备/事件计数，非去重用户）">
+                <Statistic title="曝光数" value={data?.summary.total_show ?? 0} />
+              </Tooltip>
+            </Card>
           </Col>
-          <Col span={4}>
-            <Statistic title="点击数" value={data?.summary.total_click ?? 0} />
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="曝光 / 请求；上游素材库存与频控健康度。低于 80% 通常说明素材紧缺或频控过严，>95% 视为健康。">
+                <Statistic title="填充率(%)" value={data?.summary.fill_rate ?? 0} precision={2} />
+              </Tooltip>
+            </Card>
           </Col>
-          <Col span={4}>
-            <Statistic title="完播数" value={data?.summary.total_complete ?? 0} />
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="错误 / 请求；高于 5% 通常说明 SDK 异常或网络故障，需联动检查打点埋点。">
+                <Statistic title="错误率(%)" value={data?.summary.error_rate ?? 0} precision={2} />
+              </Tooltip>
+            </Card>
           </Col>
-          <Col span={4}>
-            <Tooltip title="点击数 / 曝光数">
-              <Statistic title="CTR(%)" value={data?.summary.ctr ?? 0} precision={2} />
-            </Tooltip>
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="完播数 / 曝光数；激励视频整体期望 >85%">
+                <Statistic title="完播率(%)" value={data?.summary.completion_rate ?? 0} precision={2} />
+              </Tooltip>
+            </Card>
           </Col>
-          <Col span={4}>
-            <Tooltip title="完播数 / 曝光数">
-              <Statistic title="完播率(%)" value={data?.summary.completion_rate ?? 0} precision={2} />
-            </Tooltip>
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="曝光数 ÷ 1000 × eCPM 的估算值，非真实结算；以微信流量主结算数据为准">
+                <Statistic
+                  title={(
+                    <span>
+                      估算收益(元) <Tag color="orange" style={{ marginLeft: 4 }}>估算</Tag>
+                    </span>
+                  ) as unknown as string}
+                  value={data?.summary.total_revenue_estimated_cny ?? 0}
+                  precision={2}
+                />
+              </Tooltip>
+            </Card>
           </Col>
-          <Col span={4}>
-            <Statistic
-              title={(<span>估算收益(元) <Tag color="orange">估算</Tag></span>) as unknown as string}
-              value={data?.summary.total_revenue_estimated_cny ?? 0}
-              precision={2}
-            />
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="估算收益 / DAU。行业参考：超休闲品类（玩法极简的轻量小游戏）¥0.3~¥1.0，普通休闲游戏更低。按窗口聚合，非自然日聚合。">
+                <Statistic
+                  title={(
+                    <span>
+                      ARPDAU(元) <Tag color="orange" style={{ marginLeft: 4 }}>估算</Tag>
+                    </span>
+                  ) as unknown as string}
+                  value={data?.summary.arpdau_estimated_cny ?? 0}
+                  precision={2}
+                />
+              </Tooltip>
+            </Card>
+          </Col>
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="当前窗口内 ad_show 事件去重用户数（COUNT DISTINCT user_id || anonymous_id）">
+                <Statistic title="看广告 UAU" value={data?.summary.ad_uau ?? 0} suffix="人" />
+              </Tooltip>
+            </Card>
+          </Col>
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="看广告 UAU / DAU。行业参考：超休闲品类 60%~80%，>80% 通常说明广告渗透充分。">
+                <Statistic
+                  title="广告渗透率(%)"
+                  value={data?.summary.ad_penetration_rate ?? 0}
+                  precision={2}
+                />
+              </Tooltip>
+            </Card>
+          </Col>
+          <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
+            <Card style={kpiCardStyle} styles={kpiCardStyles}>
+              <Tooltip title="总曝光 / 看广告 UAU。行业参考：超休闲品类 6~12 次/人，普通休闲游戏 3~6 次/人；过高需警惕过度变现伤留存。">
+                <Statistic
+                  title="人均广告次数"
+                  value={data?.summary.ad_show_per_uu ?? 0}
+                  precision={2}
+                  suffix="次/人"
+                />
+              </Tooltip>
+            </Card>
           </Col>
         </Row>
       </Card>
 
-      <Card size="small" title="分钟级趋势">
+      <Card size="small" title="分钟级趋势 · 曝光数 vs 估算收益">
         {data && data.series.length > 0 ? (
           <ReactECharts option={chartOption} style={{ height: 380 }} notMerge lazyUpdate />
         ) : (
           <Empty description="暂无数据。后端按 5 分钟粒度聚合、cron 每 5 分钟拉取一次，刚上报的事件最长延迟 5 分钟才会出现" />
+        )}
+      </Card>
+
+      {/*
+        关键变现指标趋势：3 条折线 + 3 个 yAxis
+        - 给「发版前后人均广告次数 / 渗透率 / ARPDAU 是否有变化」这种 A/B 视觉对比用
+        - 数据由后端 series 项里桶级 ad_uau / dau 现算派生，桶级 DAU 可能为 0（没新 session_start）这时该桶置 0
+      */}
+      <Card
+        size="small"
+        title="关键变现指标趋势 · 1 小时桶"
+        extra={
+          <Tooltip
+            title={
+              <div style={{ lineHeight: 1.7 }}>
+                <div>按 1 小时桶聚合，发版前后对比直接对应小时刻度。</div>
+                <div>桶级分母用「该小时任意事件去重的在线 UAU」，保证 ad_uau ≤ 在线 UAU、渗透率 ≤ 100%。</div>
+                <div>顶部 KPI 区的窗口级渗透率 / ARPDAU 仍按 session_start DAU 计算，与总览看板同口径。</div>
+                <div>桶内无任何事件时派生指标显示为 0，可视为该小时无在线流量，非数据异常。</div>
+              </div>
+            }
+          >
+            <Tag color="blue" style={{ cursor: 'help' }}>发版对比 ⓘ</Tag>
+          </Tooltip>
+        }
+      >
+        {data && data.series.length > 0 ? (
+          <ReactECharts option={keyRatioChartOption} style={{ height: 320 }} notMerge lazyUpdate />
+        ) : (
+          <Empty description="暂无数据" />
         )}
       </Card>
 
