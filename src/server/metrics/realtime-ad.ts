@@ -236,7 +236,7 @@ async function aggregateBuckets(
           AND event_ts >= ? AND event_ts <= ?`,
       [gameKey, ...AD_EVENT_NAMES, fromTs, toTs],
     );
-    return reduceRowsToBuckets(gameKey, rows as Array<{ event_name: string; event_ts: number; params_json: string }>);
+    return reduceRowsToBuckets(gameKey, rows as Array<{ event_name: string; event_ts: number; params_json: string | Record<string, unknown> }>);
   }
   const db = getDb();
   const placeholders = AD_EVENT_NAMES.map(() => '?').join(',');
@@ -258,17 +258,22 @@ async function aggregateBuckets(
 
 function reduceRowsToBuckets(
   gameKey: string,
-  rows: Array<{ event_name: string; event_ts: number; params_json: string }>,
+  rows: Array<{ event_name: string; event_ts: number; params_json: string | Record<string, unknown> }>,
 ): AdAggregateBucket[] {
   const map = new Map<string, AdAggregateBucket>();
 
   for (const row of rows) {
     const bucket = toMinuteBucket(row.event_ts);
     let params: Record<string, unknown> = {};
-    try {
-      params = JSON.parse(row.params_json) || {};
-    } catch {
-      params = {};
+    if (typeof row.params_json === 'string') {
+      try {
+        params = JSON.parse(row.params_json) || {};
+      } catch {
+        params = {};
+      }
+    } else if (row.params_json && typeof row.params_json === 'object') {
+      // MySQL JSON 列经 mysql2 读取后可能已经是对象，不能再 JSON.parse，否则会退化成 unknown 聚合。
+      params = row.params_json;
     }
     const adType = String(params.ad_type || 'unknown');
     const scene = String(params.scene || 'unknown');
