@@ -58,6 +58,9 @@ export const EVENT_NAMES = {
   LOGIN: 'login',
   APP_ERROR: 'app_error',
 
+  // 分享（只表示发起分享，不代表分享成功或带来回流）
+  SHARE_APP_MESSAGE: 'share_app_message',
+
   // 关卡
   LEVEL_START: 'level_start',
   LEVEL_CLEAR: 'level_clear',

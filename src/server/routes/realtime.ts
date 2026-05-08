@@ -21,6 +21,7 @@ import {
 } from '../metrics/realtime-ad';
 import { getOverview } from '../metrics/realtime-overview';
 import { getProgressOverview } from '../metrics/realtime-progress';
+import { getShareOverview } from '../metrics/realtime-share';
 import {
   BUCKET_SIZE_MS,
   BUCKET_SIZE_MINUTES,
@@ -422,6 +423,27 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       query: { game_key: gameKey, from: fromBucket, to: toBucket, window_minutes: windowMinutes },
       kpi: result.kpi,
       series: result.series,
+    };
+  });
+
+  // 通用分享传播数据：只统计 share_app_message「发起分享」，不声称真实回流。
+  app.get('/api/realtime/share', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
+    const nowTs = Date.now();
+    const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
+    const toTs = query.to ? bucketToTs(query.to) : nowTs;
+    const fromBucket = tsToBucket(fromTs);
+    const toBucket = tsToBucket(toTs);
+    const result = await getShareOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from: fromBucket, to: toBucket, window_minutes: windowMinutes },
+      ...result,
     };
   });
 
