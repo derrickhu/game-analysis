@@ -74,6 +74,9 @@ export const EVENT_NAMES = {
   COIN_CHANGE: 'coin_change',
   DIAMOND_CHANGE: 'diamond_change',
 
+  /** 微信转发等：用户触发分享面板时带上本次 title / imageUrl */
+  SHARE_APP_MESSAGE: 'share_app_message',
+
   // SDK 自身指标，用于反向监控上报系统健康度
   SDK_DROPPED: 'sdk_dropped',
 } as const;
