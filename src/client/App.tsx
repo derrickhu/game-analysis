@@ -7,6 +7,7 @@ import { ALL_GAMES, getDefaultGameKey, getGameDescriptor } from '../shared/games
 import { EventsExplorer } from './EventsExplorer';
 import { RealtimeAdRevenue } from './RealtimeAdRevenue';
 import { RealtimeShare } from './RealtimeShare';
+import { SystemOpsPanel } from './SystemOpsPanel';
 import { DEFAULT_WINDOW, WINDOW_OPTIONS, type WindowValue, buildWindowQuery, isCustomRange, resolveWindow } from './timeWindow';
 
 const { RangePicker } = DatePicker;
@@ -187,6 +188,10 @@ export function App() {
   // 所有面板（overview KPI、广告、关卡进度）都跟随刷新，不再各自维护时间窗口
   const [windowSel, setWindowSel] = useState<WindowValue>(DEFAULT_WINDOW);
   const [refreshToken, setRefreshToken] = useState(0);
+  // 顶级 Tab：业务分析（business） / 系统运维（ops）
+  // - business：依赖 gameKey + windowSel，Header 显示完整过滤器
+  // - ops：与具体游戏 / 时间窗口无关，Header 隐藏游戏选择器、时间选择器、立即拉取按钮等业务控件
+  const [mainTab, setMainTab] = useState<'business' | 'ops'>('business');
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [adSummary, setAdSummary] = useState<AdSummaryLiteResponse | null>(null);
@@ -652,33 +657,69 @@ export function App() {
     />
   );
 
+  // 业务分析 Tab 内的子视图：实时趋势 / 原始事件
+  // - 这两个都依赖 gameKey + windowSel，所以保留在同一个顶级 Tab 下
+  // - notIntegratedNotice 只对"实时趋势"有意义，原始事件本身可以查任意已上报数据
+  const businessAnalyticsView = (
+    <Tabs
+      items={[
+        {
+          key: 'trend',
+          label: `${gameDescriptor?.displayName ?? gameKey} 实时趋势`,
+          children: isIntegrated ? trendDashboard : notIntegratedNotice,
+        },
+        {
+          key: 'events',
+          label: '原始事件',
+          children: (
+            <EventsExplorer
+              fixedGameKey={gameKey}
+              windowSel={windowSel}
+              refreshToken={refreshToken}
+            />
+          ),
+        },
+      ]}
+    />
+  );
+
+  // mainTab=ops 时 Header 上业务相关控件全部隐藏：游戏选择器、时间选择器、立即拉取按钮
+  // 这与"系统运维和单游戏无关"的语义一致，避免出现"选了 hot-pot 但运维数据是聚合的"的认知冲突
+  const showBusinessFilters = mainTab === 'business';
+
   return (
     <Layout className="app-shell">
       <Header className="app-header">
         <div>
           <Title level={3} className="app-title">游戏经营分析</Title>
-          <Text type="secondary">已接入 @gp/analytics-sdk 的游戏从打点流水拉数据，未接入的请先按指引接入</Text>
+          <Text type="secondary">
+            {showBusinessFilters
+              ? '已接入 @gp/analytics-sdk 的游戏从打点流水拉数据，未接入的请先按指引接入'
+              : '系统运维：与具体游戏无关的全局功能（事件清理、上报健康度等），后续会接入容量监控与配置管理'}
+          </Text>
         </div>
         {/*
           顶部统一控制台：游戏切换 + 时间窗口 + 全局刷新 + 立即拉取
           所有面板共用这套筛选器，避免各 Card 内再单独维护
+          系统运维 Tab 下这套控件全部隐藏（运维信息按系统粒度，不按游戏粒度）
         */}
-        <Space wrap>
-          <Select
-            value={gameKey}
-            onChange={(value) => setGameKey(value)}
-            className="game-input"
-            style={{ minWidth: 200 }}
-            options={ALL_GAMES.map((item) => ({
-              value: item.gameKey,
-              label: (
-                <Space>
-                  <span>{item.displayName}</span>
-                  {!item.hasAnalyticsSdk && <Tag color="default" style={{ marginInlineEnd: 0 }}>未接入</Tag>}
-                </Space>
-              ),
-            }))}
-          />
+        {showBusinessFilters && (
+          <Space wrap>
+            <Select
+              value={gameKey}
+              onChange={(value) => setGameKey(value)}
+              className="game-input"
+              style={{ minWidth: 200 }}
+              options={ALL_GAMES.map((item) => ({
+                value: item.gameKey,
+                label: (
+                  <Space>
+                    <span>{item.displayName}</span>
+                    {!item.hasAnalyticsSdk && <Tag color="default" style={{ marginInlineEnd: 0 }}>未接入</Tag>}
+                  </Space>
+                ),
+              }))}
+            />
           {/*
             时间窗口快捷下拉：仅承载预设档位（自然日 / 近 N 分钟 / 7 天 / 30 天），
             自定义时间范围由右侧 RangePicker 接管。当前是自定义状态时，下拉清空显示，
@@ -752,31 +793,27 @@ export function App() {
               立即拉取并刷新
             </Button>
           </Tooltip>
-          <Text type="secondary">自动 5 分钟 · {formatTime(lastRefreshedAt)}</Text>
-        </Space>
+            <Text type="secondary">自动 5 分钟 · {formatTime(lastRefreshedAt)}</Text>
+          </Space>
+        )}
       </Header>
 
       <Content className="app-content">
-        {isIntegrated ? (
-          <Tabs
-            items={[
-              { key: 'trend', label: `${gameDescriptor?.displayName ?? gameKey} 实时趋势`, children: trendDashboard },
-              {
-                key: 'events',
-                label: '原始事件',
-                children: (
-                  <EventsExplorer
-                    fixedGameKey={gameKey}
-                    windowSel={windowSel}
-                    refreshToken={refreshToken}
-                  />
-                ),
-              },
-            ]}
-          />
-        ) : (
-          notIntegratedNotice
-        )}
+        {/*
+          顶级 Tab：业务分析 / 系统运维
+          - 业务分析下嵌套实时趋势 / 原始事件子 tab
+          - 系统运维独立面板，自管刷新（不复用顶部 refreshToken），切到这里时上面控件自动隐藏
+          用 type="card" 把顶级 Tab 视觉上做成"导航"，与子 Tab 的下划线样式区分开
+        */}
+        <Tabs
+          type="card"
+          activeKey={mainTab}
+          onChange={(key) => setMainTab(key as 'business' | 'ops')}
+          items={[
+            { key: 'business', label: '业务分析', children: businessAnalyticsView },
+            { key: 'ops', label: '系统运维', children: <SystemOpsPanel /> },
+          ]}
+        />
       </Content>
     </Layout>
   );

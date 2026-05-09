@@ -1,14 +1,17 @@
 import type { ReactElement } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Card, Col, Descriptions, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd';
+import {
+  Alert, Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography,
+} from 'antd';
 import ReactECharts from 'echarts-for-react';
 
 import { type WindowValue, buildWindowQuery } from './timeWindow';
 
 // 顶部 App.tsx 全局选择器统一管控：gameKey、windowSel（时间窗口）、refreshToken（手动刷新计数）
 // 都从 props 传入，子组件不再持有任何独立筛选器，避免「上面选 today、卡片右上角又是 1h」的混淆
-
-const { Title } = Typography;
+//
+// 与本游戏无关的全局功能（事件清理任务 / 上报系统健康度等）已抽离到 SystemOpsPanel.tsx，
+// 由顶部 Tab 切换显示，避免业务面板里塞过多运维信息
 
 interface AdSeriesItem {
   minute: string;
@@ -89,6 +92,10 @@ interface AdErrorRow {
   count: number;
   affected_users: number;
   last_seen_ts: number;
+  /** 该行实际包含的所有 err_code（双发时是 ['-1','-102']，正常情况只有一个） */
+  merged_err_codes: string[];
+  /** 是否检测到 SDK 双发：'-102' 包装码与真实码同 err_msg 且次数相等，已合并去重 */
+  is_dual_emit: boolean;
 }
 
 interface AdErrorsResponse {
@@ -96,28 +103,6 @@ interface AdErrorsResponse {
   query: { game_key: string; from: string; to: string; window_minutes: number; limit: number };
   total_errors: number;
   errors: AdErrorRow[];
-}
-
-interface HealthResponse {
-  ok: true;
-  games: Array<{ game_key: string; display_name: string; cloud_env: string }>;
-  stats: {
-    totalEvents: number;
-    last24hEvents: number;
-    oldestEventTs: number | null;
-    newestEventTs: number | null;
-  };
-  recent_runs: Array<{
-    id: number;
-    game_key: string;
-    started_at: number;
-    finished_at: number;
-    status: string;
-    fetched: number;
-    cursor_before: number;
-    cursor_after: number;
-    error_message: string;
-  }>;
 }
 
 function formatNumber(value: number): string {
@@ -210,22 +195,9 @@ interface RealtimeAdRevenueProps {
 export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
   const { fixedGameKey: gameKey, windowSel, refreshToken } = props;
   const [data, setData] = useState<AdRevenueResponse | null>(null);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [adErrors, setAdErrors] = useState<AdErrorsResponse | null>(null);
-
-  const loadHealth = useCallback(async () => {
-    try {
-      // 健康度仅与 gameKey 有关（跟时间窗口无关），但还是跟随全局刷新一起重拉
-      const url = `/api/realtime/health?game=${encodeURIComponent(gameKey)}`;
-      const res = await fetch(url);
-      const json = (await res.json()) as HealthResponse | { ok: false };
-      if ('ok' in json && json.ok) {
-        setHealth(json);
-      }
-    } catch (err) {
-      console.warn('[realtime-ad] load health failed', err);
-    }
-  }, [gameKey]);
+  // 广告错误表格默认折叠为 5 行紧凑视图，避免占满屏。需要排查时再展开看完整列表。
+  const [adErrorsExpanded, setAdErrorsExpanded] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -257,11 +229,10 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
   }, [gameKey, windowSel]);
 
   useEffect(() => {
-    void loadHealth();
     void loadData();
     void loadAdErrors();
     // refreshToken 变化即触发重新拉取（来自顶部刷新按钮 / 自动 5 分钟 timer / 立即拉取后强制刷新）
-  }, [loadHealth, loadData, loadAdErrors, refreshToken]);
+  }, [loadData, loadAdErrors, refreshToken]);
 
   const xLabels = useMemo(
     () => (data?.series || []).map((s) => formatMinuteLabel(s.minute)),
@@ -761,173 +732,168 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         )}
       </Card>
 
-      <Card
-        size="small"
-        title={
-          <span>
-            广告错误 Top 20{' '}
-            <Tooltip
-              title={
-                <div style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.6 }}>
-                  按 (场景, 广告类型, 错误码, 错误信息) 聚合排序，可一眼区分两类问题：
-                  <br />
-                  1) <b>单事故</b>：top 1 突然集中爆发（如 cgi fail 144 起在同一小时）→ 关注是不是发版/微信侧
-                  <br />
-                  2) <b>持续拒填</b>：err_code=1004 / no advertisement 长期分布 → 行业常态，IAA 插屏 fill rate 70-80%
-                  <br />
-                  err_code 列：负数（-100/-101）= SDK 自定义码；其它 = 微信真实 errCode 透传
-                </div>
-              }
-            >
-              <Tag color="orange" style={{ cursor: 'help' }}>排障入口 ⓘ</Tag>
-            </Tooltip>
-            {adErrors && adErrors.total_errors > 0 && (
-              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-                窗口内总错误 {formatNumber(adErrors.total_errors)} 起
-              </Typography.Text>
-            )}
-          </span>
-        }
-      >
-        {adErrors && adErrors.errors.length > 0 ? (
-          <Table
-            size="small"
-            rowKey={(row) => `${row.scene}|${row.ad_type}|${row.err_code}|${row.err_msg}`}
-            columns={[
-              {
-                title: '场景',
-                dataIndex: 'scene',
-                key: 'scene',
-                width: 140,
-                render: (v: string) => {
-                  const label = getSceneLabel(gameKey, v);
-                  return (
-                    <span>
-                      <code style={{ fontSize: 12 }}>{v}</code>
-                      {label !== '-' && (
-                        <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
-                          {label}
-                        </Typography.Text>
-                      )}
-                    </span>
-                  );
-                },
-              },
-              { title: '广告类型', dataIndex: 'ad_type', key: 'ad_type', width: 90 },
-              {
-                title: '错误码',
-                dataIndex: 'err_code',
-                key: 'err_code',
-                width: 130,
-                render: (code: string) => (
-                  <span>
-                    <Tag color={code.startsWith('-') ? 'default' : 'volcano'}>{code || '未知'}</Tag>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {getAdErrCodeLabel(code)}
-                    </Typography.Text>
-                  </span>
-                ),
-              },
-              {
-                title: '错误信息',
-                dataIndex: 'err_msg',
-                key: 'err_msg',
-                ellipsis: { showTitle: true },
-                render: (msg: string) => (
-                  <Tooltip title={msg}>
-                    <code style={{ fontSize: 12 }}>{msg || '-'}</code>
-                  </Tooltip>
-                ),
-              },
-              {
-                title: (
-                  <Tooltip title="该错误命中事件次数。SDK 双发 bug 修复前，同一次失败会被计 2 倍">
-                    <span>次数</span>
-                  </Tooltip>
-                ),
-                dataIndex: 'count',
-                key: 'count',
-                width: 90,
-                sorter: (a: AdErrorRow, b: AdErrorRow) => a.count - b.count,
-                defaultSortOrder: 'descend',
-                render: (v: number) => formatNumber(v),
-              },
-              {
-                title: (
-                  <Tooltip title="去重后受影响的玩家数（user_id / anonymous_id 归一）">
-                    <span>影响人数</span>
-                  </Tooltip>
-                ),
-                dataIndex: 'affected_users',
-                key: 'affected_users',
-                width: 100,
-                render: (v: number) => formatNumber(v),
-              },
-              {
-                title: '最近一次',
-                dataIndex: 'last_seen_ts',
-                key: 'last_seen_ts',
-                width: 170,
-                render: (v: number) => formatTs(v),
-              },
-            ]}
-            dataSource={adErrors.errors}
-            pagination={false}
-            scroll={{ x: 'max-content' }}
-          />
-        ) : (
-          <Empty description="窗口内暂无广告错误，是好事" />
-        )}
-      </Card>
+      {(() => {
+        // 紧凑视图：默认只展示 Top 5 行避免占满屏；展开后展示全部（最多 20）。
+        // SDK 双发已在后端折叠，行数已经天然减半，再 Top 5 就足够看核心问题。
+        const allRows = adErrors?.errors || [];
+        const visibleRows = adErrorsExpanded ? allRows : allRows.slice(0, 5);
+        const collapsedCount = Math.max(0, allRows.length - 5);
+        const totalErrors = adErrors?.total_errors ?? 0;
+        const dualEmitDetected = allRows.some((r) => r.is_dual_emit);
 
-      <Card size="small" title="上报系统健康度">
-        {health ? (
-          <Row gutter={16}>
-            <Col span={12}>
-              <Descriptions column={1} size="small">
-                <Descriptions.Item label="本地事件总数">{formatNumber(health.stats.totalEvents)}</Descriptions.Item>
-                <Descriptions.Item label="近 24h 新增">{formatNumber(health.stats.last24hEvents)}</Descriptions.Item>
-                <Descriptions.Item label="最早事件">{formatTs(health.stats.oldestEventTs)}</Descriptions.Item>
-                <Descriptions.Item label="最新事件">{formatTs(health.stats.newestEventTs)}</Descriptions.Item>
-              </Descriptions>
-            </Col>
-            <Col span={12}>
-              <Title level={5}>最近 cron 拉取</Title>
+        return (
+          <Card
+            size="small"
+            title={
+              <span>
+                广告错误{' '}
+                <Tooltip
+                  title={
+                    <div style={{ maxWidth: 380, fontSize: 12, lineHeight: 1.6 }}>
+                      按 (场景, 广告类型, 错误码, 错误信息) 聚合排序，识别两类问题：
+                      <br />
+                      1) <b>单事故</b>：top 1 集中爆发（如 cgi fail 144 起）→ 微信侧 / 发版前后
+                      <br />
+                      2) <b>常态拒填</b>：err_code=1004 / no advertisement → 行业常态，可忽略
+                      <br />
+                      <b>SDK 双发自动合并</b>：老版本 hot-pot SDK 在错误处会同时打 -102 包装码 + 真实码两条，
+                      后端已折叠为一行（次数取真实值），徽章 <Tag color="default" style={{ marginLeft: 0 }}>双发</Tag> 标识。
+                      <br />
+                      err_code 列：负数（-100/-101）= SDK 自定义码；其它 = 微信真实 errCode 透传
+                    </div>
+                  }
+                >
+                  <Tag color="orange" style={{ cursor: 'help' }}>排障入口 ⓘ</Tag>
+                </Tooltip>
+                {totalErrors > 0 && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 4 }}>
+                    窗口内 {formatNumber(totalErrors)} 起
+                    {dualEmitDetected && (
+                      <Typography.Text type="warning" style={{ fontSize: 12, marginLeft: 6 }}>
+                        · 含双发，已合并去重
+                      </Typography.Text>
+                    )}
+                  </Typography.Text>
+                )}
+              </span>
+            }
+            extra={
+              allRows.length > 5 && (
+                <Button size="small" type="link" onClick={() => setAdErrorsExpanded((v) => !v)}>
+                  {adErrorsExpanded ? '收起' : `展开看全部 ${allRows.length} 条`}
+                </Button>
+              )
+            }
+          >
+            {visibleRows.length > 0 ? (
               <Table
                 size="small"
-                rowKey="id"
+                rowKey={(row) => `${row.scene}|${row.ad_type}|${row.err_code}|${row.err_msg}`}
                 columns={[
-                  { title: '游戏', dataIndex: 'game_key', key: 'game_key', width: 80 },
                   {
-                    title: '状态',
-                    dataIndex: 'status',
-                    key: 'status',
-                    width: 70,
-                    render: (v: string) => <Tag color={v === 'success' ? 'green' : 'red'}>{v}</Tag>,
+                    title: '场景',
+                    dataIndex: 'scene',
+                    key: 'scene',
+                    width: 140,
+                    render: (v: string) => {
+                      const label = getSceneLabel(gameKey, v);
+                      return (
+                        <span>
+                          <code style={{ fontSize: 12 }}>{v}</code>
+                          {label !== '-' && (
+                            <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
+                              {label}
+                            </Typography.Text>
+                          )}
+                        </span>
+                      );
+                    },
+                  },
+                  { title: '广告类型', dataIndex: 'ad_type', key: 'ad_type', width: 90 },
+                  {
+                    title: '错误码',
+                    key: 'err_code',
+                    width: 150,
+                    render: (_: unknown, row: AdErrorRow) => (
+                      <span>
+                        <Tag color={row.err_code.startsWith('-') ? 'default' : 'volcano'}>
+                          {row.err_code || '未知'}
+                        </Tag>
+                        {row.is_dual_emit && (
+                          <Tooltip title={`SDK 双发：原始包含 ${row.merged_err_codes.join(', ')}，次数已去重`}>
+                            <Tag style={{ marginLeft: 0, fontSize: 11 }}>双发</Tag>
+                          </Tooltip>
+                        )}
+                        <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 4 }}>
+                          {getAdErrCodeLabel(row.err_code)}
+                        </Typography.Text>
+                      </span>
+                    ),
                   },
                   {
-                    title: '拉取条数',
-                    dataIndex: 'fetched',
-                    key: 'fetched',
+                    title: '错误信息',
+                    dataIndex: 'err_msg',
+                    key: 'err_msg',
+                    ellipsis: { showTitle: true },
+                    render: (msg: string) => (
+                      <Tooltip title={msg}>
+                        <code style={{ fontSize: 12 }}>{msg || '-'}</code>
+                      </Tooltip>
+                    ),
+                  },
+                  {
+                    title: (
+                      <Tooltip title="去重后的真实错误次数（双发已合并）">
+                        <span>次数</span>
+                      </Tooltip>
+                    ),
+                    dataIndex: 'count',
+                    key: 'count',
                     width: 80,
+                    sorter: (a: AdErrorRow, b: AdErrorRow) => a.count - b.count,
+                    defaultSortOrder: 'descend',
                     render: (v: number) => formatNumber(v),
                   },
                   {
-                    title: '完成时间',
-                    dataIndex: 'finished_at',
-                    key: 'finished_at',
+                    title: (
+                      <Tooltip title="去重后受影响的玩家数（user_id / anonymous_id 归一）">
+                        <span>影响人数</span>
+                      </Tooltip>
+                    ),
+                    dataIndex: 'affected_users',
+                    key: 'affected_users',
+                    width: 90,
+                    render: (v: number) => formatNumber(v),
+                  },
+                  {
+                    title: '最近一次',
+                    dataIndex: 'last_seen_ts',
+                    key: 'last_seen_ts',
+                    width: 170,
                     render: (v: number) => formatTs(v),
                   },
                 ]}
-                dataSource={health.recent_runs}
-                pagination={{ pageSize: 5 }}
+                dataSource={visibleRows}
+                pagination={false}
+                scroll={{ x: 'max-content' }}
+                footer={
+                  !adErrorsExpanded && collapsedCount > 0
+                    ? () => (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          仅显示 Top 5 / 共 {allRows.length} 条；点击右上「展开看全部」查看其余{' '}
+                          {collapsedCount} 条
+                        </Typography.Text>
+                      )
+                    : undefined
+                }
               />
-            </Col>
-          </Row>
-        ) : (
-          <Empty description="健康度未加载" />
-        )}
-      </Card>
+            ) : (
+              <Empty description="窗口内暂无广告错误，是好事" />
+            )}
+          </Card>
+        );
+      })()}
+
     </Space>
   );
 }
