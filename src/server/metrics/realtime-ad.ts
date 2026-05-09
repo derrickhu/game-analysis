@@ -388,7 +388,14 @@ async function replaceBuckets(
  *   - cgi fail 事故：单一 err_msg 集中爆发 → top 1 就是它
  *   - 流量主无填充：err_code=1004 / no advertisement，常态化分布
  * - err_msg 截断到 200 字符避免长堆栈占满 UI
- * - SDK 双发 bug 修复后，err_code 列里 -100/-101 是 SDK 自定义码，其它都是 wx 真实码
+ *
+ * SDK 双发自动合并（针对 hot-pot SDK 老版本的 ad_error 双发 bug）：
+ * - 同 (scene, ad_type, err_msg) 但 err_code='-102'（SDK 自己包装的码）+ 真实 err_code 同时存在、且次数相等
+ *   → 视为同一次错误被打了两条，合并为一行展示，count 取真实次数（不翻倍）
+ * - 标记 is_dual_emit=true，提示运维"SDK 升级后这条就消失了"
+ * - 仅次数相等才合并；不等说明可能是不同错误恰好同 err_msg，分开保留更稳
+ *
+ * SDK 双发 bug 修复后，err_code 列里 -100/-101 是 SDK 自定义码，其它都是 wx 真实码。
  */
 export interface AdErrorRow {
   scene: string;
@@ -398,6 +405,76 @@ export interface AdErrorRow {
   count: number;
   affected_users: number;
   last_seen_ts: number;
+  /** 该行实际包含的所有 err_code（双发时是 ['-1','-102']，正常情况只有一个） */
+  merged_err_codes: string[];
+  /** 是否检测到 SDK 双发：err_code='-102' 与真实 err_code 同 err_msg、次数相等 */
+  is_dual_emit: boolean;
+}
+
+interface RawErrorRow {
+  scene: string;
+  ad_type: string;
+  err_code: string;
+  err_msg: string;
+  count: number;
+  affected_users: number;
+  last_seen_ts: number;
+}
+
+const SDK_DUAL_EMIT_WRAP_CODE = '-102';
+
+/**
+ * 二阶段合并：把 SQL 聚合得到的 raw rows 按 (scene, ad_type, err_msg) 折叠双发。
+ * 仅处理「正好一对真实码 + 一个 -102 包装码、count 相等」的情况；其它保持原样。
+ */
+function foldDualEmit(rawRows: RawErrorRow[]): AdErrorRow[] {
+  const groupKey = (r: RawErrorRow) => `${r.scene}|${r.ad_type}|${r.err_msg}`;
+  const groups = new Map<string, RawErrorRow[]>();
+  for (const r of rawRows) {
+    const k = groupKey(r);
+    let bucket = groups.get(k);
+    if (!bucket) {
+      bucket = [];
+      groups.set(k, bucket);
+    }
+    bucket.push(r);
+  }
+
+  const merged: AdErrorRow[] = [];
+  for (const rows of groups.values()) {
+    const wrapper = rows.find((r) => r.err_code === SDK_DUAL_EMIT_WRAP_CODE);
+    const realRows = rows.filter((r) => r.err_code !== SDK_DUAL_EMIT_WRAP_CODE);
+
+    // 仅当「恰好一行真实 + 一行包装、次数相等」才视为 SDK 双发并合并
+    if (wrapper && realRows.length === 1 && realRows[0].count === wrapper.count) {
+      const real = realRows[0];
+      merged.push({
+        scene: real.scene,
+        ad_type: real.ad_type,
+        err_code: real.err_code,
+        err_msg: real.err_msg,
+        // 双发是同一次错误打了两条，去重取真实次数（不翻倍）
+        count: real.count,
+        affected_users: Math.max(real.affected_users, wrapper.affected_users),
+        last_seen_ts: Math.max(real.last_seen_ts, wrapper.last_seen_ts),
+        merged_err_codes: [real.err_code, wrapper.err_code],
+        is_dual_emit: true,
+      });
+      continue;
+    }
+
+    // 其它情况：每行原样保留
+    for (const r of rows) {
+      merged.push({
+        ...r,
+        merged_err_codes: [r.err_code],
+        is_dual_emit: false,
+      });
+    }
+  }
+
+  merged.sort((a, b) => b.count - a.count);
+  return merged;
 }
 
 export async function listAdErrorTopN(
@@ -409,6 +486,10 @@ export async function listAdErrorTopN(
   if (toTs < fromTs) return [];
 
   const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+  // SQL 内部多取一些行，给折叠双发留余量；折叠后再 slice limit
+  const sqlLimit = Math.max(limit * 2, 40);
+
+  let raw: RawErrorRow[] = [];
 
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
@@ -428,9 +509,9 @@ export async function listAdErrorTopN(
         GROUP BY scene, ad_type, err_code, err_msg
         ORDER BY cnt DESC
         LIMIT ?`,
-      [gameKey, fromTs, toTs, limit],
+      [gameKey, fromTs, toTs, sqlLimit],
     );
-    return (rows as Array<{
+    raw = (rows as Array<{
       scene: string | null;
       ad_type: string | null;
       err_code: string | null;
@@ -447,6 +528,7 @@ export async function listAdErrorTopN(
       affected_users: Number(r.users || 0),
       last_seen_ts: Number(r.last_ts || 0),
     }));
+    return foldDualEmit(raw).slice(0, limit);
   }
 
   // SQLite 兜底：json_extract 同样支持，字段语义保持一致
@@ -468,7 +550,7 @@ export async function listAdErrorTopN(
         ORDER BY cnt DESC
         LIMIT ?`,
     )
-    .all(gameKey, fromTs, toTs, limit) as Array<{
+    .all(gameKey, fromTs, toTs, sqlLimit) as Array<{
     scene: string | null;
     ad_type: string | null;
     err_code: string | number | null;
@@ -477,7 +559,7 @@ export async function listAdErrorTopN(
     users: number;
     last_ts: number;
   }>;
-  return rows.map((r) => ({
+  raw = rows.map((r) => ({
     scene: r.scene || 'unknown',
     ad_type: r.ad_type || 'unknown',
     err_code: r.err_code != null ? String(r.err_code) : '',
@@ -486,4 +568,5 @@ export async function listAdErrorTopN(
     affected_users: Number(r.users || 0),
     last_seen_ts: Number(r.last_ts || 0),
   }));
+  return foldDualEmit(raw).slice(0, limit);
 }

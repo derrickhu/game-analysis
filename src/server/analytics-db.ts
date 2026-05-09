@@ -121,6 +121,23 @@ function migrateSqlite(database: Database.Database): void {
       cursor_after INTEGER NOT NULL DEFAULT 0,
       error_message TEXT NOT NULL DEFAULT ''
     );
+
+    CREATE TABLE IF NOT EXISTS analytics_cleanup_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER NOT NULL DEFAULT 0,
+      trigger_source TEXT NOT NULL,
+      dry_run INTEGER NOT NULL DEFAULT 0,
+      retention_days_local INTEGER NOT NULL,
+      retention_days_cloud INTEGER NOT NULL,
+      cutoff_local_ms INTEGER NOT NULL,
+      cutoff_cloud_ms INTEGER NOT NULL,
+      local_deleted INTEGER NOT NULL DEFAULT 0,
+      cloud_deleted INTEGER NOT NULL DEFAULT 0,
+      cloud_errors TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL DEFAULT 0
+    );
   `);
 }
 
@@ -189,6 +206,27 @@ async function migrateMysqlEvents(pool: mysql.Pool): Promise<void> {
       cursor_before BIGINT NOT NULL DEFAULT 0,
       cursor_after BIGINT NOT NULL DEFAULT 0,
       error_message TEXT NOT NULL
+    )
+  `);
+  // 清理任务历史。独立于 ingest_runs：避免每天 cron 跑的清理把 ingest 列表淹没；
+  // dry_run=1 的行表示「预演」，cloud_deleted/local_deleted 为预计将删数。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS analytics_cleanup_runs (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      started_at BIGINT NOT NULL,
+      finished_at BIGINT NOT NULL DEFAULT 0,
+      trigger_source VARCHAR(16) NOT NULL,
+      dry_run TINYINT NOT NULL DEFAULT 0,
+      retention_days_local INT NOT NULL,
+      retention_days_cloud INT NOT NULL,
+      cutoff_local_ms BIGINT NOT NULL,
+      cutoff_cloud_ms BIGINT NOT NULL,
+      local_deleted INT NOT NULL DEFAULT 0,
+      cloud_deleted INT NOT NULL DEFAULT 0,
+      cloud_errors TEXT NOT NULL,
+      status VARCHAR(16) NOT NULL,
+      duration_ms INT NOT NULL DEFAULT 0,
+      INDEX idx_started_at (started_at)
     )
   `);
 }
@@ -317,6 +355,27 @@ export async function deleteOldEvents(expireMs: number): Promise<number> {
   }
   const info = getDb().prepare('DELETE FROM analytics_events WHERE event_ts < ?').run(cutoff);
   return info.changes;
+}
+
+/**
+ * 数一下「event_ts < cutoff」的事件条数。dry-run 预览用，不修改数据。
+ * 走 idx_game_ts 索引，对大表也能在 1s 内返回。
+ */
+export async function countOldEvents(expireMs: number): Promise<number> {
+  await ensureMigrated();
+  const cutoff = Date.now() - expireMs;
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [rows] = await pool.query(
+      'SELECT COUNT(*) AS c FROM analytics_events WHERE event_ts < ?',
+      [cutoff],
+    );
+    return Number((rows as Array<{ c: number }>)[0]?.c || 0);
+  }
+  const row = getDb()
+    .prepare('SELECT COUNT(*) AS c FROM analytics_events WHERE event_ts < ?')
+    .get(cutoff) as { c: number };
+  return Number(row?.c || 0);
 }
 
 /** 查询单游戏分钟桶广告聚合 */
@@ -505,6 +564,91 @@ export async function listEventNames(gameKey: string, fromTs: number, toTs: numb
     )
     .all(gameKey, fromTs, toTs) as Array<{ event_name: string }>;
   return rows.map((r) => r.event_name);
+}
+
+/**
+ * 记录一次清理任务运行结果。dry_run=true 表示只是预演（"将会删多少"）、不真删。
+ * cloud_errors 字符串是 JSON 数组（逗号分隔的错误消息），方便 UI 直接展示。
+ */
+export interface CleanupRunRecord {
+  startedAt: number;
+  finishedAt: number;
+  triggerSource: 'cron' | 'manual';
+  dryRun: boolean;
+  retentionDaysLocal: number;
+  retentionDaysCloud: number;
+  cutoffLocalMs: number;
+  cutoffCloudMs: number;
+  localDeleted: number;
+  cloudDeleted: number;
+  cloudErrors: string[];
+  status: 'success' | 'partial' | 'failed';
+}
+
+export async function recordCleanupRun(rec: CleanupRunRecord): Promise<void> {
+  await ensureMigrated();
+  const errorJson = rec.cloudErrors.length > 0 ? JSON.stringify(rec.cloudErrors) : '';
+  const durationMs = Math.max(0, rec.finishedAt - rec.startedAt);
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    await pool.query(
+      `INSERT INTO analytics_cleanup_runs
+        (started_at, finished_at, trigger_source, dry_run,
+         retention_days_local, retention_days_cloud, cutoff_local_ms, cutoff_cloud_ms,
+         local_deleted, cloud_deleted, cloud_errors, status, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        rec.startedAt, rec.finishedAt, rec.triggerSource, rec.dryRun ? 1 : 0,
+        rec.retentionDaysLocal, rec.retentionDaysCloud, rec.cutoffLocalMs, rec.cutoffCloudMs,
+        rec.localDeleted, rec.cloudDeleted, errorJson, rec.status, durationMs,
+      ],
+    );
+    return;
+  }
+  getDb()
+    .prepare(
+      `INSERT INTO analytics_cleanup_runs
+        (started_at, finished_at, trigger_source, dry_run,
+         retention_days_local, retention_days_cloud, cutoff_local_ms, cutoff_cloud_ms,
+         local_deleted, cloud_deleted, cloud_errors, status, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      rec.startedAt, rec.finishedAt, rec.triggerSource, rec.dryRun ? 1 : 0,
+      rec.retentionDaysLocal, rec.retentionDaysCloud, rec.cutoffLocalMs, rec.cutoffCloudMs,
+      rec.localDeleted, rec.cloudDeleted, errorJson, rec.status, durationMs,
+    );
+}
+
+/** 拉取最近的清理任务记录，给 dashboard 卡片用 */
+export async function listRecentCleanupRuns(limit = 20): Promise<Array<{
+  id: number;
+  started_at: number;
+  finished_at: number;
+  trigger_source: string;
+  dry_run: number;
+  retention_days_local: number;
+  retention_days_cloud: number;
+  cutoff_local_ms: number;
+  cutoff_cloud_ms: number;
+  local_deleted: number;
+  cloud_deleted: number;
+  cloud_errors: string;
+  status: string;
+  duration_ms: number;
+}>> {
+  await ensureMigrated();
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [rows] = await pool.query(
+      'SELECT * FROM analytics_cleanup_runs ORDER BY id DESC LIMIT ?',
+      [limit],
+    );
+    return rows as Array<any>;
+  }
+  return getDb()
+    .prepare('SELECT * FROM analytics_cleanup_runs ORDER BY id DESC LIMIT ?')
+    .all(limit) as Array<any>;
 }
 
 /** 拉取最近的 ingest 运行记录，给健康度卡片用 */

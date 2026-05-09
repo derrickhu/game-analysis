@@ -57,15 +57,26 @@ export function startScheduler(): void {
   });
 
   // 3) 兜底清理过期事件：每天凌晨 3 点跑一次
+  // 双 retention：本地 90 天（D7 留存兜底 + 历史回看）/ 云端 7 天（CloudBase 配额限制）
+  // 通过 ANALYTICS_RETENTION_DAYS_LOCAL / ANALYTICS_RETENTION_DAYS_CLOUD 单独覆盖
+  // 兼容老变量 ANALYTICS_RETENTION_DAYS：未设新变量时，老变量同时作用于本地和云端
   const cleanCron = process.env.ANALYTICS_CLEAN_CRON || '0 3 * * *';
-  const retentionDays = Number(process.env.ANALYTICS_RETENTION_DAYS) || 30;
+  const legacyRetention = Number(process.env.ANALYTICS_RETENTION_DAYS);
+  const retentionDaysLocal =
+    Number(process.env.ANALYTICS_RETENTION_DAYS_LOCAL) || (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 90);
+  const retentionDaysCloud =
+    Number(process.env.ANALYTICS_RETENTION_DAYS_CLOUD) || (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 7);
   cron.schedule(cleanCron, async () => {
     try {
-      const summary = await cleanExpiredEvents(retentionDays);
+      const summary = await cleanExpiredEvents({
+        retentionDaysLocal,
+        retentionDaysCloud,
+        triggerSource: 'cron',
+      });
       console.log(
-        `[scheduler] events 清理: retention=${summary.retentionDays}d, ` +
-          `local=${summary.localDeleted}, cloud=${summary.cloudDeleted}, ` +
-          `errors=${summary.cloudErrors.length}`,
+        `[scheduler] events 清理: local_retention=${summary.retentionDaysLocal}d cloud_retention=${summary.retentionDaysCloud}d ` +
+          `local_deleted=${summary.localDeleted} cloud_deleted=${summary.cloudDeleted} ` +
+          `errors=${summary.cloudErrors.length} duration=${summary.durationMs}ms`,
       );
       if (summary.cloudErrors.length > 0) {
         for (const err of summary.cloudErrors) console.warn(`[scheduler] events 清理警告: ${err}`);
@@ -79,6 +90,6 @@ export function startScheduler(): void {
   console.log(
     `[scheduler] started: snapshots(games=${GAME_CONFIGS.length}), ` +
       `events(enabled=${enabledKeys.length}/${ANALYTICS_GAMES.length} [${enabledKeys.join(',')}], cron=${eventsCron}), ` +
-      `cleanup(cron=${cleanCron}, retentionDays=${retentionDays})`,
+      `cleanup(cron=${cleanCron}, local=${retentionDaysLocal}d, cloud=${retentionDaysCloud}d)`,
   );
 }

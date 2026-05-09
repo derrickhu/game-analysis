@@ -9,9 +9,11 @@ import {
   listAdMinute,
   listEventNames,
   listEvents,
+  listRecentCleanupRuns,
   listRecentIngestRuns,
   type AdMinuteRow,
 } from '../analytics-db';
+import { cleanExpiredEvents } from '../jobs/clean-expired-events';
 import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
 import {
@@ -397,6 +399,44 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       stats,
       recent_runs: filteredRuns,
     };
+  });
+
+  /**
+   * 手动触发一次过期事件清理（dashboard 按钮 / 排障入口）。
+   *
+   * 强制做了几道防线：
+   * - dry_run=true（默认）只数将要删多少，不真删；第一次必须用 dry-run 验证
+   * - 走 cleanExpiredEvents 同一函数，与 cron 完全一致的白名单守卫 + 限速 + 入库记录
+   * - 不允许通过 query 覆盖 retention：参数走环境变量，避免有人传 retention=0 误删全部
+   * - trigger_source 强制写 'manual'，便于在历史里和 cron 自动跑区分
+   */
+  app.post('/api/realtime/cleanup-now', async (request) => {
+    const body = (request.body || {}) as { dry_run?: boolean | string | number };
+    const rawDry = body.dry_run;
+    // 默认 dry_run=true，必须显式传 false / "false" / 0 才真删
+    const dryRun = !(rawDry === false || rawDry === 'false' || rawDry === 0 || rawDry === '0');
+    const legacyRetention = Number(process.env.ANALYTICS_RETENTION_DAYS);
+    const retentionDaysLocal =
+      Number(process.env.ANALYTICS_RETENTION_DAYS_LOCAL) ||
+      (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 90);
+    const retentionDaysCloud =
+      Number(process.env.ANALYTICS_RETENTION_DAYS_CLOUD) ||
+      (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 7);
+    const summary = await cleanExpiredEvents({
+      retentionDaysLocal,
+      retentionDaysCloud,
+      dryRun,
+      triggerSource: 'manual',
+    });
+    return { ok: true, ...summary };
+  });
+
+  /** 查清理历史，dashboard 卡片用 */
+  app.get('/api/realtime/cleanup-history', async (request) => {
+    const query = (request.query || {}) as { limit?: string };
+    const limit = Math.max(1, Math.min(100, Number(query.limit) || 20));
+    const rows = await listRecentCleanupRuns(limit);
+    return { ok: true, runs: rows };
   });
 
   // 手动触发一次 events 拉取（用于联调和故障排查）
