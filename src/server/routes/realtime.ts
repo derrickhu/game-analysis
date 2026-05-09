@@ -16,6 +16,7 @@ import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
 import {
   getAdUserMetrics,
+  listAdErrorTopN,
   listSeriesUserBuckets,
   recomputeRealtimeAdMinute,
 } from '../metrics/realtime-ad';
@@ -32,6 +33,29 @@ import {
 } from '../metrics/bucket';
 
 const DEFAULT_WINDOW_MINUTES = 60;
+
+/**
+ * 解析 from/to/window 三选一的时间窗口入参。
+ *
+ * 关键不变量：toTs 不允许越过"现在"——
+ * - 否则 ad-revenue 的 1 小时桶 series 会按未来时间生成空槽位；
+ * - 一旦数据中存在客户端时钟漂移导致的"未来事件"（SDK 上报的 event_ts > now），
+ *   未来桶内 active_uu 与 ad_uau 都只剩这条孤儿事件，渗透率会被算成 100% 误导发版分析。
+ *
+ * windowMinutes 仅在 query.from / query.to 都缺省时作为相对时间 fallback 使用。
+ */
+function parseTimeRange(query: { from?: string; to?: string; window?: string }): {
+  fromTs: number;
+  toTs: number;
+  windowMinutes: number;
+} {
+  const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
+  const nowTs = Date.now();
+  const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
+  const rawToTs = query.to ? bucketToTs(query.to) : nowTs;
+  const toTs = Math.min(rawToTs, nowTs);
+  return { fromTs, toTs, windowMinutes };
+}
 
 interface AdRevenueQuery {
   game?: string;
@@ -276,10 +300,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
 
-    const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
-    const nowTs = Date.now();
-    const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
-    const toTs = query.to ? bucketToTs(query.to) : nowTs;
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     // bucket 字符串严格落在 5 分钟整点；前端 X 轴据此渲染，不会再出现 1 分钟假刻度
     const fromMinute = tsToBucket(fromTs);
     const toMinute = tsToBucket(toTs);
@@ -410,10 +431,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!findAnalyticsGame(gameKey)) {
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
-    const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
-    const nowTs = Date.now();
-    const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
-    const toTs = query.to ? bucketToTs(query.to) : nowTs;
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromBucket = tsToBucket(fromTs);
     const toBucket = tsToBucket(toTs);
 
@@ -426,6 +444,33 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     };
   });
 
+  // 广告错误明细 Top N：按 (scene, ad_type, err_code, err_msg) 聚合，
+  // 用于一眼定位「单事故」（top 1 集中爆发）vs「常态拒填」（1004 / no advertisement 分布）。
+  // SDK 双发 bug 修复后，err_code 列里 -100/-101 是 SDK 自定义码，其它都是 wx 真实码。
+  app.get('/api/realtime/ad-errors', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery & { limit?: string };
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const limit = Math.max(1, Math.min(100, Number(query.limit) || 20));
+    const rows = await listAdErrorTopN(gameKey, fromTs, toTs, limit);
+    const totalErrors = rows.reduce((s, r) => s + r.count, 0);
+    return {
+      ok: true,
+      query: {
+        game_key: gameKey,
+        from: tsToBucket(fromTs),
+        to: tsToBucket(toTs),
+        window_minutes: windowMinutes,
+        limit,
+      },
+      total_errors: totalErrors,
+      errors: rows,
+    };
+  });
+
   // 通用分享传播数据：只统计 share_app_message「发起分享」，不声称真实回流。
   app.get('/api/realtime/share', async (request) => {
     const query = (request.query || {}) as AdRevenueQuery;
@@ -433,10 +478,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!findAnalyticsGame(gameKey)) {
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
-    const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
-    const nowTs = Date.now();
-    const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
-    const toTs = query.to ? bucketToTs(query.to) : nowTs;
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromBucket = tsToBucket(fromTs);
     const toBucket = tsToBucket(toTs);
     const result = await getShareOverview(gameKey, fromTs, toTs);
@@ -462,10 +504,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!findAnalyticsGame(gameKey)) {
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
-    const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
-    const nowTs = Date.now();
-    const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
-    const toTs = query.to ? bucketToTs(query.to) : nowTs;
+    const { fromTs, toTs } = parseTimeRange(query);
     const limit = Math.max(1, Math.min(500, Number(query.limit) || 50));
     const offset = Math.max(0, Number(query.offset) || 0);
     const eventName = (query.event_name || '').trim() || undefined;
@@ -503,10 +542,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!findAnalyticsGame(gameKey)) {
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
-    const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
-    const nowTs = Date.now();
-    const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
-    const toTs = query.to ? bucketToTs(query.to) : nowTs;
+    const { fromTs, toTs } = parseTimeRange(query);
     const names = await listEventNames(gameKey, fromTs, toTs);
     return { ok: true, names };
   });
@@ -519,10 +555,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (gameKey !== 'hotpot') {
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'hotpot-progress 当前只服务 hotpot' };
     }
-    const windowMinutes = Math.max(5, Math.min(24 * 60, Number(query.window) || DEFAULT_WINDOW_MINUTES));
-    const nowTs = Date.now();
-    const fromTs = query.from ? bucketToTs(query.from) : nowTs - windowMinutes * 60_000;
-    const toTs = query.to ? bucketToTs(query.to) : nowTs;
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromBucket = tsToBucket(fromTs);
     const toBucket = tsToBucket(toTs);
 

@@ -378,3 +378,112 @@ async function replaceBuckets(
   });
   tx();
 }
+
+/**
+ * 广告错误明细 Top N。
+ *
+ * 设计取舍：
+ * - 直接扫 analytics_events.params_json，不在 analytics_ad_minute 上加 err_code 维度（会导致桶基数膨胀）
+ * - 按 (scene, ad_type, err_code, err_msg) 聚合，便于「单事故」与「持续拒填」一眼区分
+ *   - cgi fail 事故：单一 err_msg 集中爆发 → top 1 就是它
+ *   - 流量主无填充：err_code=1004 / no advertisement，常态化分布
+ * - err_msg 截断到 200 字符避免长堆栈占满 UI
+ * - SDK 双发 bug 修复后，err_code 列里 -100/-101 是 SDK 自定义码，其它都是 wx 真实码
+ */
+export interface AdErrorRow {
+  scene: string;
+  ad_type: string;
+  err_code: string;
+  err_msg: string;
+  count: number;
+  affected_users: number;
+  last_seen_ts: number;
+}
+
+export async function listAdErrorTopN(
+  gameKey: string,
+  fromTs: number,
+  toTs: number,
+  limit = 20,
+): Promise<AdErrorRow[]> {
+  if (toTs < fromTs) return [];
+
+  const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [rows] = await pool.query(
+      `SELECT
+         JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.scene'))   AS scene,
+         JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.ad_type')) AS ad_type,
+         JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.err_code')) AS err_code,
+         SUBSTRING(JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.err_msg')), 1, 200) AS err_msg,
+         COUNT(*) AS cnt,
+         COUNT(DISTINCT ${userKeySql}) AS users,
+         MAX(event_ts) AS last_ts
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = 'ad_error'
+          AND event_ts BETWEEN ? AND ?
+        GROUP BY scene, ad_type, err_code, err_msg
+        ORDER BY cnt DESC
+        LIMIT ?`,
+      [gameKey, fromTs, toTs, limit],
+    );
+    return (rows as Array<{
+      scene: string | null;
+      ad_type: string | null;
+      err_code: string | null;
+      err_msg: string | null;
+      cnt: number;
+      users: number;
+      last_ts: number;
+    }>).map((r) => ({
+      scene: r.scene || 'unknown',
+      ad_type: r.ad_type || 'unknown',
+      err_code: r.err_code != null ? String(r.err_code) : '',
+      err_msg: r.err_msg || '',
+      count: Number(r.cnt || 0),
+      affected_users: Number(r.users || 0),
+      last_seen_ts: Number(r.last_ts || 0),
+    }));
+  }
+
+  // SQLite 兜底：json_extract 同样支持，字段语义保持一致
+  const rows = getDb()
+    .prepare(
+      `SELECT
+         json_extract(params_json, '$.scene')   AS scene,
+         json_extract(params_json, '$.ad_type') AS ad_type,
+         json_extract(params_json, '$.err_code') AS err_code,
+         substr(json_extract(params_json, '$.err_msg'), 1, 200) AS err_msg,
+         COUNT(*) AS cnt,
+         COUNT(DISTINCT ${userKeySql}) AS users,
+         MAX(event_ts) AS last_ts
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = 'ad_error'
+          AND event_ts BETWEEN ? AND ?
+        GROUP BY scene, ad_type, err_code, err_msg
+        ORDER BY cnt DESC
+        LIMIT ?`,
+    )
+    .all(gameKey, fromTs, toTs, limit) as Array<{
+    scene: string | null;
+    ad_type: string | null;
+    err_code: string | number | null;
+    err_msg: string | null;
+    cnt: number;
+    users: number;
+    last_ts: number;
+  }>;
+  return rows.map((r) => ({
+    scene: r.scene || 'unknown',
+    ad_type: r.ad_type || 'unknown',
+    err_code: r.err_code != null ? String(r.err_code) : '',
+    err_msg: r.err_msg || '',
+    count: Number(r.cnt || 0),
+    affected_users: Number(r.users || 0),
+    last_seen_ts: Number(r.last_ts || 0),
+  }));
+}

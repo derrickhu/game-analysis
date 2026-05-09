@@ -74,6 +74,30 @@ interface AdRevenueResponse {
   breakdown_by_scene: AdBreakdown[];
 }
 
+/**
+ * 广告错误明细 Top N。
+ *
+ * err_code 列里 -100/-101 是 SDK 自定义码（unavailable / busy）；
+ * 其它都是 wx 真实 errCode：常见 -1 cgi fail（流量主网关临时故障）、1004 no advertisement（无广告主出价）、
+ * 1005 ad init failed（账号未配齐）。
+ */
+interface AdErrorRow {
+  scene: string;
+  ad_type: string;
+  err_code: string;
+  err_msg: string;
+  count: number;
+  affected_users: number;
+  last_seen_ts: number;
+}
+
+interface AdErrorsResponse {
+  ok: true;
+  query: { game_key: string; from: string; to: string; window_minutes: number; limit: number };
+  total_errors: number;
+  errors: AdErrorRow[];
+}
+
 interface HealthResponse {
   ok: true;
   games: Array<{ game_key: string; display_name: string; cloud_env: string }>;
@@ -130,6 +154,32 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
   },
 };
 
+/**
+ * 广告错误码 → 中文说明。
+ *
+ * 常见来源：
+ * - 负数（-100/-101）：SDK 自定义码，业务侧场景
+ * - -1：wx 流量主网关 cgi fail，常出现在弱网或微信侧短时故障
+ * - 1004：广告主无出价/无广告填充，IAA 常态化现象，长期看 70-80% 填充就健康
+ * - 1005：广告组件初始化失败，多见于账号未配齐或 SDK 版本太旧
+ * - 1100/1101：素材/上下文已过期，需重新 load
+ */
+const AD_ERR_CODE_LABELS: Record<string, string> = {
+  '-1': '流量主 cgi 失败',
+  '-100': 'SDK 不可用',
+  '-101': 'SDK 调用冲突',
+  '1000': '后台配置错误',
+  '1004': '无广告填充',
+  '1005': '广告组件初始化失败',
+  '1100': '广告已过期',
+  '1101': '上下文异常',
+};
+
+function getAdErrCodeLabel(code: string): string {
+  if (!code) return '未知';
+  return AD_ERR_CODE_LABELS[code] || (code.startsWith('-') ? '业务侧错误' : '微信侧其它');
+}
+
 function getSceneLabel(gameKey: string, scene: string): string {
   return SCENE_LABELS[gameKey]?.[scene] ?? '-';
 }
@@ -161,6 +211,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
   const { fixedGameKey: gameKey, windowSel, refreshToken } = props;
   const [data, setData] = useState<AdRevenueResponse | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [adErrors, setAdErrors] = useState<AdErrorsResponse | null>(null);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -191,11 +242,26 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     }
   }, [gameKey, windowSel]);
 
+  const loadAdErrors = useCallback(async () => {
+    try {
+      const queryStr = buildWindowQuery(windowSel);
+      const url = `/api/realtime/ad-errors?game=${encodeURIComponent(gameKey)}&limit=20&${queryStr}`;
+      const res = await fetch(url);
+      const json = (await res.json()) as AdErrorsResponse | { ok: false; error?: string };
+      if ('ok' in json && json.ok) {
+        setAdErrors(json);
+      }
+    } catch (err) {
+      console.warn('[realtime-ad] load ad errors failed', err);
+    }
+  }, [gameKey, windowSel]);
+
   useEffect(() => {
     void loadHealth();
     void loadData();
+    void loadAdErrors();
     // refreshToken 变化即触发重新拉取（来自顶部刷新按钮 / 自动 5 分钟 timer / 立即拉取后强制刷新）
-  }, [loadHealth, loadData, refreshToken]);
+  }, [loadHealth, loadData, loadAdErrors, refreshToken]);
 
   const xLabels = useMemo(
     () => (data?.series || []).map((s) => formatMinuteLabel(s.minute)),
@@ -692,6 +758,125 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           />
         ) : (
           <Empty description="暂无场景维度数据" />
+        )}
+      </Card>
+
+      <Card
+        size="small"
+        title={
+          <span>
+            广告错误 Top 20{' '}
+            <Tooltip
+              title={
+                <div style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.6 }}>
+                  按 (场景, 广告类型, 错误码, 错误信息) 聚合排序，可一眼区分两类问题：
+                  <br />
+                  1) <b>单事故</b>：top 1 突然集中爆发（如 cgi fail 144 起在同一小时）→ 关注是不是发版/微信侧
+                  <br />
+                  2) <b>持续拒填</b>：err_code=1004 / no advertisement 长期分布 → 行业常态，IAA 插屏 fill rate 70-80%
+                  <br />
+                  err_code 列：负数（-100/-101）= SDK 自定义码；其它 = 微信真实 errCode 透传
+                </div>
+              }
+            >
+              <Tag color="orange" style={{ cursor: 'help' }}>排障入口 ⓘ</Tag>
+            </Tooltip>
+            {adErrors && adErrors.total_errors > 0 && (
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                窗口内总错误 {formatNumber(adErrors.total_errors)} 起
+              </Typography.Text>
+            )}
+          </span>
+        }
+      >
+        {adErrors && adErrors.errors.length > 0 ? (
+          <Table
+            size="small"
+            rowKey={(row) => `${row.scene}|${row.ad_type}|${row.err_code}|${row.err_msg}`}
+            columns={[
+              {
+                title: '场景',
+                dataIndex: 'scene',
+                key: 'scene',
+                width: 140,
+                render: (v: string) => {
+                  const label = getSceneLabel(gameKey, v);
+                  return (
+                    <span>
+                      <code style={{ fontSize: 12 }}>{v}</code>
+                      {label !== '-' && (
+                        <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
+                          {label}
+                        </Typography.Text>
+                      )}
+                    </span>
+                  );
+                },
+              },
+              { title: '广告类型', dataIndex: 'ad_type', key: 'ad_type', width: 90 },
+              {
+                title: '错误码',
+                dataIndex: 'err_code',
+                key: 'err_code',
+                width: 130,
+                render: (code: string) => (
+                  <span>
+                    <Tag color={code.startsWith('-') ? 'default' : 'volcano'}>{code || '未知'}</Tag>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {getAdErrCodeLabel(code)}
+                    </Typography.Text>
+                  </span>
+                ),
+              },
+              {
+                title: '错误信息',
+                dataIndex: 'err_msg',
+                key: 'err_msg',
+                ellipsis: { showTitle: true },
+                render: (msg: string) => (
+                  <Tooltip title={msg}>
+                    <code style={{ fontSize: 12 }}>{msg || '-'}</code>
+                  </Tooltip>
+                ),
+              },
+              {
+                title: (
+                  <Tooltip title="该错误命中事件次数。SDK 双发 bug 修复前，同一次失败会被计 2 倍">
+                    <span>次数</span>
+                  </Tooltip>
+                ),
+                dataIndex: 'count',
+                key: 'count',
+                width: 90,
+                sorter: (a: AdErrorRow, b: AdErrorRow) => a.count - b.count,
+                defaultSortOrder: 'descend',
+                render: (v: number) => formatNumber(v),
+              },
+              {
+                title: (
+                  <Tooltip title="去重后受影响的玩家数（user_id / anonymous_id 归一）">
+                    <span>影响人数</span>
+                  </Tooltip>
+                ),
+                dataIndex: 'affected_users',
+                key: 'affected_users',
+                width: 100,
+                render: (v: number) => formatNumber(v),
+              },
+              {
+                title: '最近一次',
+                dataIndex: 'last_seen_ts',
+                key: 'last_seen_ts',
+                width: 170,
+                render: (v: number) => formatTs(v),
+              },
+            ]}
+            dataSource={adErrors.errors}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+          />
+        ) : (
+          <Empty description="窗口内暂无广告错误，是好事" />
         )}
       </Card>
 

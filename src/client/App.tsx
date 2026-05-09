@@ -45,13 +45,18 @@ interface OverviewKpi {
   active_users_1h: number;
   new_users_today: number;
   retention_d1_rate: number | null;
-  /** 分母：D-1 cohort（昨日 DAU 去重数） */
+  /** 分母：D-1 cohort（锚点前 1 日去重数） */
   retention_d1_cohort: number;
-  /** 分子：cohort 中今日仍有事件的去重数 */
+  /** 分子：cohort 中锚点日仍有事件的去重数 */
   retention_d1_returned: number;
+  /** D-1 cohort 所在本地日期 YYYY-MM-DD */
+  retention_d1_cohort_date?: string;
   retention_d7_rate: number | null;
   retention_d7_cohort: number;
   retention_d7_returned: number;
+  retention_d7_cohort_date?: string;
+  /** 留存锚点日（= 当前时间窗口结束日所在自然日） */
+  retention_anchor_date?: string;
   computed_at: number;
 }
 
@@ -107,6 +112,17 @@ interface ProgressResponse {
   error?: string;
 }
 
+/**
+ * KPI 区只关心总收益估算值，所以从 ad-revenue 接口里只挑 summary.total_revenue_estimated_cny；
+ * RealtimeAdRevenue 组件内部仍会拉完整数据（同窗口缓存命中率高，重复成本可接受）。
+ */
+interface AdSummaryLiteResponse {
+  ok: boolean;
+  summary?: { total_revenue_estimated_cny?: number };
+  code?: string;
+  error?: string;
+}
+
 function formatTime(timestamp: number): string {
   if (!timestamp) return '-';
   return new Date(timestamp).toLocaleString('zh-CN');
@@ -119,20 +135,24 @@ function formatRetentionRate(value: number | null | undefined): string {
 
 /**
  * 把次留 / 7 留的「分子 / 分母」格式化成中文副标题。
- * 故意用「活跃 → 今日回访」的箭头形式，让分母（cohort）和分子（回访）一眼就能看懂。
+ * 故意用「活跃 → 锚点日回访」的箭头形式，让分母（cohort）和分子（回访）一眼就能看懂。
  * cohort 为 0 时给一句明确话术，避免显示 0/0 让人误解。
  *
- * @param baseLabel 分母语义，例如「昨日活跃」「7 天前活跃」
- * @param returned 分子：cohort 中今日仍有事件的去重数
+ * @param cohortDate cohort 所在日期 YYYY-MM-DD
+ * @param anchorDate 锚点日（= 窗口结束日所在自然日）YYYY-MM-DD
+ * @param returned 分子：cohort 中锚点日仍有事件的去重数
  * @param cohort 分母：cohort 去重数
  */
 function formatRetentionFraction(
-  baseLabel: string,
+  cohortDate: string | undefined,
+  anchorDate: string | undefined,
   returned: number | undefined,
   cohort: number | undefined,
 ): string {
-  if (cohort === undefined || cohort === 0) return `${baseLabel} 0 人，暂无样本`;
-  return `${baseLabel} ${cohort} 人 → 今日回访 ${returned ?? 0} 人`;
+  const cohortLabel = cohortDate ? `${cohortDate} 活跃` : 'cohort';
+  const anchorLabel = anchorDate ? `${anchorDate} 回访` : '锚点日回访';
+  if (cohort === undefined || cohort === 0) return `${cohortLabel} 0 人，暂无样本`;
+  return `${cohortLabel} ${cohort} 人 → ${anchorLabel} ${returned ?? 0} 人`;
 }
 
 /** 6 张 KPI 卡片共用的容器样式：同高 + 统一 padding，避免「次留多一行副标题」造成的高度抖动 */
@@ -169,6 +189,7 @@ export function App() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
+  const [adSummary, setAdSummary] = useState<AdSummaryLiteResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [ingestingNow, setIngestingNow] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(0);
@@ -184,6 +205,7 @@ export function App() {
       // 未接入 SDK，dashboard 完全无数据可拉，直接置空
       setOverview(null);
       setProgress(null);
+      setAdSummary(null);
       setLastRefreshedAt(Date.now());
       return;
     }
@@ -195,7 +217,11 @@ export function App() {
       const progressPromise = nextGameKey === 'hotpot'
         ? fetch(`/api/realtime/hotpot-progress?game=${encodeURIComponent(nextGameKey)}&${queryStr}`).then((r) => r.json() as Promise<ProgressResponse>)
         : Promise.resolve<ProgressResponse | null>(null);
-      const [ovRes, pgRes] = await Promise.all([overviewPromise, progressPromise]);
+      // KPI 区要展示"预估收益"，单独再拉一次 ad-revenue summary；
+      // 与 RealtimeAdRevenue 子组件参数同窗口，浏览器/上游 cache 命中率高，重复 fetch 成本可控
+      const adSummaryPromise = fetch(`/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${queryStr}`)
+        .then((r) => r.json() as Promise<AdSummaryLiteResponse>);
+      const [ovRes, pgRes, adRes] = await Promise.all([overviewPromise, progressPromise, adSummaryPromise]);
       // 防止竞态：仅最新一次请求结果生效
       if (seq !== requestSeqRef.current) return;
       if (!ovRes.ok) {
@@ -203,6 +229,7 @@ export function App() {
       }
       setOverview(ovRes);
       setProgress(pgRes);
+      setAdSummary(adRes);
       setLastRefreshedAt(Date.now());
     } catch (error) {
       if (seq !== requestSeqRef.current) return;
@@ -414,39 +441,59 @@ export function App() {
         description={(
           <Space direction="vertical" size={0}>
             <Text>数据来源：@gp/analytics-sdk 打点流水（analytics_events），cron 每 5 分钟增量拉取并聚合。</Text>
-            <Text type="secondary">用户身份：优先 user_id（业务 openid），未登录时降级到 anonymous_id；活跃用 session_start 去重，留存为前一日 / 七日前 cohort 在今日有事件比例。</Text>
+            <Text type="secondary">用户身份：优先 user_id（业务 openid），未登录时降级到 anonymous_id；活跃用 session_start 去重；留存以"窗口结束日所在自然日"为锚点，cohort=锚点日前 1/7 日整日，retain=cohort 中锚点日仍有事件的去重数。</Text>
           </Space>
         )}
       />
 
       {/*
         KPI 卡片整排：
+        - 7 张卡 → xl 用 3 (24/8=8 槽，留一槽呼吸位)，md 用 6 (24/6=4 列)，xs 用 12 (2 列)
         - 所有 Card 用同一套 styles（统一 body minHeight）保持视觉高度对齐
         - Col 加 display:flex，让 Card 的 height:100% 在等高 Row 中真正撑满
         - 留存卡片在副标题位置展示「分子/分母」，便于人工核对 cohort 是否过小
+        - 「预估收益」直接用 ad-revenue 接口的 total_revenue_estimated_cny，估算口径，非真实结算
       */}
       <Row gutter={[16, 16]} align="stretch">
-        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Statistic title="今日 DAU" value={overviewKpi?.dau ?? 0} suffix="人" />
-            <Text type="secondary">基于 session_start 去重</Text>
+            <Tooltip title="当前时间窗口内有 session_start 事件的去重用户数。窗口=今日时即为今日 DAU；选历史日时即为该日 DAU；多日窗口为窗口内活跃合计。">
+              <Statistic title="窗口活跃" value={overviewKpi?.dau ?? 0} suffix="人" />
+            </Tooltip>
+            <Text type="secondary">session_start 去重</Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Statistic title="近 1 小时活跃" value={overviewKpi?.active_users_1h ?? 0} suffix="人" />
+            <Tooltip title="窗口结束时刻向前 1 小时内任意事件的去重用户数。窗口=today 时与“现在”重合；历史窗口看的是该窗口结束前最后 1 小时。">
+              <Statistic title="近 1 小时活跃" value={overviewKpi?.active_users_1h ?? 0} suffix="人" />
+            </Tooltip>
             <Text type="secondary">所有事件去重</Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Statistic title="今日新增" value={overviewKpi?.new_users_today ?? 0} suffix="人" />
+            <Tooltip title="在全表中首次出现于当前时间窗口内的去重用户数。">
+              <Statistic title="窗口内新增" value={overviewKpi?.new_users_today ?? 0} suffix="人" />
+            </Tooltip>
             <Text type="secondary">全表首次出现</Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="昨日 DAU 中今日仍有事件的比例。冷启动期 cohort 较小时波动会大，请结合绝对值判断。">
+            <Tooltip title="窗口内广告曝光数 × 配置 eCPM 的估算收益（元），仅供参考；以微信流量主结算为准。">
+              <Statistic
+                title="预估收益"
+                value={(adSummary?.summary?.total_revenue_estimated_cny ?? 0).toFixed(2)}
+                suffix="元"
+              />
+            </Tooltip>
+            <Text type="secondary">估算值，非真实结算</Text>
+          </Card>
+        </Col>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
+          <Card style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="锚点日 = 当前时间窗口结束日所在自然日。次留 D1 = 锚点日前 1 日 cohort 中、在锚点日仍有事件的比例。窗口切到 5/8 一整天时即为 5/7 → 5/8 的次留。">
               <Statistic
                 title="次留 D1"
                 value={formatRetentionRate(overviewKpi?.retention_d1_rate)}
@@ -455,16 +502,17 @@ export function App() {
             </Tooltip>
             <Text type="secondary">
               {formatRetentionFraction(
-                '昨日活跃',
+                overviewKpi?.retention_d1_cohort_date,
+                overviewKpi?.retention_anchor_date,
                 overviewKpi?.retention_d1_returned,
                 overviewKpi?.retention_d1_cohort,
               )}
             </Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="7 天前 DAU 中今日仍有事件的比例。打点不足 7 天时显示为 -。">
+            <Tooltip title="7 留 D7 = 锚点日前 7 日 cohort 中、在锚点日仍有事件的比例。打点不足 7 天时 cohort 为 0。">
               <Statistic
                 title="7 留 D7"
                 value={formatRetentionRate(overviewKpi?.retention_d7_rate)}
@@ -473,14 +521,15 @@ export function App() {
             </Tooltip>
             <Text type="secondary">
               {formatRetentionFraction(
-                '7 天前活跃',
+                overviewKpi?.retention_d7_cohort_date,
+                overviewKpi?.retention_anchor_date,
                 overviewKpi?.retention_d7_returned,
                 overviewKpi?.retention_d7_cohort,
               )}
             </Text>
           </Card>
         </Col>
-        <Col xs={12} md={8} xl={4} style={{ display: 'flex' }}>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
             <Statistic
               title="计算时刻"
@@ -539,7 +588,9 @@ export function App() {
           </Col>
           <Col xs={12} md={6}>
             <Card size="small">
-              <Statistic title="全服最高已通关" value={progressKpi?.max_cleared_level ?? 0} suffix="关" />
+              <Tooltip title="当前时间窗口内 level_clear 事件中最大的 level_id；切窗口会跟随变化。">
+                <Statistic title="窗口内最高通关" value={progressKpi?.max_cleared_level ?? 0} suffix="关" />
+              </Tooltip>
             </Card>
           </Col>
           <Col xs={12} md={6}>
@@ -554,7 +605,7 @@ export function App() {
           </Col>
         </Row>
 
-        <Card type="inner" title="各关卡用户分布">
+        <Card type="inner" title="各关卡用户分布（按当前时间窗口去重）">
           {(progress?.distribution?.length || 0) > 0 ? (
             <ReactECharts option={levelDistOption} style={{ height: 320 }} />
           ) : (
@@ -562,7 +613,7 @@ export function App() {
           )}
         </Card>
 
-        <Card type="inner" title="关卡事件趋势（5 分钟桶 · 当日）">
+        <Card type="inner" title="关卡事件趋势（5 分钟桶）">
           {(progress?.series?.length || 0) > 0 ? (
             <ReactECharts option={levelTrendOption} style={{ height: 280 }} />
           ) : (
@@ -573,13 +624,14 @@ export function App() {
     </Card>
   );
 
-  // 实时趋势页：通用 overview + 广告 + （hot-pot）关卡独立模块
-  // 三个面板都共用顶部全局的 windowSel / refreshToken，不再各自维护刷新逻辑
+  // 实时趋势页：通用 overview + 广告变现 + 分享传播 + （hot-pot）关卡独立模块
+  // 顺序按"用户漏斗 → 商业化 → 社交传播"来排：先看活跃，再看广告变现，再看分享拉新，最后是游戏专属
+  // 所有面板共用顶部全局的 windowSel / refreshToken，不再各自维护刷新逻辑
   const trendDashboard = (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       {overviewSection}
-      <RealtimeShare fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
       <RealtimeAdRevenue fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
+      <RealtimeShare fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
       {hotpotProgressSection}
     </Space>
   );
@@ -661,9 +713,12 @@ export function App() {
                 onChange={(range) => {
                   if (!range || !range[0] || !range[1]) return;
                   // 用户在日历里选 5/3 ~ 5/8 时，落地为 5/3 00:00 ~ 5/8 23:59:59，
-                  // 而不是两端都对齐到 00:00（否则末日整天的数据会被裁掉）
+                  // 而不是两端都对齐到 00:00（否则末日整天的数据会被裁掉）。
+                  // 但是：toTs 不能越过"现在"——否则后端会按未来时间生成空小时桶，
+                  // 一旦数据中存在客户端时钟漂移导致的"未来事件"，会让某些桶 active_uu=ad_uau=1，
+                  // 渗透率被算成 100% 误导发版分析。这里 clamp 到 now。
                   const fromTs = range[0].startOf('day').valueOf();
-                  const toTs = range[1].endOf('day').valueOf();
+                  const toTs = Math.min(range[1].endOf('day').valueOf(), Date.now());
                   if (toTs <= fromTs) {
                     message.warning('结束时间必须晚于开始时间');
                     return;
@@ -671,10 +726,11 @@ export function App() {
                   setWindowSel({ kind: 'range', fromTs, toTs });
                 }}
                 presets={[
-                  { label: '今天', value: [dayjs().startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs] },
+                  // 同样：所有预设的 endOf('day') 都用 Math.min(_, now) clamp，避免选到未来
+                  { label: '今天', value: [dayjs().startOf('day'), dayjs()] as [Dayjs, Dayjs] },
                   { label: '昨天', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] as [Dayjs, Dayjs] },
-                  { label: '近 7 天', value: [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs] },
-                  { label: '近 30 天', value: [dayjs().subtract(29, 'day').startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs] },
+                  { label: '近 7 天', value: [dayjs().subtract(6, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs] },
+                  { label: '近 30 天', value: [dayjs().subtract(29, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs] },
                 ]}
               />
             );

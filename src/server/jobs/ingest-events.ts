@@ -74,6 +74,11 @@ function getApp(envId: string) {
   return app;
 }
 
+// 客户端时钟漂移容忍上限：event_ts 最多比服务端"现在"超前 5 分钟。
+// 一旦超过（玩家手机时间设错、闹钟拨动等），用 ingest_ts（云函数收到事件时刻的服务端时间）兜底，
+// 否则未来时间戳会污染小时桶——曾经触发过 ad_uau=1/active=1 ⇒ 渗透率被算成 100% 的发版误报。
+const FUTURE_EVENT_TS_TOLERANCE_MS = 5 * 60_000;
+
 function normalizeRawEvent(doc: RawCloudEvent): AnalyticsEventRow | null {
   const eventId = (doc.event_id || doc._id || '').toString();
   if (!eventId) return null;
@@ -81,11 +86,19 @@ function normalizeRawEvent(doc: RawCloudEvent): AnalyticsEventRow | null {
   if (!doc.game_key || typeof doc.game_key !== 'string') return null;
   if (!Number.isFinite(doc.event_ts)) return null;
   const device = doc.device || {};
+  const ingestTs = Number(doc.ingest_ts) || 0;
+  const rawEventTs = Number(doc.event_ts);
+  // event_ts 不允许越过"现在 + 容忍量"。优先用 ingest_ts 兜底（更接近真实事件时刻）；
+  // 没有 ingest_ts 时退化用 Date.now()——这种情况下事件本就是离线补传，时序不准是已知事实。
+  const nowMs = Date.now();
+  const futureCap = nowMs + FUTURE_EVENT_TS_TOLERANCE_MS;
+  const safeEventTs =
+    rawEventTs > futureCap ? (ingestTs > 0 && ingestTs <= futureCap ? ingestTs : nowMs) : rawEventTs;
   return {
     event_id: eventId,
     event_name: String(doc.event_name),
-    event_ts: Number(doc.event_ts),
-    ingest_ts: Number(doc.ingest_ts) || 0,
+    event_ts: safeEventTs,
+    ingest_ts: ingestTs,
     game_key: String(doc.game_key),
     app_version: String(doc.app_version || '0.0.0'),
     sdk_version: String(doc.sdk_version || '0.0.0'),

@@ -20,24 +20,30 @@ const USER_KEY_SQL_MYSQL = USER_KEY_SQL_SQLITE; // 两者语法一致
 const SESSION_START = 'session_start';
 
 export interface OverviewKpi {
-  /** 当天 DAU（去重用户数）。默认 today=今日 0 点至 now */
+  /** 当前时间窗口内 session_start 去重用户数（窗口=今日时即为今日 DAU；选历史日时即为该日 DAU；多日窗口为窗口内活跃合计） */
   dau: number;
-  /** 当前 60 分钟活跃用户数 */
+  /** 窗口结束时刻往前 1 小时的活跃用户数（窗口=today 时与"现在"重合；历史窗口看的是该窗口结束前最后 1 小时） */
   active_users_1h: number;
-  /** 今日首次出现（在所有历史事件中第一次出现）的去重用户数 */
+  /** 在全表中首次出现于当前时间窗口内的去重用户数 */
   new_users_today: number;
-  /** 次日留存率 = 昨天 DAU ∩ 今天有事件 / 昨天 DAU */
+  /** 次日留存率：锚点日前 1 日 cohort ∩ 锚点日有事件 / 锚点日前 1 日 cohort */
   retention_d1_rate: number | null;
-  /** 次留 cohort（分母）：昨天 DAU 去重用户数 */
+  /** 次留 cohort（分母）：锚点日前 1 日去重用户数 */
   retention_d1_cohort: number;
-  /** 次留回访（分子）：cohort 中今天仍有事件的去重用户数 */
+  /** 次留回访（分子）：cohort 中锚点日仍有事件的去重用户数 */
   retention_d1_returned: number;
-  /** 7 日留存率 = 7 天前 DAU ∩ 今天有事件 / 7 天前 DAU */
+  /** 锚点日前 1 日的本地 YYYY-MM-DD（cohort 所在日） */
+  retention_d1_cohort_date: string;
+  /** 7 日留存率：锚点日前 7 日 cohort ∩ 锚点日有事件 / 锚点日前 7 日 cohort */
   retention_d7_rate: number | null;
-  /** 7 留 cohort（分母）：7 天前 DAU 去重用户数 */
+  /** 7 留 cohort（分母）：锚点日前 7 日去重用户数 */
   retention_d7_cohort: number;
-  /** 7 留回访（分子）：cohort 中今天仍有事件的去重用户数 */
+  /** 7 留回访（分子）：cohort 中锚点日仍有事件的去重用户数 */
   retention_d7_returned: number;
+  /** 锚点日前 7 日的本地 YYYY-MM-DD */
+  retention_d7_cohort_date: string;
+  /** 锚点日的本地 YYYY-MM-DD（= 当前时间窗口结束日所在的自然日） */
+  retention_anchor_date: string;
   /** 计算时刻：查询点的 ms 时间戳 */
   computed_at: number;
 }
@@ -75,17 +81,24 @@ export async function getOverview(
   toTs: number,
 ): Promise<OverviewResult> {
   const now = Date.now();
-  const todayStart = startOfDay(now);
-  const yesterdayStart = todayStart - 86_400_000;
-  const sevenDaysAgoStart = todayStart - 7 * 86_400_000;
+  // 锚点日 = 窗口结束日所在的本地自然日（YYYY-MM-DD）
+  // 留存口径在用户切窗口时跟着移动，比如选 5/8 一整天 → 锚点日=5/8，D1 cohort=5/7、D1 retain=5/8
+  const anchorDayStart = startOfDay(toTs);
+  const anchorDayEnd = anchorDayStart + 86_400_000 - 1;
+  const d1CohortStart = anchorDayStart - 86_400_000;
+  const d1CohortEnd = anchorDayStart - 1;
+  const d7CohortStart = anchorDayStart - 7 * 86_400_000;
+  const d7CohortEnd = d7CohortStart + 86_400_000 - 1;
+  // "近 1 小时活跃" 锚到窗口结束时刻，窗口很短时与起点取较大值，避免越过 fromTs
+  const oneHourFrom = Math.max(toTs - 3_600_000, fromTs);
 
   // 并行计算各 KPI（SQLite 是同步驱动，所以并行收益很小，但代码组织上更清晰）
-  const [dau, active1h, newToday, retentionD1, retentionD7] = await Promise.all([
-    countDistinctUsers(gameKey, todayStart, now, SESSION_START),
-    countDistinctUsers(gameKey, now - 3_600_000, now), // 任意事件都算活跃
-    countNewUsersInWindow(gameKey, todayStart, now),
-    cohortRetention(gameKey, yesterdayStart, todayStart - 1, todayStart, now),
-    cohortRetention(gameKey, sevenDaysAgoStart, sevenDaysAgoStart + 86_400_000 - 1, todayStart, now),
+  const [dau, active1h, newInWindow, retentionD1, retentionD7] = await Promise.all([
+    countDistinctUsers(gameKey, fromTs, toTs, SESSION_START),
+    countDistinctUsers(gameKey, oneHourFrom, toTs), // 任意事件都算活跃
+    countNewUsersInWindow(gameKey, fromTs, toTs),
+    cohortRetention(gameKey, d1CohortStart, d1CohortEnd, anchorDayStart, anchorDayEnd),
+    cohortRetention(gameKey, d7CohortStart, d7CohortEnd, anchorDayStart, anchorDayEnd),
   ]);
 
   const series = await getActiveSeries(gameKey, fromTs, toTs);
@@ -94,13 +107,16 @@ export async function getOverview(
     kpi: {
       dau,
       active_users_1h: active1h,
-      new_users_today: newToday,
+      new_users_today: newInWindow,
       retention_d1_rate: retentionD1.rate,
       retention_d1_cohort: retentionD1.cohort,
       retention_d1_returned: retentionD1.retain,
+      retention_d1_cohort_date: formatLocalDate(d1CohortStart),
       retention_d7_rate: retentionD7.rate,
       retention_d7_cohort: retentionD7.cohort,
       retention_d7_returned: retentionD7.retain,
+      retention_d7_cohort_date: formatLocalDate(d7CohortStart),
+      retention_anchor_date: formatLocalDate(anchorDayStart),
       computed_at: now,
     },
     series,
@@ -363,4 +379,11 @@ function startOfDay(ts: number): number {
   const d = new Date(ts);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+/** 把 ms 时间戳格式化成本地时区的 YYYY-MM-DD（cohort 日期展示用） */
+function formatLocalDate(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
