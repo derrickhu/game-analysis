@@ -57,14 +57,37 @@ function formatHourLabel(hour: string): string {
   return `${pad(utcDate.getMonth() + 1)}-${pad(utcDate.getDate())} ${pad(utcDate.getHours())}:00`;
 }
 
-/** 入口中文名先放通用默认值；各游戏后续如有特殊入口，再按 gameKey 拓展。 */
-function getEntryLabel(entryPoint: string): string {
-  const labels: Record<string, string> = {
-    api_share_game: '系统分享入口',
-    wx_other: '微信其它分享入口',
-    unknown: '未知入口',
-  };
-  return labels[entryPoint] || '-';
+/**
+ * 通用分享入口（所有接入 @gp/analytics-sdk 的游戏都会上报）：
+ *   - wx_button / wx_menu / wx_other 来自微信小游戏 onShareAppMessage 的 from 字段
+ *     （button=页面分享按钮，menu=右上角菜单，其它=兜底）
+ *   - api_share_game 是业务侧主动调 wx.shareAppMessage 触发的分享
+ */
+const COMMON_ENTRY_LABELS: Record<string, string> = {
+  api_share_game: '业务主动分享接口',
+  wx_button: '微信原生分享按钮',
+  wx_menu: '微信右上角菜单转发',
+  wx_other: '微信其它来源分享',
+  unknown: '未知入口',
+};
+
+/**
+ * 游戏专属分享入口语义：当某款游戏在通用入口之外又上报了业务化的入口名时，
+ * 在这里按 gameKey 单独标注，命中时优先于通用层的中文说明。
+ */
+const GAME_ENTRY_LABELS: Record<string, Record<string, string>> = {
+  hotpot: {
+    // BowlLevelClearOverlay 通关弹窗的「分享炫耀」按钮，比通用层的描述更精准
+    api_share_game: '通关炫耀分享',
+    // BowlBadgeUnlockOverlay 解锁徽章成就后的「分享送 remove 道具」奖励入口
+    badge_unlock_reward: '徽章解锁分享送道具',
+  },
+};
+
+function getEntryLabel(gameKey: string, entryPoint: string): string {
+  return (
+    GAME_ENTRY_LABELS[gameKey]?.[entryPoint] ?? COMMON_ENTRY_LABELS[entryPoint] ?? '-'
+  );
 }
 
 export function RealtimeShare(props: RealtimeShareProps): ReactElement {
@@ -137,7 +160,7 @@ export function RealtimeShare(props: RealtimeShareProps): ReactElement {
       dataIndex: 'entry_point',
       key: 'entry_label',
       render: (v: string) => {
-        const label = getEntryLabel(v);
+        const label = getEntryLabel(gameKey, v);
         return label === '-' ? <Text type="secondary">-</Text> : label;
       },
     },
@@ -177,7 +200,7 @@ export function RealtimeShare(props: RealtimeShareProps): ReactElement {
         </Tooltip>
       )}
     >
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <Row gutter={[16, 16]}>
           <Col xs={12} md={6}>
             <Tooltip title="窗口内 share_app_message 事件总数">

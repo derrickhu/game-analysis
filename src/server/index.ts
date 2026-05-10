@@ -7,6 +7,7 @@ import { ingestCloudbaseSnapshots } from './cloudbase-ingest';
 import { recomputeDailyMetrics, recomputeHourlyMetrics } from './metrics';
 import { startScheduler } from './scheduler';
 import { registerRealtimeRoutes } from './routes/realtime';
+import { initSnapshotStorage } from './snapshot-db';
 
 const config = getConfig();
 const app = Fastify({ logger: true });
@@ -61,10 +62,12 @@ void registerRealtimeRoutes(app).catch((error) => {
   app.log.error(error, '实时路由注册失败');
 });
 
-void initializeStorage().catch((error) => {
-  app.log.error(error, '存储初始化失败');
-  process.exit(1);
-});
+void initializeStorage()
+  .then(() => initSnapshotStorage())
+  .catch((error) => {
+    app.log.error(error, '存储初始化失败');
+    process.exit(1);
+  });
 startScheduler();
 
 app.listen({ port: config.apiPort, host: '127.0.0.1' }).catch((error) => {

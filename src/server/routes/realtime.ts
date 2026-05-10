@@ -22,6 +22,17 @@ import {
   listSeriesUserBuckets,
   recomputeRealtimeAdMinute,
 } from '../metrics/realtime-ad';
+import {
+  getHuahuaEconomyOverview,
+  getHuahuaEngagementOverview,
+  getHuahuaGrowthOverview,
+  getHuahuaOrderOverview,
+} from '../metrics/realtime-huahua';
+import {
+  getHuahuaSnapshotOverview,
+  listHuahuaPlayerSnapshots,
+} from '../metrics/realtime-huahua-snapshot';
+import { ingestHuahuaSnapshots } from '../jobs/ingest-huahua-snapshot';
 import { getOverview } from '../metrics/realtime-overview';
 import { getProgressOverview } from '../metrics/realtime-progress';
 import { getShareOverview } from '../metrics/realtime-share';
@@ -607,5 +618,181 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       distribution: result.distribution,
       series: result.series,
     };
+  });
+
+  // ============================================================
+  // 花花妙屋专属玩法看板（4 个面板，路径前缀 huahua-）
+  // 与 hotpot-progress 同样按游戏锁定，避免被其他游戏误用
+  // ============================================================
+
+  /** 花花经济流转：花愿/钻石入账出账渠道分布 + 净流时间序列 */
+  app.get('/api/realtime/huahua-economy', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'huahua';
+    if (gameKey !== 'huahua') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-economy 当前只服务 huahua' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getHuahuaEconomyOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: {
+        game_key: gameKey,
+        from: tsToBucket(fromTs),
+        to: tsToBucket(toTs),
+        window_minutes: windowMinutes,
+      },
+      ...result,
+    };
+  });
+
+  /** 花花订单转化：spawn → deliver 漏斗 + 按 tier 分布 */
+  app.get('/api/realtime/huahua-order', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'huahua';
+    if (gameKey !== 'huahua') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-order 当前只服务 huahua' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getHuahuaOrderOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: {
+        game_key: gameKey,
+        from: tsToBucket(fromTs),
+        to: tsToBucket(toTs),
+        window_minutes: windowMinutes,
+      },
+      ...result,
+    };
+  });
+
+  /** 花花成长 + 引导：星级升级分布 + tutorial_step 漏斗 */
+  app.get('/api/realtime/huahua-growth', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'huahua';
+    if (gameKey !== 'huahua') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-growth 当前只服务 huahua' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getHuahuaGrowthOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: {
+        game_key: gameKey,
+        from: tsToBucket(fromTs),
+        to: tsToBucket(toTs),
+        window_minutes: windowMinutes,
+      },
+      ...result,
+    };
+  });
+
+  /** 花花参与度：日常任务 / 周里程碑 / 签到 / 抽奖 / 熟客卡 / 合成 / 图鉴 */
+  app.get('/api/realtime/huahua-engagement', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'huahua';
+    if (gameKey !== 'huahua') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-engagement 当前只服务 huahua' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getHuahuaEngagementOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: {
+        game_key: gameKey,
+        from: tsToBucket(fromTs),
+        to: tsToBucket(toTs),
+        window_minutes: windowMinutes,
+      },
+      ...result,
+    };
+  });
+
+  // ============================================================
+  // 玩家档案快照（每天 1 次全量拉取，独立于 5 分钟事件流）
+  // GET 看板查询 + POST 手动触发，先做 huahua，后续 hot-pot 同模式
+  // ============================================================
+
+  /**
+   * 玩家档案快照分析：默认查最新 snapshot_date 的横切面 + 最近 30 天每日趋势。
+   * 与 5 分钟事件流互补：事件流看"做了什么"，快照看"现在是什么状态"。
+   */
+  app.get('/api/realtime/huahua-snapshot', async (request) => {
+    const query = (request.query || {}) as { game?: string; date?: string };
+    const gameKey = query.game || 'huahua';
+    if (gameKey !== 'huahua') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-snapshot 当前只服务 huahua' };
+    }
+    const result = await getHuahuaSnapshotOverview(gameKey, query.date);
+    return { ok: true, ...result };
+  });
+
+  /**
+   * 玩家明细分页查询：服务端排序 + 筛选 + 关键字搜索。
+   *
+   * Query params:
+   *   game (default 'huahua')
+   *   date YYYY-MM-DD（不传 = 最新一次拉到的快照日期）
+   *   sort  排序字段（白名单见 SORTABLE_COLUMNS）
+   *   order asc / desc（默认 desc）
+   *   page  页码（默认 1）
+   *   pageSize  每页（默认 50，上限 200）
+   *   q     user_id 子串模糊搜索
+   *   platform   平台前缀（wx / h5 / dy / anon）
+   *   tutorialCompleted  0 / 1
+   *   minLevel / maxLevel / minHuayuan  数值过滤
+   */
+  app.get('/api/realtime/huahua-snapshot/players', async (request) => {
+    const query = (request.query || {}) as {
+      game?: string;
+      date?: string;
+      sort?: string;
+      order?: string;
+      page?: string;
+      pageSize?: string;
+      q?: string;
+      platform?: string;
+      tutorialCompleted?: string;
+      minLevel?: string;
+      maxLevel?: string;
+      minHuayuan?: string;
+    };
+    const gameKey = query.game || 'huahua';
+    if (gameKey !== 'huahua') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-snapshot/players 当前只服务 huahua' };
+    }
+    const tutorialCompletedNum = query.tutorialCompleted !== undefined ? Number(query.tutorialCompleted) : NaN;
+    const result = await listHuahuaPlayerSnapshots(gameKey, {
+      snapshot_date: query.date,
+      sort: query.sort,
+      order: query.order === 'asc' ? 'asc' : 'desc',
+      page: query.page ? Number(query.page) : undefined,
+      page_size: query.pageSize ? Number(query.pageSize) : undefined,
+      user_id_search: query.q,
+      platform: query.platform,
+      tutorial_completed:
+        tutorialCompletedNum === 0 || tutorialCompletedNum === 1 ? (tutorialCompletedNum as 0 | 1) : undefined,
+      min_level: query.minLevel ? Number(query.minLevel) : undefined,
+      max_level: query.maxLevel ? Number(query.maxLevel) : undefined,
+      min_huayuan: query.minHuayuan ? Number(query.minHuayuan) : undefined,
+    });
+    return { ok: true, ...result };
+  });
+
+  /**
+   * 手动触发一次全量快照拉取（联调和数据修正用）；正常生产由 cron 每天 04:00 自动跑。
+   * body: { game: 'huahua', retentionDays?: 30 }
+   */
+  app.post('/api/realtime/snapshot-now', async (request) => {
+    const body = (request.body || {}) as { game?: string; retentionDays?: number };
+    const gameKey = body.game || 'huahua';
+    if (gameKey !== 'huahua') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'snapshot-now 当前只支持 huahua' };
+    }
+    const retentionDays =
+      typeof body.retentionDays === 'number' && body.retentionDays > 0 ? body.retentionDays : undefined;
+    const result = await ingestHuahuaSnapshots({ triggerSource: 'manual', retentionDays });
+    return result;
   });
 }

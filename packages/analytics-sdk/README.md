@@ -54,41 +54,132 @@ Analytics.setUserId('openid_xxx');
 >
 > 事件等级：
 > - **必接 ★**：经分公共指标依赖，每个游戏都要接
-> - **关卡 ◆**：有关卡 / 进度系统的游戏必接（消除 / 模拟经营 / 闯关都算）
+> - **关卡 ◆**：有「关卡 / 闯关」概念的游戏必接（消除、闯关射击、解谜）
+> - **进度 ☐**：合成经营 / 模拟养成 / 签到等无关卡型游戏用，替代关卡三件套
 > - **按需 ○**：业务需要时再接，不强制
 > - **SDK 自动 ⚙**：SDK 内部触发，业务**不要**手工打
 
+### 1. 通用生命周期（每个游戏都接）
+
 | 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
 | --- | --- | --- | --- | --- | --- |
-| ★ | `session_start` | `initAnalytics` 完成 **且** `setAnalyticsUserId` 之后打 1 次（一次冷启动 / 切前台） | — | `entry`(从哪进入)、`with_user_id`(bool) | DAU / 留存 / 新增的锚点 |
+| ★ | `session_start` | `initAnalytics` 完成 **且** `setAnalyticsUserId` 之后打 1 次（一次冷启动） | — | `entry`(从哪进入)、`with_user_id`(bool) | DAU / 留存 / 新增的锚点 |
 | ★ | `session_end` | `Platform.onHide` 切后台时 | `reason` | — | 反向校验异常退出比例 |
-| ★ ⚙ | `login` | `setAnalyticsUserId(uid)` 内部自动打 + 立即 flush | `from_anonymous`(bool) | — | 业务侧**不需要**手工 track，SDK 内部已经处理 |
-| ◆ | `level_start` | 关卡开始（玩家点开始 / 自动重开） | `level_id` | `level_name` | 关卡漏斗 / 失败率 |
-| ◆ | `level_clear` | 关卡通关 | `level_id`, `duration_ms` | `level_name` | 平均通关时长、最高关 |
-| ◆ | `level_fail` | 关卡失败 / 玩家放弃 | `level_id`, `duration_ms`, `reason` | `level_name`、业务进度字段（如 `orders_remaining`） | `reason` 区分 `give_up`/`time_out`/`hp_zero` 等 |
-| ★ | `ad_request` | 调 `wx.createRewardedVideoAd().load()` 时 | `ad_unit_id`, `ad_type`, `scene` | `level_id` | 广告收益估算源数据 |
-| ★ | `ad_show` | 广告 onLoad 成功 / 重播成功 | `ad_unit_id`, `ad_type`, `scene` | `level_id` | **eCPM × 曝光数 = 估算广告收入** |
-| ★ | `ad_close` | 广告 onClose | `ad_unit_id`, `ad_type`, `scene`, `is_ended`(完整看完=true) | `level_id` | 是否发奖励的判定锚 |
-| ★ | `ad_error` | 广告 onError / load fail | `ad_unit_id`, `ad_type`, `scene`, `err_code`, `err_msg` | — | 广告位健康度 |
-| ○ | `ad_click` | 广告点击（部分平台拿不到） | `ad_unit_id`, `ad_type`, `scene` | — | 微信小游戏当前无回调，可忽略 |
-| ○ | `coin_change` | 金币增减（默认 10% 采样） | `amount`(±), `balance_after`, `source` | — | 经济模型分析 |
-| ○ | `diamond_change` | 钻石增减（默认 10% 采样） | `amount`(±), `balance_after`, `source` | — | 同上 |
+| ★ ⚙ | `login` | `setAnalyticsUserId(uid)` 内部自动打 + 立即 flush | `from_anonymous`(bool) | — | 业务侧**不需要**手工 track，SDK 内部已处理 |
+| ○ | `app_show` | `Platform.onShow` 切回前台。**SDK 不会自动打**，也不重置 session_id | `from_background`(bool)、`background_ms` | — | 看「切后台再回来」留存形态。**不要**用它顶替 session_start |
 | ○ | `app_error` | 客户端致命异常 | `err_code`, `err_msg` | `stack`(裁剪) | 业务侧装一个全局 try/catch 触发 |
 | ⚙ | `sdk_dropped` | SDK 降采样 / 限流 / 队列溢出时自动打 | — | — | 自监控用，业务**不要**手工 track |
 
+### 2. 关卡型游戏（hot-pot / 消除闯关）
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ◆ | `level_start` | 关卡开始（玩家点开始 / 自动重开） | `level_id`(number, 1 起) | `level_name` | 关卡漏斗 / 失败率 |
+| ◆ | `level_clear` | 关卡通关 | `level_id`, `duration_ms` | `level_name` | 平均通关时长、最高关 |
+| ◆ | `level_fail` | 关卡失败 / 玩家放弃 | `level_id`, `duration_ms`, `reason` | `level_name`、业务进度字段（如 `orders_remaining`） | `reason` 取值见下方「字段命名规范」 |
+
+### 3. 无关卡型游戏（花花合成经营 / 模拟养成 / 任务签到）
+
+> 没有"关卡通关 / 失败"的游戏走这一组。同一个 `quest_id` 必须能从 `quest_start` 串到 `quest_complete` 或 `quest_abandon`。
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ☐ | `quest_start` | 玩家接受任务 / 进入挑战 / 开启签到 | `quest_id`(string), `quest_type` | `step` | 任务漏斗起点 |
+| ☐ | `quest_complete` | **领奖完成**（不是 UI 显示完成时） | `quest_id`, `quest_type`, `duration_ms` | `reward_kind`、`reward_amount` | 任务完成率 / 时长 |
+| ☐ | `quest_abandon` | 玩家主动放弃 / 离开未领奖 | `quest_id`, `quest_type`, `reason` | `step`(中途到哪一步) | 区别于失败：玩家行为 |
+
+`quest_type` 团队约定取值：`daily`（日常）/ `weekly`（周常）/ `event`（活动）/ `tutorial_chain`（新手引导链）/ `checkin`（签到）/ `merge`（合成阶段）/ `building`（建造）/ `collection`（收集）。新增类型先在团队 wiki 登记再用。
+
+### 4. 新手引导漏斗（每个游戏都接）
+
+> 新手流失是新游戏第一周必看的指标。漏完一遍才能定位卡点，**不接=新手期决策瞎子**。
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ★ | `tutorial_step` | 教学每一步「完成」或「跳过」时打 1 条 | `step_id`(string, snake_case)、`step_index`(number, 1 起)、`status`(`done`/`skip`) | `duration_ms`(本步停留)、`is_force`(bool, 是否强制) | 新手流失漏斗 / 步骤平均耗时 |
+
+`step_id` 团队约定：每个步骤起一个稳定的英文标识（如 `tap_first_fruit` / `unlock_workbench` / `place_first_decoration`），**不要**改名也不要随版本变；UI 文案改了 step_id 也要保持稳定。`step_index` 用于按顺序排序。
+
+### 5. 广告（核心：广告收益估算的数据来源）
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ★ | `ad_request` | 调 `wx.createRewardedVideoAd().load()` 时 | `ad_unit_id`, `ad_type`, `scene` | 关卡型可带 `level_id` | 广告收益估算源数据 |
+| ★ | `ad_show` | 广告真正展示成功（show 的 then 回调里） | `ad_unit_id`, `ad_type`, `scene` | 关卡型可带 `level_id` | **eCPM × 曝光数 = 估算广告收入** |
+| ★ | `ad_close` | 广告 onClose | `ad_unit_id`, `ad_type`, `scene`, `is_ended`(完整看完=true) | 同上 | 是否发奖励的判定锚 |
+| ★ | `ad_error` | 广告 onError / load fail / show().catch | `ad_unit_id`, `ad_type`, `scene`, `err_code`, `err_msg` | — | 广告位健康度（**双通路去重见下文实现要点**） |
+| ○ | `ad_click` | 广告点击（部分平台拿不到） | `ad_unit_id`, `ad_type`, `scene` | — | 微信小游戏当前无回调，可忽略 |
+
+`scene` 必须传业务化字符串（如 `level_fail_revive` / `stamina_recover` / `cd_speedup`），**不能**填 `unknown` 或常量字符串；这是经分按场景拆收益的唯一维度。`level_id` 是关卡型可选字段，无关卡游戏（花花）**不要**填占位值，留空即可。
+
+### 6. 分享传播（只代表"发起分享"，不代表回流）
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ★ | `share_app_message` | 转发给好友 / 群（wx.shareAppMessage / onShareAppMessage / tt.shareAppMessage） | `entry_point` | `title`、`image_url`、`query`、业务字段（`reward_type` 等） | 分享渗透率、按入口拆分 |
+| ○ | `share_timeline` | 朋友圈分享（**仅微信** `onShareTimeline`，抖音无对等通道） | `entry_point` | `title`、`image_url`、`query` | 朋友圈传播口径与 `share_app_message` 拆分 |
+
+`entry_point` 团队约定取值：
+
+- 微信被动分享（`onShareAppMessage` / `onShareTimeline` 回调内）：`wx_button` / `wx_menu` / `wx_other` / `wx_timeline`
+- 抖音被动分享：`dy_button` / `dy_menu` / `dy_other`
+- 业务主动调 `shareAppMessage`：`api_share_game`（通用兜底）或业务化命名（如 `badge_unlock_reward` / `gift_stamina` / `flower_card`），命名规则：`<业务模块>_<动作>`，全 snake_case
+- 入口名一旦上线**不要改名**，否则 dashboard 历史数据断档
+
+### 7. 经济（业务自定义货币沿用 `*_change`）
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ○ | `coin_change` | 金币增减（默认 10% 采样） | `amount`(±, number)、`balance_after`(number)、`source`(string) | `reason` | 经济模型分析 |
+| ○ | `diamond_change` | 钻石增减（默认 10% 采样） | 同上 | 同上 | 同上 |
+| ○ | `<业务货币>_change` | 业务自定义货币（体力 `stamina_change` / 票券 `ticket_change` / 心愿 `wish_change`） | `amount`、`balance_after`、`source` | `reason` | **沿用相同语义结构**，不要自创 `addStamina` / `useTicket` 之类 |
+
+`source` 团队约定取值：`reward`（任务奖励）/ `purchase`（付费）/ `ad`（看广告）/ `gift`（社交赠送）/ `consume`（消耗）/ `refund`（回退）/ `system`（系统补发）；其它业务专属来源用 `event_<活动名>` 形式扩展，**不要**写 `'获得了一个金币'` 这类描述性字符串。高频自定义 `*_change` 事件建议在 `init` 时通过 `samplingRules` 加 0.1 采样，跟 coin/diamond 对齐（[采样规则注入示例](#采样规则注入示例)）。
+
+### 8. 付费（Phase 2 占位，MVP 可不接）
+
+> 命名先占住，避免后续接入散打成 `pay_done` / `iap_ok` 各种风格。**MVP 不强求接**，但接入时一定走这套名字。
+
+| 等级 | 事件名 | 触发时机 | 必带 params | 推荐 params | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| ○ | `purchase_initiate` | 弹起平台付费弹窗（`wx.requestMidasPayment` 调用前） | `product_id`、`price_amount`(分)、`currency`(默认 `CNY`) | `scene` | 付费漏斗起点 |
+| ○ | `purchase_complete` | 平台返回付费成功 | `product_id`、`price_amount`、`currency`、`order_id` | `scene` | ARPU / 付费率 |
+| ○ | `purchase_fail` | 用户取消 / 余额不足 / 平台异常 | `product_id`、`reason` | `err_code`、`err_msg` | 付费失败归因 |
+
 ### 接入自检清单（联调上线前对一遍）
+
+#### 通用必查（所有游戏）
 
 - [ ] `initAnalytics` 在主流程一开始就调用，确保 SDK 开始接收事件
 - [ ] `setAnalyticsUserId` 在 CloudSync / 登录拿到 openid 后**立即**调用
 - [ ] `session_start` **必须**在 `setAnalyticsUserId` 之后再 track，且带 `with_user_id`
       （否则 user_id='' 与登录后 user_id=xxx 会被算成两个不同 uk，DAU 翻倍）
 - [ ] `session_end` 在 `Platform.onHide` 触发，未漏接
-- [ ] 所有广告位都通过统一封装的 `showXxxRewardedAd`（参考 hot-pot `src/utils/rewardedAd.ts`）走，
-      不要在多个文件里散打 `ad_request` / `ad_show`，否则 scene 口径混乱
-- [ ] 关卡三件套（`level_start` / `level_clear` / `level_fail`）都打，且 `level_id` **统一从 1 开始**
+- [ ] **不要**在 `Platform.onShow` 重新打 `session_start`（会让 DAU 虚高）。如有"前后台切换"埋点需求，用 `app_show`
+- [ ] `app_version` 不是硬编码 `'1.0.0'`，已经从构建期注入（[最佳实践见下](#app_version-注入最佳实践)）
+- [ ] 所有广告位都通过统一封装（参考 hot-pot `src/utils/rewardedAd.ts`）走，`ad_request/show/close/error` 一处打齐，**不要**散在多个文件
+- [ ] `ad_error` 已对 onError 与 show().catch() 双通路去重（hot-pot 用 `errorReportedThisCycle` cycle 标志，照抄）
+- [ ] 新手引导每一步打了 `tutorial_step`，`step_id` 全 snake_case 且**版本间稳定不改名**
+- [ ] dashboard 选中本游戏后，能在「原始事件」Tab 看到自己的事件，且 `user_id` 字段非空（除登录失败的离群样本外）
+
+#### 关卡型游戏（hot-pot 这类）
+
+- [ ] 关卡三件套（`level_start` / `level_clear` / `level_fail`）都打，且 `level_id` **统一 number 类型、从 1 开始**
 - [ ] `duration_ms` 是「玩家进入这一关到结算」的真实时长，不是会话累计
 - [ ] `reason` 在团队内统一取值：`give_up` / `time_out` / `hp_zero` / `quit_to_home`，避免每个游戏写不同字符串
-- [ ] dashboard 选中本游戏后，能在「原始事件」Tab 看到自己的事件，且 `user_id` 字段非空（除登录失败的离群样本外）
+
+#### 无关卡型游戏（花花 / 合成经营 / 模拟养成）
+
+- [ ] 用 `quest_start` / `quest_complete` / `quest_abandon` 替代关卡三件套，所有任务 / 签到 / 活动都覆盖
+- [ ] `quest_id` 在版本间稳定（不要每周活动都换新 id 让 dashboard 拼不起漏斗）
+- [ ] 业务货币（体力 / 票券 / 心愿等）沿用 `xxx_change` 命名，并在 init 时加 0.1 采样
+- [ ] 朋友圈分享按 `share_timeline` 上报（不是混进 `share_app_message`）
+
+#### 双平台（同时发微信 + 抖音）
+
+- [ ] `Analytics.init({ platform })` 按当前宿主正确设置 `'wechat'` / `'douyin'`
+- [ ] 抖音激励广告 `onClose` 不一定带 `isEnded`，`is_ended` 字段已用 `res?.isEnded === true` 兜底
+- [ ] 抖音 `tt.shareAppMessage` 不支持 `query` 字段，已在分享层做平台分支
 
 ## 数据流
 
@@ -258,6 +349,118 @@ https://rosa-env-d7grf78r5dbd37323.service.tcloudbase.com
 
 - 经分 dashboard 的「广告实时（事件流）」标签页选游戏 `gameX` 应该能看到分钟级数据（30s 增量同步）
 
+## 工程规范（接入前必读）
+
+### 字段命名规范
+
+新接入容易出现的偏差：每家自创 `levelId`、`errorCode`、`addStamina` 等驼峰 / 描述式字段名，dashboard 聚合时必须为每家写适配，长期不可维护。**所有 params 字段、所有事件名都按本节规则写**。
+
+- **事件名**：snake_case，动词在后或动词为主（`level_clear`、`tutorial_step`、`stamina_change`）；不要用驼峰 / 中划线 / 中文
+- **字段名**：snake_case；id 类字段必须是 number（`level_id` / `step_index` / `price_amount`）；时长字段统一 `_ms` 结尾（`duration_ms` / `background_ms`）；金额字段统一**分**单位（`price_amount: 600` 表示 6 元）
+- **错误码 `err_code`**：number 类型；wx / tt 真实错误码透传（含负数 `-1` 等），SDK 自定义错误码用 **-100 段负数**与平台真实码区分（参考 hot-pot `rewardedAd.ts` 的 `SDK_ERR_UNAVAILABLE = -100`）
+- **`reason` / `source` / `scene` 等枚举字符串**：团队字典统一取值，**不允许**写成「玩家放弃了」「奖励来源是签到」这类描述性字符串。当前已约定取值见上方 SOP 表各事件行
+- **bool 字段**：直接传 `true` / `false`，**不要**传 `'true'` 字符串（SDK 不会做转换，dashboard 聚合时会算成两个不同值）
+- **`null` 表示"无值"**，**不要**用空串 `""` 表示无值（这两个在 JSON_EXTRACT 时含义不同，会污染聚合）
+
+### `app_version` 注入最佳实践
+
+**反面教材**：hot-pot 的 `src/analytics/index.ts` 当前是 `const APP_VERSION = '1.0.0'` 硬编码，多个版本上线后大盘上**完全分不开版本**。新游戏接入务必用构建期注入：
+
+**Vite（hot-pot / 花花用）：**
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+import pkg from './package.json' assert { type: 'json' };
+
+export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_TS__: JSON.stringify(new Date().toISOString()),
+  },
+});
+
+// src/analytics/index.ts
+declare const __APP_VERSION__: string;
+Analytics.init({ appVersion: __APP_VERSION__, /* ... */ });
+```
+
+**或直接读环境变量**（CI 友好）：
+
+```ts
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || pkg.version;
+```
+
+每次发版只需要 bump `package.json` 的 `version`，dashboard 自然能按版本拆分留存 / 失败率。
+
+### Session 边界与 `onShow` 语义
+
+- **Session 定义 = 一次冷启动**。SDK 的 `session_id` 在 `Analytics.init` 时一次性生成，**不会**因为 `onHide`/`onShow` 切换而重置；玩家切后台 30 分钟回来仍算同一个 session
+- 如果业务需要"切后台再回来"的留存埋点：**业务自己** track `app_show`（建议在 `Platform.onShow` 里），**不要**重新打 `session_start`，否则 DAU 翻倍
+- `session_end` 在 `onHide` 触发；不需要在 `onShow` 时打"session_resume"，留存形态用 `app_show` 自带的 `background_ms` 字段还原即可
+- 如果产品强需"30 分钟后切回算新会话"，应在数据层（dashboard）按 session_id + event_ts 间隔自行切分，**不**改 SDK，避免每个游戏对会话定义不一致
+
+### 微信 + 抖音双平台接入须知
+
+花花、彩珠均规划微信 + 抖音同时上线。SDK 内核已平台无关，但平台 API 差异需要在游戏接入层兜住：
+
+| 维度 | 微信 (wx) | 抖音 (tt) | 接入处理 |
+| --- | --- | --- | --- |
+| 平台标识 | `Analytics.init({ platform: 'wechat' })` | `'douyin'` | 接入层按 `typeof wx !== 'undefined'` / `typeof tt` 切换 |
+| 激励广告 onClose 字段 | 可靠返回 `{ isEnded: true/false }` | 部分版本不返回 `isEnded` | `is_ended: res?.isEnded === true`（只有显式 true 才算完看，避免抖音端虚高完看率） |
+| 朋友圈分享 | 支持 `onShareTimeline` | **不支持**朋友圈，无对等通道 | `share_timeline` 事件**仅微信打**；抖音端 share 全走 `share_app_message` |
+| `shareAppMessage.query` 参数 | 支持 | 部分版本忽略 | 抖音端不要依赖 query 做归因，用业务 entry_point 区分 |
+| 登录 | `wx.login` 返回 code | `tt.login` 返回 code（业务侧再换 openid） | `setAnalyticsUserId` 拿到 openid 后调用即可，SDK 不感知差异 |
+| Storage | `wx.setStorageSync` | `tt.setStorageSync` | StorageAdapter 注入即可 |
+
+抖音激励广告 `onError` 错误码与微信不重合（`tt` 自己的码段），上报时仍走 `err_code` number 透传，dashboard 按 `platform` 维度拆分判读。
+
+### debug 模式自查
+
+接入完成后做一遍下面流程，确认 SDK 真的在跑：
+
+```ts
+Analytics.init({
+  /* ... */
+  debug: true,                  // 打开后 console 会打 [analytics] track xxx 日志
+  flushIntervalMs: 3000,        // 调试期把 15s 调成 3s 验证更快
+});
+
+// 验证手动 flush 走通：
+void Analytics.flush('debug-manual');
+```
+
+期望看到的 console 日志（按时间顺序）：
+
+1. `[analytics] inited gameKey=gameX sdk=0.1.0 endpoint=https://...`
+2. `[analytics] track session_start`（在登录之后才能看到）
+3. `[analytics-sdk:sender] sent batch=N` （没看到说明请求没发出 → 检查 endpoint）
+4. CloudDB `analytics_events` 集合里查到对应 `game_key=gameX` 的事件（用 MCP `readNoSqlDatabaseContent`，见上文「联调验证」章节）
+5. dashboard 的「原始事件」Tab 选 gameX，1 分钟内可见
+
+任一环节断了就停下来排查，**不要**把 debug 关掉裸跑。
+
+### 采样规则注入示例
+
+业务高频自定义 `*_change` 事件如果不限速，会浪费上报配额。建议接入时统一加 0.1 采样：
+
+```ts
+Analytics.init({
+  /* ... */
+  samplingRules: {
+    // 默认已有 coin_change=0.1 / diamond_change=0.1，下面是花花预期接入的扩展：
+    stamina_change: 0.1,
+    ticket_change: 0.1,
+    wish_change: 0.1,
+    // 业务高频但又关键的事件可以保留 0.5：
+    merge_completed: 0.5,
+  },
+  maxPerSecond: 50,             // 单事件名每秒最大上报，超出走 sdk_dropped 自监控
+});
+```
+
+被采样丢弃的量会聚合成 `sdk_dropped` 事件每分钟自动上报一次（`sampling_total` / `rate_total` 字段），dashboard 上反向监控降采样比例。
+
 ## 故障排查
 
 | 现象 | 直接原因 | 处理 |
@@ -268,6 +471,13 @@ https://rosa-env-d7grf78r5dbd37323.service.tcloudbase.com
 | CloudDB 一直没新数据 | 客户端默认 15s 才 flush 一次，或者批太小（<20 条 + 没到 15s）；用 `Analytics.flush()` 手动触发 | 等 15s 或主动 flush；也检查 console 是否有 sender 错误日志 |
 | 经分 dashboard 看不到数据 | 后端 `ingest-events` cron（30s 一次）没跑起来或失败 | 看 `analytics_ingest_runs` 表的 last_error；或 `POST /api/realtime/ingest-now` 手动触发一次 |
 | 老 game_key 数据不再写入 | 改环境变量后没等生效（< 10s） | 等 10 秒后重试 |
+| 事件入库了但 `user_id` **一直为空** | `session_start` 在 `setAnalyticsUserId` 之前就被 track 了；首批事件挂在 `anonymous_id` 上 | 调整 main.ts 启动顺序：先 `await CloudSyncManager.awaitAuthoritativeStartup()` → `setAnalyticsUserId(uid)` → 再 `track(SESSION_START)`（参考 hot-pot `src/main.ts`） |
+| dashboard `app_version` **永远是 `1.0.0`** | hot-pot 残留写法：`Analytics.init({ appVersion: '1.0.0' })` 硬编码 | 切换到构建期注入（[app_version 注入最佳实践](#app_version-注入最佳实践)） |
+| `share_app_message` 入口表里出现 **大量 `unknown`** | 业务调用 `wx.shareAppMessage` 但没在我们封装层经过，`entry_point` 缺失 | 业务方所有 `shareAppMessage` 都走统一封装（参考 hot-pot `src/utils/wechatShare.ts` 的 `trackShareAppMessage`），强制传 `entry_point` |
+| `ad_error` 比真实失败次数 **多一倍** | onError 与 show().catch() 双通路同时上报 | 用 cycle 标志去重（参考 hot-pot `rewardedAd.ts` 的 `errorReportedThisCycle`），同一次播放周期只允许打一次 |
+| 抖音端 `is_ended=true` **比微信高很多** | `tt` 部分版本不返回 `isEnded`，业务用 `res.isEnded !== false` 判定时把 undefined 也算成完看 | 改成 `is_ended: res?.isEnded === true`，只有显式 true 才算完整看完 |
+| DAU 在切前台时段 **明显跳高** | 在 `Platform.onShow` 里重新 track 了 `session_start` | session_start 只在冷启动后打一次；切前台需求改用 `app_show` 事件 |
+| 同一玩家被算成两个 `uk` (DAU 翻倍) | `setAnalyticsUserId` 没调用 / 调用太晚（被前面事件抢先打了） | 走标准启动顺序：登录拿 openid 后**立即**调 `setAnalyticsUserId`，让 SDK 自动 track LOGIN + flush，后端按 LOGIN 事件做 anonymous↔user_id 归一 |
 
 ## 安全风险与升级路径
 

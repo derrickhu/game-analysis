@@ -6,6 +6,7 @@ import { ingestCloudbaseSnapshots } from './cloudbase-ingest';
 import { ANALYTICS_GAMES, getEnabledAnalyticsGames } from './config/analytics-games';
 import { ingestEventsForGame } from './jobs/ingest-events';
 import { cleanExpiredEvents } from './jobs/clean-expired-events';
+import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 
 let started = false;
 
@@ -86,10 +87,37 @@ export function startScheduler(): void {
     }
   });
 
+  // 4) 玩家档案快照（player snapshot）：每天上海时区凌晨 4 点全量拉一次
+  //    与事件流互补：事件流看"做了什么"，快照看"现在是什么状态"
+  //    cron 用 'America/Los_Angeles' 调时区会更稳，这里默认服务器/容器时区已是 UTC+8（华东）
+  //    通过 PLAYER_SNAPSHOT_CRON 环境变量可覆盖（如 '0 4 * * *'）
+  const playerSnapshotCron = process.env.PLAYER_SNAPSHOT_CRON || '0 4 * * *';
+  const snapshotRetentionDays = Math.max(7, Number(process.env.PLAYER_SNAPSHOT_RETENTION_DAYS) || 30);
+  cron.schedule(playerSnapshotCron, async () => {
+    try {
+      console.log('[scheduler] 开始拉取 huahua 玩家档案快照');
+      const result = await ingestHuahuaSnapshots({
+        triggerSource: 'cron',
+        retentionDays: snapshotRetentionDays,
+      });
+      if (result.ok) {
+        console.log(
+          `[scheduler] 玩家快照 huahua: date=${result.snapshot_date} fetched=${result.fetched} ` +
+            `inserted=${result.inserted} pruned=${result.pruned_old_rows} duration=${result.duration_ms}ms`,
+        );
+      } else {
+        console.error(`[scheduler] 玩家快照 huahua 拉取失败: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('[scheduler] 玩家快照 huahua 拉取异常:', error);
+    }
+  });
+
   const enabledKeys = getEnabledAnalyticsGames().map((g) => g.gameKey);
   console.log(
     `[scheduler] started: snapshots(games=${GAME_CONFIGS.length}), ` +
       `events(enabled=${enabledKeys.length}/${ANALYTICS_GAMES.length} [${enabledKeys.join(',')}], cron=${eventsCron}), ` +
-      `cleanup(cron=${cleanCron}, local=${retentionDaysLocal}d, cloud=${retentionDaysCloud}d)`,
+      `cleanup(cron=${cleanCron}, local=${retentionDaysLocal}d, cloud=${retentionDaysCloud}d), ` +
+      `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d)`,
   );
 }

@@ -36,7 +36,7 @@ export const ANALYTICS_GAMES: AnalyticsGameConfig[] = [
     gameKey: 'huahua',
     displayName: '花花妙屋',
     cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: false,
+    enabled: true,
   },
   {
     gameKey: 'caizhu',

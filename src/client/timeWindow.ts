@@ -73,6 +73,45 @@ export function resolveWindow(window: WindowValue): { fromTs: number; toTs: numb
 }
 
 /**
+ * 把 WindowValue 序列化成可放进 URL search 参数的字符串。
+ * - 'today'           → 'today'
+ * - 数字（分钟数）    → '60' / '1440' / '10080' 等
+ * - { kind:'range' }  → 'range:fromTs-toTs'（毫秒时间戳）
+ *
+ * 选择 `kind:value` 的紧凑串而不是 ?from=&to= 双参数，是为了让 URL 一眼能看出窗口类型，
+ * 且复制/分享时少一个参数；与 `WindowValue` 类型一一对应，反序列化容错也好写。
+ */
+export function windowToUrlValue(window: WindowValue): string {
+  if (window === 'today') return 'today';
+  if (typeof window === 'number') return String(window);
+  return `range:${window.fromTs}-${window.toTs}`;
+}
+
+/**
+ * 解析 URL 中的 window 参数为 WindowValue。
+ * 任何不识别 / 缺失 / 非法格式都回退到默认 'today'，避免脏 URL 引发白屏。
+ */
+export function parseWindowFromUrl(raw: string | null | undefined): WindowValue {
+  if (!raw) return DEFAULT_WINDOW;
+  if (raw === 'today') return 'today';
+  if (raw.startsWith('range:')) {
+    const m = /^range:(\d+)-(\d+)$/.exec(raw);
+    if (!m) return DEFAULT_WINDOW;
+    const fromTs = Number(m[1]);
+    const toTs = Number(m[2]);
+    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || toTs <= fromTs) {
+      return DEFAULT_WINDOW;
+    }
+    return { kind: 'range', fromTs, toTs };
+  }
+  const minutes = Number(raw);
+  if (Number.isFinite(minutes) && minutes > 0 && minutes < 60 * 24 * 365) {
+    return minutes;
+  }
+  return DEFAULT_WINDOW;
+}
+
+/**
  * 把窗口选项翻译成后端接口的 query string。三个 realtime 接口都接受 from/to，
  * 这里统一走 from/to 路径，避免老的 window=N 分钟分支被后端 24h 上限卡死，导致 7/30 天预设无效。
  *
