@@ -51,6 +51,15 @@ export interface GameDescriptor {
    * 多个 ID 时按声明顺序在页面纵向堆叠（一般每款游戏 1~3 个面板足够）。
    */
   gameplayPanels?: GameplayPanelId[];
+  /** 通用商业化指标配置。LTV/ARPU/ARPDAU 等平台级指标只看这里，不写游戏专属逻辑。 */
+  monetization?: {
+    /** 是否接入广告变现；当前 LTV 的收入来源主要是 ad_show × eCPM 估算。 */
+    ads: boolean;
+    /** 是否接入内购；预留给 purchase_complete，当前游戏都先为 false。 */
+    iap: boolean;
+    /** eCPM 配置 profile；默认等于 gameKey，后续同一游戏多版本口径可在这里分流。 */
+    ecpmProfile?: string;
+  };
 }
 
 export const ALL_GAMES: GameDescriptor[] = [
@@ -61,6 +70,7 @@ export const ALL_GAMES: GameDescriptor[] = [
     // hot-pot 已完成 SDK 标准化打点（含 level_start/clear/fail），存档差分链路下线
     hasSnapshotIngest: false,
     gameplayPanels: ['level_progress'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'hotpot' },
   },
   {
     gameKey: 'huahua',
@@ -76,6 +86,7 @@ export const ALL_GAMES: GameDescriptor[] = [
       'huahua_growth',
       'huahua_engagement',
     ],
+    monetization: { ads: true, iap: false, ecpmProfile: 'huahua' },
   },
   {
     gameKey: 'caizhu',
@@ -83,6 +94,7 @@ export const ALL_GAMES: GameDescriptor[] = [
     hasAnalyticsSdk: false,
     hasSnapshotIngest: false,
     gameplayPanels: [],
+    monetization: { ads: false, iap: false, ecpmProfile: 'caizhu' },
   },
 ];
 

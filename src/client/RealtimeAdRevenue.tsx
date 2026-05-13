@@ -126,16 +126,43 @@ function formatMinuteLabel(minute: string): string {
 /**
  * 各游戏广告场景中文名映射。
  * key 与客户端打点的 scene 字段保持一致，便于经分人员一眼读懂场景含义。
+ * 命名规范：玩法子模式用前缀分组（如「果切无尽 - xxx」），同游戏不同 Scene 一眼可分。
  * 兼容历史/拼写差异：unlock_next_order_place（旧拼写）与 unlock_next_order_plate 同义。
  */
 const SCENE_LABELS: Record<string, Record<string, string>> = {
   hotpot: {
+    // === BowlScene 主玩法（关卡型，按 levelId 推进） ===
     level_fail_revive: '关卡失败复活',
-    tool_help_free: '道具免费使用',
+    tool_help_free: '关卡道具免费使用',
     unlock_next_order_plate: '解锁下一个订单碟',
     unlock_next_order_place: '解锁下一个订单碟',
-    // 图鉴页进入时触发的插屏广告，微信原生频控（默认 1 次/分钟 + 新用户保护期），无需业务节流
+    // === CatalogScene 图鉴 ===
+    // 进入图鉴时触发的插屏广告，微信原生频控（默认 1 次/分钟 + 新用户保护期），无需业务节流
     catalog_open: '图鉴页插屏',
+    // === FruitSliceEndlessScene 果切无尽（独立挑战玩法） ===
+    // 客户端 UI 标题对照见 src/scenes/FruitSliceEndlessScene.ts
+    fruit_slice_revive: '果切无尽 - 局内复活',
+    fruit_slice_remove_pipe_block: '果切无尽 - 移除管道木板',
+    fruit_slice_tool_eliminate: '果切无尽 - 消除道具',
+    fruit_slice_tool_shuffle: '果切无尽 - 打乱道具',
+  },
+  // huahua 的广告位定义见 game2D_huahua/src/managers/AdManager.ts 的 AdScene 枚举
+  huahua: {
+    // 主玩法激励位
+    stamina_recover: '体力恢复',
+    cd_speedup: '建筑 CD 加速',
+    merch_shop: '商店广告购买',
+    board_cell_unlock: '订单板格子解锁',
+    warehouse_slot_unlock: '仓库格子解锁',
+    special_deco_unlock: '特殊装饰解锁',
+    promo_furniture_unlock: '宣传款家具解锁',
+    merge_bubble_unlock: '合成气泡解锁',
+    // 福利/日常位
+    merch_daily_refresh: '商品每日刷新',
+    flower_sign_daily_draw: '许愿券每日抽',
+    warehouse_organize: '仓库整理',
+    reward_box_organize: '奖励箱整理',
+    checkin_ad_bonus: '签到加餐',
   },
 };
 

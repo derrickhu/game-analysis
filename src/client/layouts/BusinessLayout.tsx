@@ -27,6 +27,8 @@ function BusinessSubTabs() {
   const navigate = useNavigate();
   const location = useLocation();
   const subKey = (() => {
+    if (location.pathname.startsWith('/business/ltv')) return 'ltv';
+    if (location.pathname.startsWith('/business/roi')) return 'roi';
     if (location.pathname.startsWith('/business/gameplay')) return 'gameplay';
     if (location.pathname.startsWith('/business/player-snapshot')) return 'player-snapshot';
     if (location.pathname.startsWith('/business/events')) return 'events';
@@ -42,6 +44,8 @@ function BusinessSubTabs() {
       }}
       items={[
         { key: 'dashboard', label: '大盘运营' },
+        { key: 'ltv', label: '商业化 LTV' },
+        { key: 'roi', label: 'ROI 录入' },
         { key: 'gameplay', label: '玩法分析' },
         { key: 'player-snapshot', label: '玩家档案' },
         { key: 'events', label: '原始事件' },

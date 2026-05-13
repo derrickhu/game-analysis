@@ -37,6 +37,19 @@ import { getOverview } from '../metrics/realtime-overview';
 import { getProgressOverview } from '../metrics/realtime-progress';
 import { getShareOverview } from '../metrics/realtime-share';
 import {
+  getLtvOverview,
+  getMonetizationOverview,
+  recomputeCohortLtv,
+  recomputeUserDaily,
+  toLocalDateKey,
+} from '../metrics/ltv';
+import {
+  getBusinessRoiDecision,
+  getBusinessRoiOverview,
+  removeBusinessDailyInput,
+  saveBusinessDailyInput,
+} from '../metrics/roi';
+import {
   BUCKET_SIZE_MS,
   BUCKET_SIZE_MINUTES,
   HOUR_BUCKET_SIZE_MS,
@@ -75,6 +88,28 @@ interface AdRevenueQuery {
   from?: string;
   to?: string;
   window?: string;
+}
+
+interface LtvQuery extends AdRevenueQuery {
+  from_date?: string;
+  to_date?: string;
+}
+
+interface BusinessInputBody {
+  game?: string;
+  date_key?: string;
+  spend_cny?: number;
+  wechat_clicks?: number;
+  wechat_ad_revenue_cny?: number;
+  wechat_ad_impressions?: number;
+  note?: string;
+}
+
+interface BusinessRoiDecisionQuery {
+  game?: string;
+  target_date?: string;
+  baseline_days?: string;
+  maturity_day?: string;
 }
 
 interface AdRevenueSeriesItem {
@@ -474,6 +509,25 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     return { ok: true, game: gameKey, window_hours: windowHours, bucket_rows: rows };
   });
 
+  // 通用 LTV/商业化底座回算：按 gameKey + 日期范围重建 user_daily 与 cohort_ltv。
+  // body: { game?: string; from_date?: 'YYYY-MM-DD'; to_date?: 'YYYY-MM-DD' }
+  app.post('/api/realtime/recompute-ltv', async (request) => {
+    const body = (request.body || {}) as { game?: string; from_date?: string; to_date?: string };
+    const gameKey = body.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const userDaily = await recomputeUserDaily(gameKey, {
+      fromDate: body.from_date,
+      toDate: body.to_date,
+    });
+    const cohort = await recomputeCohortLtv(gameKey, {
+      fromCohortDate: body.from_date,
+      toCohortDate: body.to_date,
+    });
+    return { ok: true, user_daily: userDaily, cohort_ltv: cohort };
+  });
+
   // 通用看板数据：DAU / 当日新增 / 次留 / 7留 / 5 分钟桶活跃序列
   // 与 ad-revenue 共用 from/to/window 入参口径，前端可以并排查询
   app.get('/api/realtime/overview', async (request) => {
@@ -493,6 +547,117 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       kpi: result.kpi,
       series: result.series,
     };
+  });
+
+  // 通用 LTV Cohort：所有已接入 SDK 的游戏共用，hotpot 只是首个回算样本。
+  app.get('/api/realtime/ltv', async (request) => {
+    const query = (request.query || {}) as LtvQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const fromDate = query.from_date || toLocalDateKey(fromTs);
+    const toDate = query.to_date || toLocalDateKey(toTs);
+    const result = await getLtvOverview(gameKey, fromDate, toDate);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
+      ...result,
+    };
+  });
+
+  // 通用商业化概览：ARPU/ARPDAU/IPM/填充率/完播率/LTV summary。
+  app.get('/api/realtime/monetization', async (request) => {
+    const query = (request.query || {}) as LtvQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const fromDate = query.from_date || toLocalDateKey(fromTs);
+    const toDate = query.to_date || toLocalDateKey(toTs);
+    const result = await getMonetizationOverview(gameKey, fromDate, toDate);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
+      ...result,
+    };
+  });
+
+  // 通用每日经营录入 + ROI：人工录入投放消耗、微信点击/真实收入/真实曝光，
+  // 系统自动关联 gameKey 下的新增用户、LTV 和估算收入。所有游戏共用同一口径。
+  app.get('/api/realtime/business-inputs', async (request) => {
+    const query = (request.query || {}) as LtvQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const fromDate = query.from_date || toLocalDateKey(fromTs);
+    const toDate = query.to_date || toLocalDateKey(toTs);
+    const result = await getBusinessRoiOverview(gameKey, fromDate, toDate);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
+      ...result,
+    };
+  });
+
+  // ROI 投放决策：选择目标日期，用目标日前成熟样本做基线，输出是否放量/观察/降预算。
+  app.get('/api/realtime/business-roi-decision', async (request) => {
+    const query = (request.query || {}) as BusinessRoiDecisionQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const targetDate = String(query.target_date || toLocalDateKey(Date.now())).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'target_date 必须是 YYYY-MM-DD' };
+    }
+    const maturityDay = Number(query.maturity_day) === 7 ? 7 : 3;
+    const result = await getBusinessRoiDecision(gameKey, {
+      targetDate,
+      baselineDays: Number(query.baseline_days) || 7,
+      maturityDay,
+    });
+    return { ok: true, ...result };
+  });
+
+  app.post('/api/realtime/business-inputs', async (request) => {
+    const body = (request.body || {}) as BusinessInputBody;
+    const gameKey = body.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const dateKey = String(body.date_key || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'date_key 必须是 YYYY-MM-DD' };
+    }
+    const row = await saveBusinessDailyInput({
+      game_key: gameKey,
+      date_key: dateKey,
+      spend_cny: Math.max(0, Number(body.spend_cny) || 0),
+      wechat_clicks: Math.max(0, Math.trunc(Number(body.wechat_clicks) || 0)),
+      wechat_ad_revenue_cny: Math.max(0, Number(body.wechat_ad_revenue_cny) || 0),
+      wechat_ad_impressions: Math.max(0, Math.trunc(Number(body.wechat_ad_impressions) || 0)),
+      note: body.note || '',
+    });
+    return { ok: true, row };
+  });
+
+  app.delete('/api/realtime/business-inputs', async (request) => {
+    const query = (request.query || {}) as { game?: string; date_key?: string };
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const dateKey = String(query.date_key || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'date_key 必须是 YYYY-MM-DD' };
+    }
+    const deleted = await removeBusinessDailyInput(gameKey, dateKey);
+    return { ok: true, deleted };
   });
 
   // 广告错误明细 Top N：按 (scene, ad_type, err_code, err_msg) 聚合，

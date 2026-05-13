@@ -10,6 +10,7 @@
     "ingest:file": "tsx src/server/jobs/ingest-file.ts",
     "ingest:cloudbase": "tsx src/server/jobs/ingest-cloudbase.ts",
     "metrics": "tsx src/server/jobs/recompute-metrics.ts",
+    "ltv": "tsx src/server/jobs/recompute-ltv.ts",
     "seed:ad-events": "node scripts/seed-ad-events.mjs",
     "migrate:mysql": "tsx src/server/jobs/migrate-sqlite-to-mysql.ts",
     "verify:mysql": "tsx src/server/jobs/verify-mysql-storage.ts",

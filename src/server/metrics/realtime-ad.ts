@@ -28,6 +28,11 @@ interface AdAggregateBucket {
 // 旧实现已迁移到 metrics/bucket.ts 的 tsToBucket，此处保留一个本地别名以减少改动面积
 const toMinuteBucket = tsToBucket;
 
+function isAdCompleted(params: Record<string, unknown>): boolean {
+  const value = params.completed ?? params.is_ended ?? params.isEnded;
+  return value === true || value === 1 || value === 'true' || value === '1';
+}
+
 /**
  * 重新计算指定 game_key 在 [fromTs, toTs] 时间段内的分钟桶广告聚合。
  * - 在 ingest-events 之后调用，参数是本批事件的最早/最晚 event_ts
@@ -304,7 +309,7 @@ function reduceRowsToBuckets(
         agg.ad_click_cnt += 1;
         break;
       case 'ad_close':
-        if (params.completed === true || params.completed === 1 || params.completed === 'true') {
+        if (isAdCompleted(params)) {
           agg.ad_complete_cnt += 1;
         }
         break;
