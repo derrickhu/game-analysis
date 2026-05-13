@@ -49,6 +49,7 @@ import {
   removeBusinessDailyInput,
   saveBusinessDailyInput,
 } from '../metrics/roi';
+import { analyzeRoiWithDeepSeek } from '../metrics/roi-ai';
 import {
   BUCKET_SIZE_MS,
   BUCKET_SIZE_MINUTES,
@@ -110,6 +111,12 @@ interface BusinessRoiDecisionQuery {
   target_date?: string;
   baseline_days?: string;
   maturity_day?: string;
+}
+
+interface BusinessRoiAiBody {
+  game?: string;
+  baseline_days?: number;
+  maturity_day?: number;
 }
 
 interface AdRevenueSeriesItem {
@@ -622,6 +629,28 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       maturityDay,
     });
     return { ok: true, ...result };
+  });
+
+  // AI 盈利分析：汇总真实 ROI、LTV/留存、规则决策与预算建议后交给 DeepSeek 做结论分析。
+  app.post('/api/realtime/business-roi-ai-analysis', async (request) => {
+    const body = (request.body || {}) as BusinessRoiAiBody;
+    const gameKey = body.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    try {
+      const result = await analyzeRoiWithDeepSeek(gameKey, {
+        baselineDays: Number(body.baseline_days) || 7,
+        maturityDay: Number(body.maturity_day) === 7 ? 7 : 3,
+      });
+      return { ok: true, ...result };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'AI_ANALYSIS_FAILED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   app.post('/api/realtime/business-inputs', async (request) => {

@@ -137,6 +137,22 @@ interface RoiDecisionResponse {
   code?: string;
 }
 
+interface RoiAiAnalysisResponse {
+  ok: boolean;
+  model?: string;
+  generated_at?: number;
+  analysis?: string;
+  input_summary?: {
+    from_date: string;
+    to_date: string;
+    decision_date: string;
+    roi_rows: number;
+    ltv_cohorts: number;
+  };
+  error?: string;
+  code?: string;
+}
+
 function MetricTitle({ label, help }: { label: string; help: string }) {
   return (
     <Space size={4}>
@@ -246,6 +262,19 @@ async function fetchRoiDecision(
   return (await res.json()) as RoiDecisionResponse;
 }
 
+async function fetchRoiAiAnalysis(gameKey: string, baselineDays: number, maturityDay: 3 | 7): Promise<RoiAiAnalysisResponse> {
+  const res = await fetch('/api/realtime/business-roi-ai-analysis', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      game: gameKey,
+      baseline_days: baselineDays,
+      maturity_day: maturityDay,
+    }),
+  });
+  return (await res.json()) as RoiAiAnalysisResponse;
+}
+
 /**
  * 通用 ROI 录入页面。
  * 人工录入投放与微信真实结算数据，新增用户/LTV/估算收入由系统自动关联。
@@ -264,9 +293,11 @@ export function RoiPage() {
   const [decision, setDecision] = useState<RoiDecisionResponse | null>(null);
   const [baselineDays, setBaselineDays] = useState(7);
   const [maturityDay, setMaturityDay] = useState<3 | 7>(3);
+  const [aiAnalysis, setAiAnalysis] = useState<RoiAiAnalysisResponse | null>(null);
   const [draftRows, setDraftRows] = useState<RoiDraftRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
   const requestSeqRef = useRef(0);
   const draftInitializedGameRef = useRef<string | null>(null);
 
@@ -360,6 +391,24 @@ export function RoiPage() {
   useEffect(() => {
     void loadDecision(baselineDays, maturityDay);
   }, [baselineDays, gameKey, loadDecision, maturityDay]);
+
+  const onAiAnalyze = async () => {
+    setAiLoading(true);
+    try {
+      const json = await fetchRoiAiAnalysis(gameKey, baselineDays, maturityDay);
+      if (!json.ok) {
+        message.error(`AI 分析失败: ${json.error || json.code}`);
+        setAiAnalysis(json);
+        return;
+      }
+      setAiAnalysis(json);
+      message.success('AI 分析完成');
+    } catch (error) {
+      message.error(`AI 分析异常: ${String(error)}`);
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const updateDraftRow = (dateKey: string, patch: Partial<RoiDraftRow>) => {
     setDraftRows((rows) => rows.map((row) => (row.date_key === dateKey ? { ...row, ...patch } : row)));
@@ -559,6 +608,11 @@ export function RoiPage() {
               刷新明日策略
             </Button>
           </Col>
+          <Col xs={24} md={6}>
+            <Button loading={aiLoading} onClick={() => void onAiAnalyze()}>
+              DeepSeek 分析盈利与操作
+            </Button>
+          </Col>
         </Row>
 
         <Space orientation="vertical" size="middle" style={{ width: '100%', marginTop: 16 }}>
@@ -585,6 +639,32 @@ export function RoiPage() {
                     : '暂无预算建议。'
                 }
               />
+              {aiAnalysis && (
+                <Card
+                  size="small"
+                  title={`DeepSeek AI 分析${aiAnalysis.model ? ` · ${aiAnalysis.model}` : ''}`}
+                >
+                  {aiAnalysis.ok ? (
+                    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+                      <Text type="secondary">
+                        输入数据：{aiAnalysis.input_summary?.from_date} ~ {aiAnalysis.input_summary?.to_date}；
+                        ROI 行数 {aiAnalysis.input_summary?.roi_rows ?? 0}；
+                        LTV cohort {aiAnalysis.input_summary?.ltv_cohorts ?? 0}
+                      </Text>
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit' }}>
+                        {aiAnalysis.analysis}
+                      </pre>
+                    </Space>
+                  ) : (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="AI 分析暂不可用"
+                      description={aiAnalysis.error || '请确认后端已配置 DEEPSEEK_API_KEY。'}
+                    />
+                  )}
+                </Card>
+              )}
               <Row gutter={[16, 16]}>
                 <Col xs={12} md={4}>
                   <Card size="small">
