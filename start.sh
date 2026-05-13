@@ -15,6 +15,10 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
+# 锁定时区到 Asia/Shanghai：toLocalDateKey 与 first_seen_date 都依赖服务器本地时区，
+# 容器/CI 默认 UTC 会让广东时间晚上 8 点后的事件被切到第二天，导致 CPI/ROI 与运营录入对不齐。
+export TZ="${TZ:-Asia/Shanghai}"
+
 start_one() {
   local name="$1"
   local pid_file="$RUN_DIR/$name.pid"

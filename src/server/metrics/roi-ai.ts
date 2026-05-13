@@ -28,14 +28,18 @@ function compactJson(value: unknown): string {
 
 function buildPrompt(input: {
   gameKey: string;
+  baselineDays: number;
   decision: Awaited<ReturnType<typeof getBusinessRoiDecision>>;
   roiOverview: Awaited<ReturnType<typeof getBusinessRoiOverview>>;
   ltvOverview: Awaited<ReturnType<typeof getLtvOverview>>;
 }): string {
+  // 最近 ROI 行截断量与 baselineDays 一致，避免选了 14/30 天基线却只送 7 天数据导致 AI 输出错位。
+  // 上限 30 控制 prompt 长度，保留与 DeepSeek 超时口径匹配的安全余量。
+  const recentDays = Math.max(7, Math.min(30, input.baselineDays));
   const recentRows = input.roiOverview.rows
     .slice()
     .sort((a, b) => a.date_key.localeCompare(b.date_key))
-    .slice(-7)
+    .slice(-recentDays)
     .map((row) => ({
       date: row.date_key,
       spend: row.spend_cny,
@@ -170,7 +174,7 @@ export async function analyzeRoiWithDeepSeek(
     getBusinessRoiOverview(gameKey, fromDate, toDate),
     getLtvOverview(gameKey, fromDate, toDate),
   ]);
-  const prompt = buildPrompt({ gameKey, decision, roiOverview, ltvOverview });
+  const prompt = buildPrompt({ gameKey, baselineDays, decision, roiOverview, ltvOverview });
   const ai = await withTimeout(callDeepSeek(prompt), deepSeekTimeoutMs());
   return {
     game_key: gameKey,

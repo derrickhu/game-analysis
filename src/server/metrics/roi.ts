@@ -161,7 +161,12 @@ function buildLtvProjectionMap(rows: CohortLtvDailyRow[]): Map<string, number | 
 
   const out = new Map<string, number | null>();
   for (const [date, list] of byDate.entries()) {
-    const byAge = new Map(list.map((r) => [Number(r.age_day), Number(r.ltv_cny)]));
+    // 与 ltv.ts/projectFromRows 保持同一口径：只承认 is_complete_day=1 的 D3/D7/D30，
+    // 避免 cohort 刚满 D7 当天就被取还在累计中的部分值乘 1.9，造成 D30 LTV 低估、CPI 看似不达标。
+    const byAge = new Map<number, number>();
+    for (const r of list) {
+      if (Number(r.is_complete_day) === 1) byAge.set(Number(r.age_day), Number(r.ltv_cny));
+    }
     const d30 = byAge.get(30);
     const d7 = byAge.get(7);
     const d3 = byAge.get(3);
@@ -483,14 +488,25 @@ export async function getBusinessRoiDecision(
     nextSteps.push('暂不加大投放，保持预算观察 D7 数据。');
     nextSteps.push('优先优化广告触发、留存和首日变现，提高 LTV 安全边际。');
   } else {
+    // D30 预测不能回本时需要进一步区分原因：
+    // - 首日 ROI 过低（每花 1 块当天回不到 5 分）说明游戏侧变现/留存/广告点位有问题；
+    // - 首日 ROI 不算差但 CPI 远高于可承受 LTV，更可能是买量/素材/定向问题。
+    // 旧实现按 `cpi > ltv ? reduce_budget : optimize_game` 判断，但 ROI<1 时 cpi 一定 > ltv，
+    // 导致 optimize_game 永远不会触发；这里改用 D0 ROI 当变现强度的代理指标。
     const cpi = target.cpi_cny || 0;
     const ltv = target.d30_projected_ltv_cny || 0;
-    action = cpi > ltv ? 'reduce_budget' : 'optimize_game';
+    const d0Roi = target.d0_roi ?? 0;
+    const monetizationWeak = d0Roi < 0.05;
+    action = monetizationWeak ? 'optimize_game' : 'reduce_budget';
     confidence = target.game_new_users >= 500 ? 'medium' : 'low';
-    issueType = cpi > ltv ? 'traffic' : 'game_monetization';
+    issueType = monetizationWeak ? 'game_monetization' : 'traffic';
     reasons.push(`${targetDate} D30 预测 ROI 低于 100%，当前批次预测不能回本。`);
-    reasons.push(`CPI ${cpi.toFixed(4)} 元，可承受 CPI 约 ${ltv.toFixed(4)} 元。`);
-    nextSteps.push(cpi > ltv ? '先降预算或暂停放量，优化素材/定向以降低 CPI。' : '优先优化游戏留存、广告点位和变现效率。');
+    reasons.push(`CPI ${cpi.toFixed(4)} 元，可承受 CPI 约 ${ltv.toFixed(4)} 元；D0 ROI ${(d0Roi * 100).toFixed(1)}%。`);
+    nextSteps.push(
+      monetizationWeak
+        ? '首日变现过弱，优先排查广告点位、激励触发频次、留存与新手引导，再考虑投放规模。'
+        : '先降预算或暂停放量，优化素材/定向/出价以降低 CPI；CPI 回落后再小幅试投。',
+    );
   }
 
   if (validRows.length === 0) {

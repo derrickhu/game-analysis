@@ -7,6 +7,7 @@ import { ANALYTICS_GAMES, getEnabledAnalyticsGames } from './config/analytics-ga
 import { ingestEventsForGame } from './jobs/ingest-events';
 import { cleanExpiredEvents } from './jobs/clean-expired-events';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
+import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 
 let started = false;
 
@@ -113,11 +114,41 @@ export function startScheduler(): void {
     }
   });
 
+  // 5) 通用 LTV / user_daily 回算：每 15 分钟把所有已接入 SDK 的游戏批量重算一次
+  //    - 不回算等于 ROI 页面看到的 game_new_users / d30_projected_ltv 永远是上一次手动回算时的快照
+  //    - 频率 15 分钟与 events 拉取 5 分钟相比已经留了缓冲，避免事件还未入库就回算空数据
+  //    - 通过 LTV_RECOMPUTE_CRON 覆盖；服务启动后立即跑一次保证刚部署也有最新底座
+  const ltvCron = process.env.LTV_RECOMPUTE_CRON || '*/15 * * * *';
+  const runLtvRecompute = async (trigger: 'cron' | 'startup') => {
+    for (const game of getEnabledAnalyticsGames()) {
+      try {
+        const userDaily = await recomputeUserDaily(game.gameKey);
+        const cohort = await recomputeCohortLtv(game.gameKey);
+        if (userDaily.rows > 0 || cohort.rows > 0) {
+          console.log(
+            `[scheduler] ltv(${trigger}) ${game.gameKey}: user_daily=${userDaily.rows}, ` +
+              `cohort=${cohort.rows}, range=${userDaily.from_date}~${userDaily.to_date}`,
+          );
+        }
+      } catch (error) {
+        console.error(`[scheduler] ltv 回算失败 ${game.gameKey}:`, error);
+      }
+    }
+  };
+  cron.schedule(ltvCron, () => {
+    void runLtvRecompute('cron');
+  });
+  // 进程启动后异步触发一次，避免 dashboard 第一次打开时看到的还是上次部署前的数据
+  setTimeout(() => {
+    void runLtvRecompute('startup');
+  }, 5_000);
+
   const enabledKeys = getEnabledAnalyticsGames().map((g) => g.gameKey);
   console.log(
     `[scheduler] started: snapshots(games=${GAME_CONFIGS.length}), ` +
       `events(enabled=${enabledKeys.length}/${ANALYTICS_GAMES.length} [${enabledKeys.join(',')}], cron=${eventsCron}), ` +
       `cleanup(cron=${cleanCron}, local=${retentionDaysLocal}d, cloud=${retentionDaysCloud}d), ` +
-      `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d)`,
+      `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d), ` +
+      `ltv_recompute(cron=${ltvCron})`,
   );
 }

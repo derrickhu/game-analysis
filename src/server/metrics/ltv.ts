@@ -220,6 +220,20 @@ export async function recomputeUserDaily(
     [gameKey, fromTs, toTs],
   );
 
+  // 是否算"业务活跃"：必须出现至少一个真实用户行为事件，
+  // ad_request / ad_error 是系统/SDK 自身行为，不能让"只发了请求没真进游戏"也被算 DAU 和留存。
+  // 与 DAU 行业口径（session_start 起算）保持一致，再额外接受其它玩法/广告展示事件兜底。
+  const BUSINESS_ACTIVE_EVENTS = new Set([
+    'session_start',
+    'session_end',
+    'ad_show',
+    'ad_close',
+    'level_start',
+    'level_clear',
+    'level_fail',
+    'share_app_message',
+  ]);
+
   const now = Date.now();
   const dailyMap = new Map<string, UserDailyRow>();
   for (const row of rows as RawEventForDaily[]) {
@@ -236,7 +250,7 @@ export async function recomputeUserDaily(
         user_key: userKey,
         first_seen_date: firstSeenDate,
         is_new_user: firstSeenDate === dateKey ? 1 : 0,
-        is_active: 1,
+        is_active: 0,
         session_cnt: 0,
         session_duration_ms: 0,
         ad_request_cnt: 0,
@@ -252,6 +266,9 @@ export async function recomputeUserDaily(
         updated_at: now,
       };
       dailyMap.set(key, daily);
+    }
+    if (BUSINESS_ACTIVE_EVENTS.has(row.event_name)) {
+      daily.is_active = 1;
     }
     const params = parseParams(row.params_json);
     switch (row.event_name) {
@@ -379,12 +396,18 @@ function projectFromRows(rows: CohortLtvDailyRow[]): {
   d60: number | null;
   method: LtvSummary['projection_method'];
 } {
-  const byAge = new Map(rows.map((r) => [Number(r.age_day), Number(r.ltv_cny)]));
-  const d30 = byAge.get(30);
+  // 只用已完整观测的 D3/D7/D30 做外推：cohort 在 D7 当天的 LTV 还在累计中（is_complete_day=0），
+  // 直接乘 1.9 会让"今天刚满 D7 的 cohort"被低估为更悲观的 D30，进而误判 ROI 不能回本。
+  // 改用 is_complete_day=1 的 row，保证 D7 是真正一整天的累计值。
+  const completeByAge = new Map<number, number>();
+  for (const r of rows) {
+    if (Number(r.is_complete_day) === 1) completeByAge.set(Number(r.age_day), Number(r.ltv_cny));
+  }
+  const d30 = completeByAge.get(30);
   if (d30 !== undefined) return { d30: round4(d30), d60: null, method: 'observed_only' };
-  const d7 = byAge.get(7);
+  const d7 = completeByAge.get(7);
   if (d7 !== undefined) return { d30: round4(d7 * 1.9), d60: round4(d7 * 2.4), method: 'ratio_d7' };
-  const d3 = byAge.get(3);
+  const d3 = completeByAge.get(3);
   if (d3 !== undefined) return { d30: round4(d3 * 3.2), d60: null, method: 'ratio_d3' };
   return { d30: null, d60: null, method: 'insufficient_data' };
 }
@@ -494,10 +517,12 @@ function buildSummary(cohorts: LtvCohort[]): LtvSummary {
 }
 
 function projectFromPoints(points: LtvCohort['points']): LtvSummary['projection_method'] {
-  const ages = new Set(points.map((p) => p.age_day));
-  if (ages.has(30)) return 'observed_only';
-  if (ages.has(7)) return 'ratio_d7';
-  if (ages.has(3)) return 'ratio_d3';
+  // 与 projectFromRows 保持一致：只承认 is_complete_day=true 的观测点，
+  // 否则汇总 method 会显示 ratio_d7，而单 cohort 实际还在累计中，前端展示会误导。
+  const completeAges = new Set(points.filter((p) => p.is_complete_day).map((p) => p.age_day));
+  if (completeAges.has(30)) return 'observed_only';
+  if (completeAges.has(7)) return 'ratio_d7';
+  if (completeAges.has(3)) return 'ratio_d3';
   return 'insufficient_data';
 }
 

@@ -1,3 +1,11 @@
+// 时区锁定到 Asia/Shanghai：所有按自然日聚合的指标（user_daily / cohort_ltv / ROI 录入 / 决策）
+// 都依赖 toLocalDateKey() 取服务器本地时区，部署到 UTC 容器会让事件被错切到第二天，
+// 导致 first_seen_date、CPI、D0 ROI 与运营录入的 date_key 全部对不齐。
+// 通过 process.env 显式声明，覆盖容器默认 TZ，未设置时强制使用上海时区。
+if (!process.env.TZ) {
+  process.env.TZ = 'Asia/Shanghai';
+}
+
 import Fastify from 'fastify';
 
 import { getConfig } from './config';
@@ -14,6 +22,7 @@ const app = Fastify({ logger: true });
 
 app.log.info({
   storageMode: config.storageMode,
+  tz: process.env.TZ,
   mysql: {
     host: config.mysql.host,
     port: config.mysql.port,
