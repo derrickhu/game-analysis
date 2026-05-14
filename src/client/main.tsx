@@ -7,13 +7,13 @@ import { Navigate, RouterProvider, createBrowserRouter } from 'react-router-dom'
 
 import { BusinessLayout } from './layouts/BusinessLayout';
 import { OpsLayout } from './layouts/OpsLayout';
+import { CommercialPage } from './pages/CommercialPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { EventsPage } from './pages/EventsPage';
 import { GameplayPage } from './pages/GameplayPage';
-import { LtvPage } from './pages/LtvPage';
 import { OpsPage } from './pages/OpsPage';
 import { PlayerSnapshotPage } from './pages/PlayerSnapshotPage';
-import { RoiPage } from './pages/RoiPage';
+import { RetentionPage } from './pages/RetentionPage';
 import './styles.css';
 
 /**
@@ -21,8 +21,8 @@ import './styles.css';
  *   /                          → 重定向 /business/dashboard
  *   /business                  → 重定向 /business/dashboard
  *   /business/dashboard?game=&window=         大盘运营（通用：KPI + 活跃趋势 + 广告 + 分享）
- *   /business/ltv?game=&window=               商业化 LTV（通用：cohort LTV + 商业化漏斗）
- *   /business/roi?game=&window=               ROI 录入（通用：投放花费 + 微信真实收入录入）
+ *   /business/retention?game=                 留存分析（cohort D0-D30 + 设备拆分）
+ *   /business/commercial?game=&window=        商业化分析（ROI 决策 + LTV 回收 + 真实录入）
  *   /business/gameplay?game=&window=          玩法分析（按 gameKey 渲染各自漏斗 panel）
  *   /business/player-snapshot?game=           玩家档案（每日全量 DB 快照，不响应时间窗口）
  *   /business/events?game=&window=            原始事件（EventsExplorer）
@@ -44,8 +44,10 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/business/dashboard" replace /> },
       { path: 'dashboard', element: <DashboardPage /> },
-      { path: 'ltv', element: <LtvPage /> },
-      { path: 'roi', element: <RoiPage /> },
+      { path: 'retention', element: <RetentionPage /> },
+      { path: 'commercial', element: <CommercialPage /> },
+      { path: 'ltv', element: <Navigate to="/business/commercial" replace /> },
+      { path: 'roi', element: <Navigate to="/business/commercial" replace /> },
       { path: 'gameplay', element: <GameplayPage /> },
       { path: 'player-snapshot', element: <PlayerSnapshotPage /> },
       { path: 'events', element: <EventsPage /> },
