@@ -44,6 +44,11 @@ import {
   toLocalDateKey,
 } from '../metrics/ltv';
 import {
+  findLatestRetentionCohortDate,
+  getRetentionCohortRangeOverview,
+  getPrecomputedRetentionCohortOverview,
+} from '../metrics/retention';
+import {
   getBusinessRoiDecision,
   getBusinessRoiOverview,
   removeBusinessDailyInput,
@@ -94,6 +99,14 @@ interface AdRevenueQuery {
 interface LtvQuery extends AdRevenueQuery {
   from_date?: string;
   to_date?: string;
+}
+
+interface RetentionCohortQuery {
+  game?: string;
+  cohort_date?: string;
+  from_date?: string;
+  to_date?: string;
+  max_age?: string;
 }
 
 interface BusinessInputBody {
@@ -590,6 +603,55 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
       ...result,
     };
+  });
+
+  // 通用 cohort 留存分析：按某个新增日期 cohort 输出 D0-D30 留存曲线，并按设备类型拆分。
+  app.get('/api/realtime/retention-cohort', async (request) => {
+    const query = (request.query || {}) as RetentionCohortQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const maxAge = Number(query.max_age) || 30;
+    const defaultCohortDate =
+      query.cohort_date || (await findLatestRetentionCohortDate(gameKey, Math.min(maxAge, 7))) || toLocalDateKey(Date.now() - 86_400_000);
+    const cohortDate = String(defaultCohortDate).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cohortDate)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'cohort_date 必须是 YYYY-MM-DD' };
+    }
+    const result = await getPrecomputedRetentionCohortOverview(gameKey, cohortDate, {
+      maxAge,
+    });
+    return { ok: true, ...result };
+  });
+
+  // 多天 cohort 留存分析：一次性返回日期范围内所有 cohort，用于趋势图和留存矩阵。
+  app.get('/api/realtime/retention-cohorts', async (request) => {
+    const query = (request.query || {}) as RetentionCohortQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const today = toLocalDateKey(Date.now());
+    const defaultToDate = toLocalDateKey(Date.now() - 86_400_000);
+    const defaultFromDate = toLocalDateKey(Date.now() - 14 * 86_400_000);
+    let fromDate = String(query.from_date || defaultFromDate).trim();
+    let toDate = String(query.to_date || defaultToDate).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'from_date/to_date 必须是 YYYY-MM-DD' };
+    }
+    // 留存是 cohort 自然日分析，今天的 cohort 还没完整结束。用户从顶部时间窗口或日历误选今天时，
+    // 自动回退到昨天，而不是返回错误后让前端显示 0，避免误以为没有数据。
+    if (toDate >= today) {
+      toDate = defaultToDate;
+    }
+    if (fromDate > toDate) {
+      fromDate = toLocalDateKey(new Date(`${toDate}T00:00:00`).getTime() - 13 * 86_400_000);
+    }
+    const result = await getRetentionCohortRangeOverview(gameKey, fromDate, toDate, {
+      maxAge: Number(query.max_age) || 30,
+    });
+    return { ok: true, ...result };
   });
 
   // 通用每日经营录入 + ROI：人工录入投放消耗、微信点击/真实收入/真实曝光，

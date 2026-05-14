@@ -8,6 +8,7 @@ import { ingestEventsForGame } from './jobs/ingest-events';
 import { cleanExpiredEvents } from './jobs/clean-expired-events';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
+import { recomputeRetentionCohorts } from './metrics/retention';
 
 let started = false;
 
@@ -124,10 +125,14 @@ export function startScheduler(): void {
       try {
         const userDaily = await recomputeUserDaily(game.gameKey);
         const cohort = await recomputeCohortLtv(game.gameKey);
-        if (userDaily.rows > 0 || cohort.rows > 0) {
+        const retention = await recomputeRetentionCohorts(game.gameKey, {
+          fromDate: userDaily.from_date,
+          toDate: userDaily.to_date,
+        });
+        if (userDaily.rows > 0 || cohort.rows > 0 || retention.rows > 0) {
           console.log(
             `[scheduler] ltv(${trigger}) ${game.gameKey}: user_daily=${userDaily.rows}, ` +
-              `cohort=${cohort.rows}, range=${userDaily.from_date}~${userDaily.to_date}`,
+              `cohort=${cohort.rows}, retention=${retention.rows}, range=${userDaily.from_date}~${userDaily.to_date}`,
           );
         }
       } catch (error) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Button,
   Card,
   Col,
   Empty,
@@ -13,6 +14,7 @@ import {
   message,
 } from 'antd';
 import ReactECharts from 'echarts-for-react';
+import { useNavigate } from 'react-router-dom';
 
 import { getGameDescriptor } from '../../shared/games';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -69,9 +71,50 @@ interface AdSummaryLiteResponse {
   error?: string;
 }
 
+interface RetentionSummaryResponse {
+  ok: boolean;
+  cohort_date?: string;
+  overall?: {
+    cohort_size: number;
+    points: Array<{ age_day: number; retained_users: number | null; retention_rate: number | null; is_complete_day: boolean }>;
+  };
+  devices?: Array<{
+    device_type: string;
+    cohort_size: number;
+    points: Array<{ age_day: number; retained_users: number | null; retention_rate: number | null; is_complete_day: boolean }>;
+  }>;
+  code?: string;
+  error?: string;
+}
+
 function formatRetentionRate(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
   return (value * 100).toFixed(1);
+}
+
+function retentionPoint(
+  segment: { points: Array<{ age_day: number; retention_rate: number | null }> } | undefined,
+  ageDay: number,
+): number | null {
+  return segment?.points.find((point) => point.age_day === ageDay)?.retention_rate ?? null;
+}
+
+function buildDeviceRetentionInsight(data: RetentionSummaryResponse | null): string {
+  const candidates = (data?.devices || [])
+    .map((device) => ({
+      deviceType: device.device_type,
+      cohortSize: device.cohort_size,
+      d7: retentionPoint(device, 7),
+    }))
+    .filter((item) => item.cohortSize >= 30 && item.d7 !== null)
+    .sort((a, b) => Number(b.d7) - Number(a.d7));
+  if (candidates.length === 0) return '设备样本不足，暂不判断平台差异';
+  const best = candidates[0];
+  const worst = candidates[candidates.length - 1];
+  if (!worst || best.deviceType === worst.deviceType) {
+    return `${best.deviceType} D7 留存 ${(Number(best.d7) * 100).toFixed(1)}%，当前样本最稳`;
+  }
+  return `${best.deviceType} D7 ${(Number(best.d7) * 100).toFixed(1)}%，高于 ${worst.deviceType} ${(Number(worst.d7) * 100).toFixed(1)}%`;
 }
 
 function formatRetentionFraction(
@@ -117,6 +160,7 @@ function bucketShort(bucket: string): string {
  * 在 /business/gameplay 单独承载。这样所有游戏的大盘视图视觉对齐、产品决策口径一致。
  */
 export function DashboardPage() {
+  const navigate = useNavigate();
   const {
     gameKey,
     windowSel,
@@ -130,6 +174,7 @@ export function DashboardPage() {
 
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [adSummary, setAdSummary] = useState<AdSummaryLiteResponse | null>(null);
+  const [retentionSummary, setRetentionSummary] = useState<RetentionSummaryResponse | null>(null);
   const requestSeqRef = useRef(0);
 
   const loadAll = useCallback(
@@ -151,7 +196,10 @@ export function DashboardPage() {
         const adSummaryPromise = fetch(
           `/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         ).then((r) => r.json() as Promise<AdSummaryLiteResponse>);
-        const [ovRes, adRes] = await Promise.all([overviewPromise, adSummaryPromise]);
+        const retentionSummaryPromise = fetch(
+          `/api/realtime/retention-cohort?game=${encodeURIComponent(nextGameKey)}&max_age=7`,
+        ).then((r) => r.json() as Promise<RetentionSummaryResponse>);
+        const [ovRes, adRes, retentionRes] = await Promise.all([overviewPromise, adSummaryPromise, retentionSummaryPromise]);
         // 防止竞态：仅最新一次请求结果生效
         if (seq !== requestSeqRef.current) return;
         if (!ovRes.ok) {
@@ -159,6 +207,7 @@ export function DashboardPage() {
         }
         setOverview(ovRes);
         setAdSummary(adRes);
+        setRetentionSummary(retentionRes.ok ? retentionRes : null);
         setLastRefreshedAt(Date.now());
       } catch (error) {
         if (seq !== requestSeqRef.current) return;
@@ -252,6 +301,9 @@ export function DashboardPage() {
   }
 
   const overviewKpi = overview?.kpi;
+  const summaryD1 = retentionPoint(retentionSummary?.overall, 1);
+  const summaryD7 = retentionPoint(retentionSummary?.overall, 7);
+  const retentionInsight = buildDeviceRetentionInsight(retentionSummary);
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
@@ -363,6 +415,42 @@ export function DashboardPage() {
               }
             />
             <Text type="secondary">{overview?.query?.from?.slice(0, 10) || '-'}</Text>
+          </Card>
+        </Col>
+        <Col span={24}>
+          <Card
+            title="留存摘要（cohort 非实时）"
+            extra={
+              <Button
+                type="link"
+                onClick={() => navigate({ pathname: '/business/retention', search: `?game=${encodeURIComponent(gameKey)}` })}
+              >
+                查看留存分析
+              </Button>
+            }
+          >
+            <Row gutter={[16, 16]} align="middle">
+              <Col xs={12} md={4}>
+                <Statistic title="Cohort 日期" value={retentionSummary?.cohort_date || '-'} />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="Cohort 人数" value={retentionSummary?.overall?.cohort_size ?? 0} suffix="人" />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="D1 次留" value={summaryD1 !== null ? summaryD1 * 100 : 0} suffix="%" precision={1} />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="D7 留存" value={summaryD7 !== null ? summaryD7 * 100 : 0} suffix="%" precision={1} />
+              </Col>
+              <Col xs={24} md={8}>
+                <Space orientation="vertical" size={0}>
+                  <Text>{retentionInsight}</Text>
+                  <Text type="secondary">
+                    取最近 D7 已成熟的 cohort；完整 D0-D30 曲线和设备筛选请进入留存分析页。
+                  </Text>
+                </Space>
+              </Col>
+            </Row>
           </Card>
         </Col>
         <Col span={24}>
