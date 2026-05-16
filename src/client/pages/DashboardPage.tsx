@@ -318,8 +318,8 @@ export function DashboardPage() {
             </Text>
             <Text type="secondary">
               用户身份：优先 user_id（业务 openid），未登录时降级到 anonymous_id；活跃用 session_start
-              去重；留存以"窗口结束日所在自然日"为锚点，cohort=锚点日前 1/7 日整日，retain=cohort
-              中锚点日仍有事件的去重数。
+              去重；本页展示的是新增留存：cohort=锚点日前 1/7 日首次进入游戏的新用户，retain=cohort
+              中锚点日仍有业务活跃事件的去重数。活跃次留另指“前一日活跃用户次日仍活跃”，不等同新增次留。
             </Text>
           </Space>
         }
@@ -368,9 +368,9 @@ export function DashboardPage() {
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="锚点日 = 当前时间窗口结束日所在自然日。次留 D1 = 锚点日前 1 日 cohort 中、在锚点日仍有事件的比例。窗口切到 5/8 一整天时即为 5/7 → 5/8 的次留。">
+            <Tooltip title="锚点日 = 当前时间窗口结束日所在自然日。D1 新增次留 = 锚点日前 1 日新增 cohort 中、在锚点日仍有业务活跃事件的比例。活跃次留是“前一日活跃用户次日仍活跃”，这里不展示。窗口切到 5/8 一整天时即为 5/7 新用户 → 5/8 回访。">
               <Statistic
-                title="次留 D1"
+                title="D1 新增次留"
                 value={formatRetentionRate(overviewKpi?.retention_d1_rate)}
                 suffix={overviewKpi?.retention_d1_rate ? '%' : ''}
               />
@@ -387,7 +387,7 @@ export function DashboardPage() {
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="7 留 D7 = 锚点日前 7 日 cohort 中、在锚点日仍有事件的比例。打点不足 7 天时 cohort 为 0。">
+            <Tooltip title="7 留 D7 = 锚点日前 7 日新增 cohort 中、在锚点日仍有业务活跃事件的比例。打点不足 7 天时 cohort 为 0。">
               <Statistic
                 title="7 留 D7"
                 value={formatRetentionRate(overviewKpi?.retention_d7_rate)}
@@ -437,7 +437,7 @@ export function DashboardPage() {
                 <Statistic title="Cohort 人数" value={retentionSummary?.overall?.cohort_size ?? 0} suffix="人" />
               </Col>
               <Col xs={12} md={4}>
-                <Statistic title="D1 次留" value={summaryD1 !== null ? summaryD1 * 100 : 0} suffix="%" precision={1} />
+                <Statistic title="D1 新增次留" value={summaryD1 !== null ? summaryD1 * 100 : 0} suffix="%" precision={1} />
               </Col>
               <Col xs={12} md={4}>
                 <Statistic title="D7 留存" value={summaryD7 !== null ? summaryD7 * 100 : 0} suffix="%" precision={1} />

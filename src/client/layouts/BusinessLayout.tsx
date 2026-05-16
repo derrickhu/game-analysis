@@ -63,6 +63,7 @@ function BusinessSubTabs() {
  * 抽出来是因为它要消费 AnalyticsFilterContext，必须在 Provider 内部。
  */
 function BusinessHeaderControls() {
+  const location = useLocation();
   const {
     gameKey,
     setGameKey,
@@ -78,6 +79,10 @@ function BusinessHeaderControls() {
   const gameDescriptor = getGameDescriptor(gameKey);
   const isIntegrated = gameDescriptor?.hasAnalyticsSdk === true;
   const resolved = resolveWindow(windowSel);
+  const usesPageTimeWindow =
+    location.pathname.startsWith('/business/commercial') ||
+    location.pathname.startsWith('/business/ltv') ||
+    location.pathname.startsWith('/business/roi');
 
   return (
     <Space wrap>
@@ -100,56 +105,62 @@ function BusinessHeaderControls() {
           ),
         }))}
       />
-      {/*
-        时间窗口快捷下拉：仅承载预设档位，自定义时间范围由右侧 RangePicker 接管。
-        当前是自定义状态时，下拉清空显示，提示用户区间已由 RangePicker 决定。
-      */}
-      <Select
-        value={isCustomRange(windowSel) ? undefined : windowSel}
-        placeholder="自定义时间窗口"
-        onChange={(v) => setWindowSel(v as WindowValue)}
-        options={WINDOW_OPTIONS}
-        style={{ width: 160 }}
-        disabled={!isIntegrated}
-        allowClear={false}
-      />
-      <RangePicker
-        format="YYYY-MM-DD"
-        allowClear={false}
-        disabled={!isIntegrated}
-        value={[dayjs(resolved.fromTs), dayjs(resolved.toTs)] as [Dayjs, Dayjs]}
-        onChange={(range) => {
-          if (!range || !range[0] || !range[1]) return;
-          // 用户在日历里选 5/3 ~ 5/8 时，落地为 5/3 00:00 ~ 5/8 23:59:59；
-          // 但 toTs 不能越过"现在"，否则后端按未来时间生成空桶 / 客户端时钟漂移会让某些桶
-          // active_uu=ad_uau=1 算出 100% 渗透率误导发版分析。这里 clamp 到 now。
-          const fromTs = range[0].startOf('day').valueOf();
-          const toTs = Math.min(range[1].endOf('day').valueOf(), Date.now());
-          if (toTs <= fromTs) {
-            message.warning('结束时间必须晚于开始时间');
-            return;
-          }
-          setWindowSel({ kind: 'range', fromTs, toTs });
-        }}
-        presets={[
-          { label: '今天', value: [dayjs().startOf('day'), dayjs()] as [Dayjs, Dayjs] },
-          {
-            label: '昨天',
-            value: [
-              dayjs().subtract(1, 'day').startOf('day'),
-              dayjs().subtract(1, 'day').endOf('day'),
-            ] as [Dayjs, Dayjs],
-          },
-          {
-            label: '近 7 天',
-            value: [dayjs().subtract(6, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs],
-          },
-          {
-            label: '近 30 天',
-            value: [dayjs().subtract(29, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs],
-          },
-        ]}
-      />
+      {usesPageTimeWindow ? (
+        <Tag color="blue">本页使用页内时间窗口</Tag>
+      ) : (
+        <>
+          {/*
+            时间窗口快捷下拉：仅承载预设档位，自定义时间范围由右侧 RangePicker 接管。
+            当前是自定义状态时，下拉清空显示，提示用户区间已由 RangePicker 决定。
+          */}
+          <Select
+            value={isCustomRange(windowSel) ? undefined : windowSel}
+            placeholder="自定义时间窗口"
+            onChange={(v) => setWindowSel(v as WindowValue)}
+            options={WINDOW_OPTIONS}
+            style={{ width: 160 }}
+            disabled={!isIntegrated}
+            allowClear={false}
+          />
+          <RangePicker
+            format="YYYY-MM-DD"
+            allowClear={false}
+            disabled={!isIntegrated}
+            value={[dayjs(resolved.fromTs), dayjs(resolved.toTs)] as [Dayjs, Dayjs]}
+            onChange={(range) => {
+              if (!range || !range[0] || !range[1]) return;
+              // 用户在日历里选 5/3 ~ 5/8 时，落地为 5/3 00:00 ~ 5/8 23:59:59；
+              // 但 toTs 不能越过"现在"，否则后端按未来时间生成空桶 / 客户端时钟漂移会让某些桶
+              // active_uu=ad_uau=1 算出 100% 渗透率误导发版分析。这里 clamp 到 now。
+              const fromTs = range[0].startOf('day').valueOf();
+              const toTs = Math.min(range[1].endOf('day').valueOf(), Date.now());
+              if (toTs <= fromTs) {
+                message.warning('结束时间必须晚于开始时间');
+                return;
+              }
+              setWindowSel({ kind: 'range', fromTs, toTs });
+            }}
+            presets={[
+              { label: '今天', value: [dayjs().startOf('day'), dayjs()] as [Dayjs, Dayjs] },
+              {
+                label: '昨天',
+                value: [
+                  dayjs().subtract(1, 'day').startOf('day'),
+                  dayjs().subtract(1, 'day').endOf('day'),
+                ] as [Dayjs, Dayjs],
+              },
+              {
+                label: '近 7 天',
+                value: [dayjs().subtract(6, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs],
+              },
+              {
+                label: '近 30 天',
+                value: [dayjs().subtract(29, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs],
+              },
+            ]}
+          />
+        </>
+      )}
       <Button onClick={() => triggerRefresh()} loading={loading} disabled={!isIntegrated}>
         刷新
       </Button>

@@ -270,7 +270,7 @@ export function RetentionPage() {
       xAxis: { type: 'category', data: xAxis },
       yAxis: { type: 'value', name: '留存率', axisLabel: { formatter: '{value}%' } },
       series: [
-        buildSeries(1, 'D1 次留'),
+        buildSeries(1, 'D1 新增次留'),
         buildSeries(2, 'D2 留存'),
         buildSeries(3, 'D3 留存'),
         buildSeries(7, 'D7 留存'),
@@ -353,7 +353,7 @@ export function RetentionPage() {
         message={`留存分析 · 当前游戏：${descriptor?.displayName ?? gameKey}`}
         description={
           data?.notice ||
-          '默认看多天 cohort 的 D1/D7 趋势和留存矩阵；点击某一天再钻取 D0-D30 曲线。这里不是 5 分钟实时指标。'
+          '默认看多天新增 cohort 的 D1/D7 趋势和留存矩阵；点击某一天再钻取 D0-D30 曲线。这里展示的是新增留存，不是活跃次留，也不是 5 分钟实时指标。'
         }
       />
       <Alert
@@ -369,6 +369,7 @@ export function RetentionPage() {
             </Text>
             <Text type="secondary">
               格子里第一行是留存率，第二行是“回访人数/该 cohort 新增人数”。未到完整自然日的格子显示“未成熟”，不参与平均值和趋势判断；样本很小的早期日期只作排障参考。
+              活跃次留的分母是前一日活跃用户，新增次留的分母是首次进入游戏的新用户，本页统一使用新增次留/新增留存。
             </Text>
           </Space>
         }
@@ -422,7 +423,7 @@ export function RetentionPage() {
         </Col>
         <Col xs={12} md={6}>
           <Card>
-            <Statistic title="平均 D1 次留" value={d1Avg !== null ? d1Avg * 100 : 0} suffix="%" precision={1} />
+            <Statistic title="平均 D1 新增次留" value={d1Avg !== null ? d1Avg * 100 : 0} suffix="%" precision={1} />
             <Text type="secondary">按 cohort 人数加权</Text>
           </Card>
         </Col>
@@ -447,8 +448,8 @@ export function RetentionPage() {
       <Card
         title={
           <MetricTitle
-            label={`Cohort 留存矩阵 · ${segment}`}
-            help="行是新增日期 cohort，新增人数就是这一行日期当天首次进入游戏的人数；列是这批用户在后续第 N 天是否回访。"
+            label={`Cohort 新增留存矩阵 · ${segment}`}
+            help="行是新增日期 cohort，新增人数就是这一行日期当天首次进入游戏的人数；列是这批新用户在后续第 N 天是否回访。这里不是活跃次留。"
           />
         }
       >

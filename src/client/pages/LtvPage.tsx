@@ -138,7 +138,7 @@ function MetricTitle({ label, help }: { label: string; help: string }) {
  * 通用 LTV / 商业化页面。
  * 所有查询都只依赖 gameKey + 标准事件，不写 hotpot 专属逻辑。
  */
-export function LtvPage() {
+export function LtvPage({ windowOverride }: { windowOverride?: WindowValue } = {}) {
   const {
     gameKey,
     windowSel,
@@ -151,6 +151,7 @@ export function LtvPage() {
   const [ltv, setLtv] = useState<LtvResponse | null>(null);
   const [monetization, setMonetization] = useState<MonetizationResponse | null>(null);
   const requestSeqRef = useRef(0);
+  const activeWindow = windowOverride || windowSel;
 
   const loadAll = useCallback(
     async (nextGameKey: string, nextWindow: WindowValue) => {
@@ -164,7 +165,7 @@ export function LtvPage() {
       const seq = ++requestSeqRef.current;
       setLoading(true);
       try {
-        // LTV 页跟随顶部日期选择器，避免同页指标和用户选择的时间窗口不一致。
+        // 商业化页传入 windowOverride 时使用页内窗口；独立 LTV 路由才跟随顶部日期选择器。
         const queryStr = buildWindowQuery(nextWindow);
         const [ltvRes, monetizationRes] = await Promise.all([
           fetch(`/api/realtime/ltv?game=${encodeURIComponent(nextGameKey)}&${queryStr}`).then(
@@ -193,15 +194,15 @@ export function LtvPage() {
   );
 
   useEffect(() => {
-    void loadAll(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, loadAll]);
+    void loadAll(gameKey, activeWindow);
+  }, [gameKey, activeWindow, refreshToken, loadAll]);
 
   const chartOption = useMemo(() => {
-    const cohorts = (ltv?.cohorts || []).slice(-6);
+    const cohorts = (ltv?.cohorts || []).slice(-30);
     const xAxis = Array.from({ length: 31 }, (_, i) => `D${i}`);
     return {
       tooltip: { trigger: 'axis' },
-      legend: { top: 0 },
+      legend: { top: 0, type: 'scroll' },
       grid: { left: 56, right: 24, top: 48, bottom: 56 },
       xAxis: { type: 'category', data: xAxis },
       yAxis: { type: 'value', name: '累计 LTV（元）' },
@@ -285,7 +286,7 @@ export function LtvPage() {
       width: 130,
     },
     {
-      title: <MetricTitle label="D1 留存" help="cohort 用户在第 1 天仍有任意事件的人数 / cohort 人数，用来看次日回访质量。" />,
+      title: <MetricTitle label="D1 新增次留" help="新增 cohort 用户在第 1 天仍有业务活跃事件的人数 / cohort 新增人数。它是新增次留，不是“前一日活跃用户次日仍活跃”的活跃次留。" />,
       render: (_, r) => percent(r.retention.d1),
       width: 120,
     },
@@ -336,12 +337,12 @@ export function LtvPage() {
           <>
             <Text>
               本页所有顶部 KPI、商业化漏斗和 cohort 表都跟随顶部日期选择器。多日窗口里的 ARPDAU 使用
-              「估算收入 / 活跃用户日」，单日窗口则等价于「当天估算收入 / 当天 DAU」。
+              「广告收入 / 活跃用户日」，单日窗口则等价于「当天广告收入 / 当天 DAU」。
             </Text>
             <br />
             <Text type="secondary">
               {ltv?.notice ||
-                '所有游戏共用同一套 gameKey 口径；当前收入为广告 eCPM 估算值，非真实结算收入。'}
+                '所有游戏共用同一套 gameKey 口径；有真实 eCPM 的日期优先使用真实 eCPM，缺少真实收入/曝光时回退到预估 eCPM。'}
             </Text>
           </>
         }
@@ -353,8 +354,8 @@ export function LtvPage() {
             <Statistic
               title={
                 <MetricTitle
-                  label="估算收入（元）"
-                  help={`统计范围：${rangeLabel}。计算方式：范围内所有广告曝光按 scene 命中的预估 eCPM 折算，ad_show × eCPM / 1000。用于快速看该时间段变现规模，非真实结算。`}
+                  label="广告收入（元）"
+                  help={`统计范围：${rangeLabel}。计算方式：范围内广告曝光 × eCPM / 1000；若当天已录入微信真实收入和曝光，则使用当天真实 eCPM，否则使用 scene 预估 eCPM。用于快速看该时间段变现规模。`}
                 />
               }
               value={monetization?.revenue_estimated_cny ?? 0}
@@ -382,7 +383,7 @@ export function LtvPage() {
               title={
                 <MetricTitle
                   label="D7 LTV（元）"
-                  help={`Cohort 范围：${rangeLabel}。只统计首次出现日期落在该范围内、且已经满 7 天观测期的 cohort。计算方式：D0~D7 累计估算收入 / cohort 人数。用于判断一周回收。`}
+                  help={`Cohort 范围：${rangeLabel}。只统计首次出现日期落在该范围内、且已经满 7 天观测期的 cohort。计算方式：D0~D7 累计广告收入 / cohort 人数；有真实 eCPM 的日期用真实 eCPM，缺失时回退预估 eCPM。用于判断一周回收。`}
                 />
               }
               value={summary?.blended_ltv_d7 ?? 0}
@@ -396,7 +397,7 @@ export function LtvPage() {
               title={
                 <MetricTitle
                   label="D30 预测 LTV（元）"
-                  help={`Cohort 范围：${rangeLabel}。当 D30 未满时用早期 LTV 经验倍率外推，优先 D7×1.9，否则 D3×3.2。用于提前评估长期回收，不等于真实观测。`}
+                  help={`Cohort 范围：${rangeLabel}。当 D30 未满时用早期 LTV 经验倍率外推，优先 D7×1.9，否则 D3×3.2；真实 eCPM 会随你录入的数据逐步校准。用于提前评估长期回收。`}
                 />
               }
               value={summary?.projected_ltv_d30 ?? 0}
@@ -441,7 +442,7 @@ export function LtvPage() {
               title={
                 <MetricTitle
                   label="IPM（千 DAU 曝光）"
-                  help={`统计范围：${rangeLabel}。计算方式：广告曝光数 / 活跃用户日 × 1000。用于衡量每千日活产生多少广告曝光，拆解收入增长来源。`}
+                  help={`统计范围：${rangeLabel}。计算方式：广告曝光数 / 活跃用户日 × 1000。这里是曝光强度指标，不是 eCPM；用于衡量每千日活产生多少广告曝光。`}
                 />
               }
               value={monetization?.ipm ?? 0}
@@ -496,7 +497,7 @@ export function LtvPage() {
               title={
                 <MetricTitle
                   label="广告曝光"
-                  help={`统计范围：${rangeLabel}。计算方式：范围内 ad_show 事件总数。广告估算收入以这个数乘以 eCPM 计算，是 IAA 变现的核心量。`}
+                  help={`统计范围：${rangeLabel}。计算方式：范围内 ad_show 事件总数。广告收入以这个数乘以当天真实/预估 eCPM 计算，是 IAA 变现的核心量。`}
                 />
               }
               value={monetization?.ad_show_cnt ?? 0}
@@ -546,7 +547,7 @@ export function LtvPage() {
         title={
           <MetricTitle
             label="LTV Cohort 曲线"
-            help={`Cohort 范围：${rangeLabel}。每条线代表一个新增日期 cohort，横轴是注册后第 N 天，纵轴是累计 LTV。用于比较不同日期新增用户的长期价值走势。`}
+            help={`Cohort 范围：${rangeLabel}。每条线代表一个新增日期 cohort，横轴是注册后第 N 天，纵轴是累计 LTV；真实 eCPM 会随经营录入逐步校准。用于比较不同日期新增用户的长期价值走势。`}
           />
         }
       >
@@ -561,7 +562,7 @@ export function LtvPage() {
         title={
           <MetricTitle
             label="LTV Cohort 表"
-            help={`Cohort 范围：${rangeLabel}。按新增日期分组展示人数、累计 LTV、留存和收入，用来判断哪一天/哪批新增质量更好。`}
+            help={`Cohort 范围：${rangeLabel}。按新增日期分组展示人数、累计 LTV、留存和收入；有真实 eCPM 的日期优先按真实 eCPM 计价，用来判断哪一天/哪批新增质量更好。`}
           />
         }
         extra={
@@ -603,8 +604,8 @@ export function LtvPage() {
           )}
         />
         <Text type="secondary">
-          留存为 cohort 用户在对应 age day 仍有任意事件的比例；LTV 为 D0 到对应天数的累计估算收入 / cohort 人数。
-          广告收入为估算值，后续接入真实结算或 IAP 后可扩展 total_revenue。
+          留存为新增 cohort 用户在对应 age day 仍有业务活跃事件的比例；这里展示的是新增留存，不是活跃用户次日回访留存。LTV 为 D0 到对应天数的累计广告收入 / cohort 人数。
+          广告收入优先使用你录入的微信真实 eCPM，缺少真实收入/曝光时回退到预估 eCPM；后续接入 IAP 后可扩展 total_revenue。
         </Text>
       </Card>
 

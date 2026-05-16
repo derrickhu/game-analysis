@@ -24,7 +24,6 @@ import type { Dayjs } from 'dayjs';
 
 import { getGameDescriptor } from '../../shared/games';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
-import type { WindowValue } from '../timeWindow';
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -113,6 +112,23 @@ interface RoiDecisionResponse {
     break_even_cpi_cny: number | null;
     note: string;
   };
+  commercial_summary?: {
+    verdict_level: 'healthy' | 'risky' | 'loss' | 'unknown';
+    verdict_label: string;
+    total_spend_cny: number;
+    total_real_revenue_cny: number;
+    total_new_users: number;
+    d0_roi: number | null;
+    d0_margin_cny: number;
+    avg_cpi_cny: number | null;
+    early_sample_days: number;
+    early_d30_ltv_cny: number | null;
+    early_d30_roi: number | null;
+    d1_retention: number | null;
+    d7_retention: number | null;
+    key_findings: string[];
+    optimization_suggestions: string[];
+  };
   baseline?: {
     valid_sample_days: number;
     excluded_sample_days: number;
@@ -200,6 +216,15 @@ function decisionAlertType(actionLabel?: string): 'success' | 'info' | 'warning'
   return 'info';
 }
 
+function verdictAlertType(
+  level?: NonNullable<RoiDecisionResponse['commercial_summary']>['verdict_level'],
+): 'success' | 'info' | 'warning' | 'error' {
+  if (level === 'healthy') return 'success';
+  if (level === 'loss') return 'error';
+  if (level === 'risky') return 'warning';
+  return 'info';
+}
+
 function eachDateInRange(from: Dayjs, to: Dayjs): string[] {
   const dates: string[] = [];
   let cursor = from.startOf('day');
@@ -229,6 +254,11 @@ function buildDraftRows(from: Dayjs, to: Dayjs, existingRows: RoiRow[] = []): Ro
 function defaultInputRange(): [Dayjs, Dayjs] {
   const yesterday = dayjs().subtract(1, 'day');
   return [yesterday.subtract(6, 'day'), yesterday];
+}
+
+function defaultDisplayRange(): [Dayjs, Dayjs] {
+  const yesterday = dayjs().subtract(1, 'day');
+  return [yesterday.subtract(29, 'day'), yesterday];
 }
 
 function disableTodayAndFuture(current: Dayjs): boolean {
@@ -279,10 +309,9 @@ async function fetchRoiAiAnalysis(gameKey: string, baselineDays: number, maturit
  * 通用 ROI 录入页面。
  * 人工录入投放与微信真实结算数据，新增用户/LTV/估算收入由系统自动关联。
  */
-export function RoiPage() {
+export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}) {
   const {
     gameKey,
-    windowSel,
     refreshToken,
     setLoading,
     setLastRefreshedAt,
@@ -292,7 +321,7 @@ export function RoiPage() {
   const [data, setData] = useState<RoiResponse | null>(null);
   const [decision, setDecision] = useState<RoiDecisionResponse | null>(null);
   const [baselineDays, setBaselineDays] = useState(7);
-  const [maturityDay, setMaturityDay] = useState<3 | 7>(3);
+  const [maturityDay, setMaturityDay] = useState<3 | 7>(7);
   const [aiAnalysis, setAiAnalysis] = useState<RoiAiAnalysisResponse | null>(null);
   const [draftRows, setDraftRows] = useState<RoiDraftRow[]>([]);
   const [saving, setSaving] = useState(false);
@@ -302,7 +331,7 @@ export function RoiPage() {
   const draftInitializedGameRef = useRef<string | null>(null);
 
   const loadAll = useCallback(
-    async (nextGameKey: string, _nextWindow: WindowValue, range?: [Dayjs, Dayjs]) => {
+    async (nextGameKey: string, range?: [Dayjs, Dayjs]) => {
       const desc = getGameDescriptor(nextGameKey);
       if (!desc?.hasAnalyticsSdk) {
         setData(null);
@@ -312,7 +341,7 @@ export function RoiPage() {
       const seq = ++requestSeqRef.current;
       setLoading(true);
       try {
-        const activeRange = range || rangeForm.getFieldValue('date_range') || defaultInputRange();
+        const activeRange = range || displayRange || defaultDisplayRange();
         const json = await fetchRoiData(nextGameKey, activeRange);
         if (seq !== requestSeqRef.current) return null;
         if (!json.ok) message.error(`获取 ROI 数据失败: ${json.error || json.code}`);
@@ -327,15 +356,15 @@ export function RoiPage() {
         if (seq === requestSeqRef.current) setLoading(false);
       }
     },
-    [rangeForm, setLastRefreshedAt, setLoading],
+    [displayRange, setLastRefreshedAt, setLoading],
   );
 
   useEffect(() => {
-    void loadAll(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, loadAll]);
+    void loadAll(gameKey);
+  }, [gameKey, displayRange, refreshToken, loadAll]);
 
   const regenerateDraftRows = useCallback(
-    async (range: [Dayjs, Dayjs]) => {
+    async (range: [Dayjs, Dayjs], syncDisplay = true) => {
       const [from, to] = range;
       const days = to.startOf('day').diff(from.startOf('day'), 'day') + 1;
       if (days > 31) {
@@ -349,7 +378,7 @@ export function RoiPage() {
           message.error(`获取已录入数据失败: ${nextData.error || nextData.code}`);
           return;
         }
-        setData(nextData);
+        if (syncDisplay) setData(nextData);
         setDraftRows(buildDraftRows(from, to, nextData.rows || []));
         setLastRefreshedAt(Date.now());
       } catch (error) {
@@ -366,7 +395,7 @@ export function RoiPage() {
     const defaultRange = defaultInputRange();
     rangeForm.setFieldsValue({ date_range: defaultRange });
     draftInitializedGameRef.current = gameKey;
-    void regenerateDraftRows(defaultRange);
+    void regenerateDraftRows(defaultRange, false);
   }, [gameKey, rangeForm, regenerateDraftRows]);
 
   const loadDecision = useCallback(
@@ -452,7 +481,7 @@ export function RoiPage() {
         }
       }
       message.success(`已保存 ${rowsToSave.length} 天经营数据`);
-      await loadAll(gameKey, windowSel, rangeForm.getFieldValue('date_range'));
+      await loadAll(gameKey);
     } catch (error) {
       message.error(`保存异常: ${String(error)}`);
     } finally {
@@ -471,7 +500,7 @@ export function RoiPage() {
       return;
     }
     message.success('已删除');
-    await loadAll(gameKey, windowSel);
+    await loadAll(gameKey);
   };
 
   const rangeLabel = data?.query ? `${data.query.from_date} ~ ${data.query.to_date}` : '-';
@@ -563,7 +592,7 @@ export function RoiPage() {
         width: 90,
       },
     ],
-    [gameKey, windowSel],
+    [gameKey],
   );
 
   return (
@@ -629,6 +658,48 @@ export function RoiPage() {
 
           {decision && (
             <>
+              <Alert
+                showIcon
+                type={verdictAlertType(decision.commercial_summary?.verdict_level)}
+                message={`系统商业化诊断：${decision.commercial_summary?.verdict_label || '暂无结论'}`}
+                description={
+                  decision.commercial_summary
+                    ? `D0 ROI ${percent(decision.commercial_summary.d0_roi)}，D0 盈亏 ${money(decision.commercial_summary.d0_margin_cny)} 元；平均 CPI ${money(decision.commercial_summary.avg_cpi_cny, 4)} 元；早期预测 D30 ROI ${percent(decision.commercial_summary.early_d30_roi)}（${decision.commercial_summary.early_sample_days} 天 D3+ 样本）；D1 新增次留 ${percent(decision.commercial_summary.d1_retention)}。`
+                    : '系统会用真实投放、真实收入、CPI、早期 LTV 和留存给出兜底判断，不依赖 DeepSeek。'
+                }
+              />
+              <Row gutter={[16, 16]}>
+                <Col xs={12} md={4}>
+                  <Card size="small">
+                    <Statistic title="D0 ROI" value={(decision.commercial_summary?.d0_roi ?? 0) * 100} suffix="%" precision={1} />
+                  </Card>
+                </Col>
+                <Col xs={12} md={4}>
+                  <Card size="small">
+                    <Statistic title="D0 真实盈亏" value={decision.commercial_summary?.d0_margin_cny ?? 0} precision={2} />
+                  </Card>
+                </Col>
+                <Col xs={12} md={4}>
+                  <Card size="small">
+                    <Statistic title="平均 CPI" value={decision.commercial_summary?.avg_cpi_cny ?? 0} precision={4} />
+                  </Card>
+                </Col>
+                <Col xs={12} md={4}>
+                  <Card size="small">
+                    <Statistic title="早期 D30 ROI" value={(decision.commercial_summary?.early_d30_roi ?? 0) * 100} suffix="%" precision={1} />
+                  </Card>
+                </Col>
+                <Col xs={12} md={4}>
+                  <Card size="small">
+                    <Statistic title="D1 新增次留" value={(decision.commercial_summary?.d1_retention ?? 0) * 100} suffix="%" precision={1} />
+                  </Card>
+                </Col>
+                <Col xs={12} md={4}>
+                  <Card size="small">
+                    <Statistic title="早期样本天数" value={decision.commercial_summary?.early_sample_days ?? 0} />
+                  </Card>
+                </Col>
+              </Row>
               <Alert
                 showIcon
                 type="warning"
@@ -733,18 +804,18 @@ export function RoiPage() {
 
               <Row gutter={[16, 16]}>
                 <Col xs={24} md={12}>
-                  <Card size="small" title="为什么">
+                  <Card size="small" title="关键依据">
                     <Space orientation="vertical">
-                      {(decision.reasons || []).map((reason) => (
+                      {(decision.commercial_summary?.key_findings || decision.reasons || []).map((reason) => (
                         <Text key={reason}>{reason}</Text>
                       ))}
                     </Space>
                   </Card>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Card size="small" title="下一步动作">
+                  <Card size="small" title="优化建议">
                     <Space orientation="vertical">
-                      {(decision.next_steps || []).map((step) => (
+                      {(decision.commercial_summary?.optimization_suggestions || decision.next_steps || []).map((step) => (
                         <Text key={step}>{step}</Text>
                       ))}
                     </Space>
