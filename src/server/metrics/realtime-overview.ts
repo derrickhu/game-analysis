@@ -18,6 +18,16 @@ const USER_KEY_SQL_SQLITE = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const USER_KEY_SQL_MYSQL = USER_KEY_SQL_SQLITE; // 两者语法一致
 
 const SESSION_START = 'session_start';
+const ACTIVE_EVENTS = [
+  'session_start',
+  'session_end',
+  'ad_show',
+  'ad_close',
+  'level_start',
+  'level_clear',
+  'level_fail',
+  'share_app_message',
+] as const;
 
 export interface OverviewKpi {
   /** 当前时间窗口内 session_start 去重用户数（窗口=今日时即为今日 DAU；选历史日时即为该日 DAU；多日窗口为窗口内活跃合计） */
@@ -26,9 +36,9 @@ export interface OverviewKpi {
   active_users_1h: number;
   /** 在全表中首次出现于当前时间窗口内的去重用户数 */
   new_users_today: number;
-  /** 次日留存率：锚点日前 1 日 cohort ∩ 锚点日有事件 / 锚点日前 1 日 cohort */
+  /** 次日留存率：锚点日前 1 日新增 cohort ∩ 锚点日业务活跃 / 锚点日前 1 日新增 cohort */
   retention_d1_rate: number | null;
-  /** 次留 cohort（分母）：锚点日前 1 日去重用户数 */
+  /** 次留 cohort（分母）：锚点日前 1 日首次进入游戏的去重用户数 */
   retention_d1_cohort: number;
   /** 次留回访（分子）：cohort 中锚点日仍有事件的去重用户数 */
   retention_d1_returned: number;
@@ -51,7 +61,7 @@ export interface OverviewKpi {
 interface CohortStat {
   /** 分母：cohort 中的去重用户数 */
   cohort: number;
-  /** 分子：cohort 中今天仍有事件的去重用户数 */
+  /** 分子：cohort 中锚点日仍有业务活跃事件的去重用户数 */
   retain: number;
   /** 比例：cohort 为 0 时为 null（无法算） */
   rate: number | null;
@@ -204,7 +214,8 @@ async function countNewUsersInWindow(
 }
 
 /**
- * 计算「cohort 在 baseFrom..baseTo 中的所有用户，到 retainFrom..retainTo 仍有事件的比例」
+ * 计算新增 cohort 留存：分母是 baseFrom..baseTo 内首次进入游戏的用户，
+ * 分子是这批用户在 retainFrom..retainTo 内仍有业务活跃事件的人数。
  * 返回三元组：cohort（分母）、retain（分子）、rate（cohort=0 时为 null）。
  */
 async function cohortRetention(
@@ -223,16 +234,20 @@ async function cohortRetention(
          COUNT(DISTINCT base.uk) AS base_cnt,
          COUNT(DISTINCT CASE WHEN ret.uk IS NOT NULL THEN base.uk END) AS retain_cnt
        FROM (
-         SELECT DISTINCT ${USER_KEY_SQL_MYSQL} AS uk
+         SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
            FROM analytics_events
-          WHERE game_key = ? AND event_ts BETWEEN ? AND ?
+          WHERE game_key = ?
+          GROUP BY ${USER_KEY_SQL_MYSQL}
+         HAVING first_ts BETWEEN ? AND ?
        ) base
        LEFT JOIN (
          SELECT DISTINCT ${USER_KEY_SQL_MYSQL} AS uk
            FROM analytics_events
-          WHERE game_key = ? AND event_ts BETWEEN ? AND ?
+          WHERE game_key = ?
+            AND event_name IN (${ACTIVE_EVENTS.map(() => '?').join(',')})
+            AND event_ts BETWEEN ? AND ?
        ) ret ON base.uk = ret.uk`,
-      [gameKey, baseFrom, baseTo, gameKey, retainFrom, retainTo],
+      [gameKey, baseFrom, baseTo, gameKey, ...ACTIVE_EVENTS, retainFrom, retainTo],
     );
     const row = (rows as Array<{ base_cnt: number; retain_cnt: number }>)[0];
     const cohort = Number(row?.base_cnt || 0);
@@ -242,9 +257,11 @@ async function cohortRetention(
   const db = getDb();
   const baseRows = db
     .prepare(
-      `SELECT DISTINCT ${USER_KEY_SQL_SQLITE} AS uk
+      `SELECT ${USER_KEY_SQL_SQLITE} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
-        WHERE game_key = ? AND event_ts BETWEEN ? AND ?`,
+        WHERE game_key = ?
+        GROUP BY ${USER_KEY_SQL_SQLITE}
+       HAVING first_ts BETWEEN ? AND ?`,
     )
     .all(gameKey, baseFrom, baseTo) as Array<{ uk: string }>;
   if (baseRows.length === 0) return empty;
@@ -253,9 +270,11 @@ async function cohortRetention(
     .prepare(
       `SELECT DISTINCT ${USER_KEY_SQL_SQLITE} AS uk
          FROM analytics_events
-        WHERE game_key = ? AND event_ts BETWEEN ? AND ?`,
+        WHERE game_key = ?
+          AND event_name IN (${ACTIVE_EVENTS.map(() => '?').join(',')})
+          AND event_ts BETWEEN ? AND ?`,
     )
-    .all(gameKey, retainFrom, retainTo) as Array<{ uk: string }>;
+    .all(gameKey, ...ACTIVE_EVENTS, retainFrom, retainTo) as Array<{ uk: string }>;
   let hit = 0;
   for (const r of retainRows) {
     if (baseSet.has(r.uk)) hit++;

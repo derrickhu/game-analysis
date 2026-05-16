@@ -95,6 +95,23 @@ export interface BusinessRoiDecisionResult {
     break_even_cpi_cny: number | null;
     note: string;
   };
+  commercial_summary: {
+    verdict_level: 'healthy' | 'risky' | 'loss' | 'unknown';
+    verdict_label: string;
+    total_spend_cny: number;
+    total_real_revenue_cny: number;
+    total_new_users: number;
+    d0_roi: number | null;
+    d0_margin_cny: number;
+    avg_cpi_cny: number | null;
+    early_sample_days: number;
+    early_d30_ltv_cny: number | null;
+    early_d30_roi: number | null;
+    d1_retention: number | null;
+    d7_retention: number | null;
+    key_findings: string[];
+    optimization_suggestions: string[];
+  };
   baseline: {
     valid_sample_days: number;
     excluded_sample_days: number;
@@ -178,12 +195,110 @@ function buildLtvProjectionMap(rows: CohortLtvDailyRow[]): Map<string, number | 
   return out;
 }
 
-function buildObservedAgeMap(rows: CohortLtvDailyRow[]): Map<string, number> {
+function buildCompleteObservedAgeMap(rows: CohortLtvDailyRow[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const row of rows) {
+    if (Number(row.is_complete_day) !== 1) continue;
     map.set(row.cohort_date, Math.max(map.get(row.cohort_date) || 0, Number(row.age_day)));
   }
   return map;
+}
+
+function weightedRetention(rows: CohortLtvDailyRow[], ageDay: number): number | null {
+  let numerator = 0;
+  let denominator = 0;
+  for (const row of rows) {
+    if (Number(row.age_day) !== ageDay || Number(row.is_complete_day) !== 1) continue;
+    const size = Number(row.cohort_size || 0);
+    numerator += Number(row.retention_rate || 0) * size;
+    denominator += size;
+  }
+  return denominator > 0 ? round4(numerator / denominator) : null;
+}
+
+function buildCommercialSummary(input: {
+  rowsAsc: BusinessRoiRow[];
+  earlyRows: BusinessRoiRow[];
+  ltvRows: CohortLtvDailyRow[];
+  targetDate: string;
+}): BusinessRoiDecisionResult['commercial_summary'] {
+  const recordedRows = input.rowsAsc.filter((row) => row.date_key < input.targetDate && row.spend_cny > 0);
+  const totalSpend = recordedRows.reduce((sum, row) => sum + row.spend_cny, 0);
+  const totalRevenue = recordedRows.reduce((sum, row) => sum + row.wechat_ad_revenue_cny, 0);
+  const totalNewUsers = recordedRows.reduce((sum, row) => sum + row.game_new_users, 0);
+  const d0Roi = ratio(totalRevenue, totalSpend);
+  const avgCpi = ratio(totalSpend, totalNewUsers);
+  const earlyProjectedRevenue = input.earlyRows.reduce(
+    (sum, row) => sum + (row.d30_projected_ltv_cny || 0) * row.game_new_users,
+    0,
+  );
+  const earlySpend = input.earlyRows.reduce((sum, row) => sum + row.spend_cny, 0);
+  const earlyNewUsers = input.earlyRows.reduce((sum, row) => sum + row.game_new_users, 0);
+  const earlyD30Ltv = ratio(earlyProjectedRevenue, earlyNewUsers);
+  const earlyD30Roi = ratio(earlyProjectedRevenue, earlySpend);
+  const d1Retention = weightedRetention(input.ltvRows, 1);
+  const d7Retention = weightedRetention(input.ltvRows, 7);
+
+  let verdictLevel: BusinessRoiDecisionResult['commercial_summary']['verdict_level'] = 'unknown';
+  let verdictLabel = '样本仍在成熟，先按早期指标保守判断';
+  if (earlyD30Roi !== null) {
+    if (earlyD30Roi >= 1.3) {
+      verdictLevel = d0Roi !== null && d0Roi < 0.2 ? 'risky' : 'healthy';
+      verdictLabel = verdictLevel === 'healthy' ? '早期预测有盈利空间' : '长期可能回本，但首日回收偏弱';
+    } else if (earlyD30Roi >= 1) {
+      verdictLevel = 'risky';
+      verdictLabel = '接近回本但安全边际不足';
+    } else {
+      verdictLevel = 'loss';
+      verdictLabel = '按当前早期数据预测偏亏损';
+    }
+  } else if (d0Roi !== null) {
+    verdictLevel = d0Roi >= 0.3 ? 'risky' : 'unknown';
+    verdictLabel = d0Roi >= 0.3 ? '首日回收尚可，但缺少 LTV 成熟样本' : '首日回收偏低，需等待 LTV 成熟';
+  }
+
+  const keyFindings = [
+    `近 ${recordedRows.length} 个录入日总花费 ${round2(totalSpend)} 元，D0 真实收入 ${round2(totalRevenue)} 元，D0 ROI ${d0Roi !== null ? `${(d0Roi * 100).toFixed(1)}%` : '-' }。`,
+    `累计新增 ${totalNewUsers} 人，平均 CPI ${avgCpi !== null ? `${avgCpi.toFixed(4)} 元` : '-' }。`,
+  ];
+  if (earlyD30Roi !== null && earlyD30Ltv !== null) {
+    keyFindings.push(`已有 ${input.earlyRows.length} 天达到 D3+ 早期 LTV，预测 D30 LTV ${earlyD30Ltv.toFixed(4)} 元，预测 D30 ROI ${(earlyD30Roi * 100).toFixed(1)}%。`);
+  } else {
+    keyFindings.push('暂时缺少 D3+ 早期 LTV 样本，不能可靠估计 D30 回收。');
+  }
+  if (d1Retention !== null) {
+    keyFindings.push(`新增 D1 次留约 ${(d1Retention * 100).toFixed(1)}%，D7 留存${d7Retention !== null ? `约 ${(d7Retention * 100).toFixed(1)}%` : '仍在成熟中'}。`);
+  }
+
+  const optimizationSuggestions: string[] = [];
+  if (avgCpi !== null && earlyD30Ltv !== null && avgCpi > earlyD30Ltv) {
+    optimizationSuggestions.push(`买量止损：当前平均 CPI ${avgCpi.toFixed(4)} 元高于预测 D30 LTV ${earlyD30Ltv.toFixed(4)} 元，应压低 oCPM/素材成本，不建议放量。`);
+  }
+  if (d0Roi !== null && d0Roi < 0.25) {
+    optimizationSuggestions.push('首日回收偏弱：优先优化新手期广告触发、激励点位价值、插屏频控和首局目标，让 D0 ROI 先接近 25%-35%。');
+  }
+  if (d1Retention !== null && d1Retention < 0.08) {
+    optimizationSuggestions.push('新增次留偏低：优先优化前 3 分钟引导、首局失败/复活体验、目标反馈和第二天回访理由，否则 D7/D30 回收空间有限。');
+  }
+  optimizationSuggestions.push('投放动作：明天先保持小预算，不加量；只在 CPI 连续低于预测 D30 LTV 且 D1/D3 留存不下降时再逐步加 20%-30%。');
+
+  return {
+    verdict_level: verdictLevel,
+    verdict_label: verdictLabel,
+    total_spend_cny: round2(totalSpend),
+    total_real_revenue_cny: round2(totalRevenue),
+    total_new_users: totalNewUsers,
+    d0_roi: d0Roi,
+    d0_margin_cny: round2(totalRevenue - totalSpend),
+    avg_cpi_cny: avgCpi,
+    early_sample_days: input.earlyRows.length,
+    early_d30_ltv_cny: earlyD30Ltv,
+    early_d30_roi: earlyD30Roi,
+    d1_retention: d1Retention,
+    d7_retention: d7Retention,
+    key_findings: keyFindings,
+    optimization_suggestions: optimizationSuggestions,
+  };
 }
 
 function getRowStatus(row: {
@@ -376,13 +491,15 @@ export async function getBusinessRoiDecision(
   const overview = await getBusinessRoiOverview(gameKey, baselineFromDate, targetDate);
   const rowsAsc = [...overview.rows].sort((a, b) => dateKeyToStartTs(a.date_key) - dateKeyToStartTs(b.date_key));
   const ltvRows = await listCohortLtvRows(gameKey, baselineFromDate, targetDate);
-  const observedAgeByDate = buildObservedAgeMap(ltvRows);
+  // 投放决策只能使用已完整结束的 D3/D7。比如 5/09 cohort 的 D7 是 5/16，
+  // 如果 5/16 当天还没结束，就不能把它当作 D7 成熟样本。
+  const completeObservedAgeByDate = buildCompleteObservedAgeMap(ltvRows);
   const target = rowsAsc.find((row) => row.date_key === targetDate) || null;
 
   const samples = rowsAsc
     .filter((row) => row.date_key < targetDate)
     .map((row) => {
-      const observedAge = observedAgeByDate.get(row.date_key) || 0;
+      const observedAge = completeObservedAgeByDate.get(row.date_key) || 0;
       let included = row.data_status === 'ok' && observedAge >= maturityDay;
       let reason = '纳入基线';
       if (row.game_new_users <= 0) reason = '无游戏打点，无法计算 CPI';
@@ -417,6 +534,27 @@ export async function getBusinessRoiDecision(
   const predictedD30Roi = ratio(projectedRevenue, totalSpend);
   const predictedMarginPerUser =
     weightedD30Ltv !== null && avgCpi !== null ? round4(weightedD30Ltv - avgCpi) : null;
+  const earlyRows = rowsAsc.filter((row) => {
+    const observedAge = completeObservedAgeByDate.get(row.date_key) || 0;
+    return (
+      row.date_key < targetDate &&
+      row.spend_cny > 0 &&
+      row.game_new_users >= 100 &&
+      row.d30_projected_ltv_cny !== null &&
+      observedAge >= 3 &&
+      row.data_status !== 'conversion_abnormal'
+    );
+  });
+  const earlyProjectedRevenue = earlyRows.reduce(
+    (sum, row) => sum + (row.d30_projected_ltv_cny || 0) * row.game_new_users,
+    0,
+  );
+  const earlySpend = earlyRows.reduce((sum, row) => sum + row.spend_cny, 0);
+  const earlyNewUsers = earlyRows.reduce((sum, row) => sum + row.game_new_users, 0);
+  const earlyAvgCpi = ratio(earlySpend, earlyNewUsers);
+  const earlyWeightedD30Ltv = ratio(earlyProjectedRevenue, earlyNewUsers);
+  const earlyPredictedD30Roi = ratio(earlyProjectedRevenue, earlySpend);
+  const commercialSummary = buildCommercialSummary({ rowsAsc, earlyRows, ltvRows, targetDate });
 
   const reasons: string[] = [];
   const nextSteps: string[] = [];
@@ -448,9 +586,16 @@ export async function getBusinessRoiDecision(
       nextSteps.push('明天建议降预算或暂停放量，先排查 CPI、素材、定向和游戏变现。');
     } else {
       action = 'observe';
-      issueType = 'immature';
-      reasons.push(`截至 ${addDays(targetDate, -1)} 还没有足够成熟样本，不能给出可靠的明日加投判断。`);
-      nextSteps.push('明天保持小预算观察，等 D3/D7 数据成熟后再判断是否放量。');
+      issueType = commercialSummary.verdict_level === 'loss' ? 'traffic' : 'immature';
+      if (earlyPredictedD30Roi !== null) {
+        reasons.push(
+          `截至 ${addDays(targetDate, -1)} 暂无 D${maturityDay} 稳健样本，但已有 D3+ 早期样本预测 D30 ROI 为 ${(earlyPredictedD30Roi * 100).toFixed(1)}%。`,
+        );
+        nextSteps.push('先按早期指标保守决策，不加预算；等待 D7 完整成熟后再确认是否放量。');
+      } else {
+        reasons.push(`截至 ${addDays(targetDate, -1)} 还没有足够成熟样本，不能给出可靠的明日加投判断。`);
+        nextSteps.push('明天保持小预算观察，等 D3/D7 数据成熟后再判断是否放量。');
+      }
     }
   } else if (target.game_new_users <= 0) {
     action = 'fix_tracking';
@@ -510,19 +655,26 @@ export async function getBusinessRoiDecision(
   }
 
   if (validRows.length === 0) {
-    reasons.push('目标日前没有可用成熟基线样本，结论置信度较低。');
+    reasons.push(
+      earlyRows.length > 0
+        ? `目标日前没有可用 D${maturityDay} 稳健基线样本，已用 ${earlyRows.length} 天 D3+ 早期样本辅助判断。`
+        : '目标日前没有可用成熟基线样本，结论置信度较低。',
+    );
     confidence = 'low';
   } else {
     reasons.push(`基线纳入 ${validRows.length} 天，排除 ${samples.length - validRows.length} 天异常/未成熟样本。`);
   }
 
+  const budgetRows = validRows.length > 0 ? validRows : earlyRows;
+  const budgetPredictedD30Roi = predictedD30Roi ?? earlyPredictedD30Roi;
+  const budgetWeightedD30Ltv = weightedD30Ltv ?? earlyWeightedD30Ltv;
   const budgetRecommendation = buildBudgetRecommendation({
     action,
     confidence,
     rowsAsc,
-    validRows,
-    predictedD30Roi,
-    weightedD30Ltv,
+    validRows: budgetRows,
+    predictedD30Roi: budgetPredictedD30Roi,
+    weightedD30Ltv: budgetWeightedD30Ltv,
   });
   nextSteps.unshift(budgetRecommendation.note);
   if (budgetRecommendation.hard_stop_cpi_cny !== null) {
@@ -558,15 +710,18 @@ export async function getBusinessRoiDecision(
       issue_label: issueLabels[issueType],
     },
     budget_recommendation: budgetRecommendation,
+    commercial_summary: commercialSummary,
     baseline: {
       valid_sample_days: validRows.length,
       excluded_sample_days: samples.length - validRows.length,
       total_spend_cny: round2(totalSpend),
       total_new_users: totalNewUsers,
-      avg_cpi_cny: avgCpi,
-      weighted_d30_ltv_cny: weightedD30Ltv,
-      predicted_d30_roi: predictedD30Roi,
-      predicted_margin_per_user_cny: predictedMarginPerUser,
+      avg_cpi_cny: avgCpi ?? earlyAvgCpi,
+      weighted_d30_ltv_cny: weightedD30Ltv ?? earlyWeightedD30Ltv,
+      predicted_d30_roi: predictedD30Roi ?? earlyPredictedD30Roi,
+      predicted_margin_per_user_cny:
+        predictedMarginPerUser ??
+        (earlyWeightedD30Ltv !== null && earlyAvgCpi !== null ? round4(earlyWeightedD30Ltv - earlyAvgCpi) : null),
     },
     samples,
   };

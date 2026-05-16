@@ -1,6 +1,7 @@
 import { getMysqlPool } from '../db';
 import { getEstimatedEcpm } from '../config/ecpm';
 import {
+  listBusinessDailyInputs,
   listCohortLtvRows,
   listUserDailyRows,
   replaceCohortLtvRows,
@@ -163,6 +164,23 @@ function normalizeDateRange(fromDate?: string, toDate?: string): { fromDate: str
   };
 }
 
+async function buildActualEcpmMap(
+  gameKey: string,
+  fromDate: string,
+  toDate: string,
+): Promise<Map<string, number>> {
+  const inputs = await listBusinessDailyInputs(gameKey, fromDate, toDate);
+  const map = new Map<string, number>();
+  for (const input of inputs) {
+    const revenue = Number(input.wechat_ad_revenue_cny || 0);
+    const impressions = Number(input.wechat_ad_impressions || 0);
+    if (revenue > 0 && impressions > 0) {
+      map.set(input.date_key, (revenue / impressions) * 1000);
+    }
+  }
+  return map;
+}
+
 async function getEventDateRange(gameKey: string): Promise<{ fromDate: string; toDate: string } | null> {
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
@@ -211,6 +229,7 @@ export async function recomputeUserDaily(
   const fromTs = dateKeyToStartTs(fromDate);
   const toTs = dateKeyToStartTs(addDays(toDate, 1)) - 1;
   const firstSeen = await listFirstSeen(gameKey);
+  const actualEcpmByDate = await buildActualEcpmMap(gameKey, fromDate, toDate);
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `SELECT event_name, event_ts, ${USER_KEY_SQL} AS user_key, params_json
@@ -284,7 +303,9 @@ export async function recomputeUserDaily(
       case 'ad_show': {
         const adType = String(params.ad_type || 'unknown');
         const scene = String(params.scene || 'unknown');
-        const ecpm = getEstimatedEcpm(gameKey, adType, scene);
+        // 若运营已录入当天微信真实 eCPM，则用真实 eCPM 分摊到当天所有广告展示；
+        // 未录入真实曝光/收入的日期再回退到按广告位配置的预估 eCPM。
+        const ecpm = actualEcpmByDate.get(dateKey) ?? getEstimatedEcpm(gameKey, adType, scene);
         daily.ad_show_cnt += 1;
         daily.ad_revenue_estimated_cny += ecpm / 1000;
         break;
@@ -473,7 +494,7 @@ export async function getLtvOverview(
     game_key: gameKey,
     estimated: true,
     revenue_type: 'ad_estimated',
-    notice: 'LTV 收入当前仅包含基于预估 eCPM 的广告估算收入，非真实结算收入。',
+    notice: 'LTV 收入优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM，因此仍是按广告展示分摊后的 cohort 收入口径。',
     cohorts,
     summary: buildSummary(cohorts),
   };
@@ -549,7 +570,7 @@ export async function getMonetizationOverview(
   return {
     game_key: gameKey,
     estimated: true,
-    notice: '商业化金额均为基于预估 eCPM 的广告估算值，非真实结算收入。',
+    notice: '商业化金额优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM。',
     total_days: totalDays,
     active_user_days: activeUserDays,
     avg_dau: Math.round(avgDau),
