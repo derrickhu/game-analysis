@@ -31,7 +31,7 @@ interface OverviewKpi {
   retention_d1_rate: number | null;
   /** 分母：D-1 cohort（锚点前 1 日去重数） */
   retention_d1_cohort: number;
-  /** 分子：cohort 中锚点日仍有事件的去重数 */
+  /** 分子：cohort 中锚点日仍有 session_start 的去重数 */
   retention_d1_returned: number;
   /** D-1 cohort 所在本地日期 YYYY-MM-DD */
   retention_d1_cohort_date?: string;
@@ -317,9 +317,9 @@ export function DashboardPage() {
               数据来源：@gp/analytics-sdk 打点流水（analytics_events），cron 每 5 分钟增量拉取并聚合。
             </Text>
             <Text type="secondary">
-              用户身份：优先 user_id（业务 openid），未登录时降级到 anonymous_id；活跃用 session_start
-              去重；本页展示的是新增留存：cohort=锚点日前 1/7 日首次进入游戏的新用户，retain=cohort
-              中锚点日仍有业务活跃事件的去重数。活跃次留另指“前一日活跃用户次日仍活跃”，不等同新增次留。
+              用户身份：优先 user_id（业务 openid），未登录时降级到 anonymous_id；活跃、新增、留存回访都用
+              session_start 去重；本页展示的是新增留存：cohort=锚点日前 1/7 日首次 session_start 的新用户，
+              retain=cohort 中锚点日再次进入游戏的去重数。活跃次留另指“前一日活跃用户次日仍活跃”，不等同新增次留。
             </Text>
           </Space>
         }
@@ -348,10 +348,10 @@ export function DashboardPage() {
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="在全表中首次出现于当前时间窗口内的去重用户数。">
+            <Tooltip title="在全表中首次 session_start 于当前时间窗口内的去重用户数。">
               <Statistic title="窗口内新增" value={overviewKpi?.new_users_today ?? 0} suffix="人" />
             </Tooltip>
-            <Text type="secondary">全表首次出现</Text>
+            <Text type="secondary">首次 session_start</Text>
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
@@ -368,7 +368,7 @@ export function DashboardPage() {
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="锚点日 = 当前时间窗口结束日所在自然日。D1 新增次留 = 锚点日前 1 日新增 cohort 中、在锚点日仍有业务活跃事件的比例。活跃次留是“前一日活跃用户次日仍活跃”，这里不展示。窗口切到 5/8 一整天时即为 5/7 新用户 → 5/8 回访。">
+            <Tooltip title="锚点日 = 当前时间窗口结束日所在自然日。D1 新增次留 = 锚点日前 1 日新增 cohort 中、在锚点日仍有 session_start 的比例。活跃次留是“前一日活跃用户次日仍活跃”，这里不展示。窗口切到 5/8 一整天时即为 5/7 新用户 → 5/8 回访。">
               <Statistic
                 title="D1 新增次留"
                 value={formatRetentionRate(overviewKpi?.retention_d1_rate)}
@@ -387,7 +387,7 @@ export function DashboardPage() {
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
           <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="7 留 D7 = 锚点日前 7 日新增 cohort 中、在锚点日仍有业务活跃事件的比例。打点不足 7 天时 cohort 为 0。">
+            <Tooltip title="7 留 D7 = 锚点日前 7 日新增 cohort 中、在锚点日仍有 session_start 的比例。打点不足 7 天时 cohort 为 0。">
               <Statistic
                 title="7 留 D7"
                 value={formatRetentionRate(overviewKpi?.retention_d7_rate)}

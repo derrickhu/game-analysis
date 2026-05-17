@@ -2,16 +2,7 @@ import { getMysqlPool } from '../db';
 import { toLocalDateKey } from './ltv';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
-const ACTIVE_EVENTS = [
-  'session_start',
-  'session_end',
-  'ad_show',
-  'ad_close',
-  'level_start',
-  'level_clear',
-  'level_fail',
-  'share_app_message',
-] as const;
+const SESSION_START = 'session_start';
 
 export type RetentionDeviceType = 'iOS' | 'Android' | 'HarmonyOS' | 'iPad' | 'Android Pad' | 'Unknown';
 
@@ -171,9 +162,10 @@ async function listCohortUsers(gameKey: string, cohortDate: string): Promise<Coh
     `SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
        FROM analytics_events
       WHERE game_key = ?
+        AND event_name = ?
       GROUP BY ${USER_KEY_SQL}
      HAVING first_ts BETWEEN ? AND ?`,
-    [gameKey, fromTs, toTs],
+    [gameKey, SESSION_START, fromTs, toTs],
   );
   return (rows as CohortUserRow[]).filter((row) => row.user_key);
 }
@@ -188,13 +180,14 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7)
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
+            AND event_name = ?
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, cutoffTs],
+    [gameKey, SESSION_START, cutoffTs],
   );
   const completeDate = (completeRows as Array<{ cohort_date: string | null }>)[0]?.cohort_date;
   if (completeDate) return completeDate;
@@ -207,13 +200,14 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7)
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
+            AND event_name = ?
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, d1CutoffTs],
+    [gameKey, SESSION_START, d1CutoffTs],
   );
   const d1Date = (d1Rows as Array<{ cohort_date: string | null }>)[0]?.cohort_date;
   if (d1Date) return d1Date;
@@ -225,13 +219,14 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7)
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
+            AND event_name = ?
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, yesterdayCutoffTs],
+    [gameKey, SESSION_START, yesterdayCutoffTs],
   );
   return (latestRows as Array<{ cohort_date: string | null }>)[0]?.cohort_date || null;
 }
@@ -287,9 +282,9 @@ async function listActiveEvents(
          FROM analytics_events
         WHERE game_key = ?
           AND ${USER_KEY_SQL} IN (${placeholders})
-          AND event_name IN (${ACTIVE_EVENTS.map(() => '?').join(',')})
+          AND event_name = ?
           AND event_ts BETWEEN ? AND ?`,
-    (batch) => [...batch, ...ACTIVE_EVENTS, fromTs, toTs],
+    (batch) => [...batch, SESSION_START, fromTs, toTs],
   );
 }
 
@@ -308,7 +303,7 @@ export async function getRetentionCohortOverview(
       cohort_date: cohortDate,
       max_age: maxAge,
       updated_at: Date.now(),
-      notice: '留存为 cohort 口径，按首次进入游戏日期分组；D7/D30 未完整结束前不展示成熟值。',
+      notice: '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。',
       overall: { device_type: '整体', cohort_size: 0, points: buildSegment('整体', new Set(), new Map(), cohortDate, maxAge).points },
       devices: [],
     };
@@ -347,7 +342,7 @@ export async function getRetentionCohortOverview(
     cohort_date: cohortDate,
     max_age: maxAge,
     updated_at: Date.now(),
-    notice: '留存为 cohort 口径，按首次进入游戏日期分组；D7/D30 未完整结束前不展示成熟值。',
+    notice: '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。',
     overall: buildSegment('整体', allUsers, retainedByUserAge, cohortDate, maxAge),
     devices: Array.from(usersByDevice.entries())
       .map(([deviceType, users]) => buildSegment(deviceType, users, retainedByUserAge, cohortDate, maxAge))
@@ -494,7 +489,7 @@ function buildCohortsFromRows(
       cohort_date: cohortDate,
       max_age: maxAge,
       updated_at: Math.max(...cohortRows.map((row) => Number(row.updated_at || 0))),
-      notice: '留存为 cohort 口径，按首次进入游戏日期分组；D7/D30 未完整结束前不展示成熟值。',
+      notice: '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。',
       overall,
       devices,
     };
@@ -511,12 +506,13 @@ async function listCohortDatesInRange(gameKey: string, fromDate: string, toDate:
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
+            AND event_name = ?
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts BETWEEN ? AND ?
       GROUP BY cohort_date
       ORDER BY cohort_date ASC`,
-    [gameKey, fromTs, toTs],
+    [gameKey, SESSION_START, fromTs, toTs],
   );
   return (rows as Array<{ cohort_date: string | null }>).map((row) => row.cohort_date).filter(Boolean) as string[];
 }
@@ -549,7 +545,7 @@ export async function getRetentionCohortRangeOverview(
     to_date: toDate,
     max_age: maxAge,
     updated_at: Date.now(),
-    notice: '留存为 cohort 口径，按首次进入游戏日期分组；D7/D30 未完整结束前不展示成熟值。',
+    notice: '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。',
     cohorts,
   };
 }
@@ -568,7 +564,7 @@ export async function getPrecomputedRetentionCohortOverview(
     cohort_date: cohortDate,
     max_age: maxAge,
     updated_at: Date.now(),
-    notice: '留存为 cohort 口径，按首次进入游戏日期分组；当前聚合表暂无该日期数据，等待下一次留存回算。',
+    notice: '留存为 cohort 口径，按首次 session_start 日期分组；当前聚合表暂无该日期数据，等待下一次留存回算。',
     overall: { device_type: '整体', cohort_size: 0, points: buildSegment('整体', new Set(), new Map(), cohortDate, maxAge).points },
     devices: [],
   };

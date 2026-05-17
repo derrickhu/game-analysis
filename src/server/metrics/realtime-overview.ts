@@ -18,37 +18,26 @@ const USER_KEY_SQL_SQLITE = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const USER_KEY_SQL_MYSQL = USER_KEY_SQL_SQLITE; // 两者语法一致
 
 const SESSION_START = 'session_start';
-const ACTIVE_EVENTS = [
-  'session_start',
-  'session_end',
-  'ad_show',
-  'ad_close',
-  'level_start',
-  'level_clear',
-  'level_fail',
-  'share_app_message',
-] as const;
-
 export interface OverviewKpi {
   /** 当前时间窗口内 session_start 去重用户数（窗口=今日时即为今日 DAU；选历史日时即为该日 DAU；多日窗口为窗口内活跃合计） */
   dau: number;
   /** 窗口结束时刻往前 1 小时的活跃用户数（窗口=today 时与"现在"重合；历史窗口看的是该窗口结束前最后 1 小时） */
   active_users_1h: number;
-  /** 在全表中首次出现于当前时间窗口内的去重用户数 */
+  /** 在全表中首次 session_start 于当前时间窗口内的去重用户数 */
   new_users_today: number;
-  /** 次日留存率：锚点日前 1 日新增 cohort ∩ 锚点日业务活跃 / 锚点日前 1 日新增 cohort */
+  /** 次日留存率：锚点日前 1 日新增 cohort ∩ 锚点日 session_start / 锚点日前 1 日新增 cohort */
   retention_d1_rate: number | null;
-  /** 次留 cohort（分母）：锚点日前 1 日首次进入游戏的去重用户数 */
+  /** 次留 cohort（分母）：锚点日前 1 日首次 session_start 的去重用户数 */
   retention_d1_cohort: number;
-  /** 次留回访（分子）：cohort 中锚点日仍有事件的去重用户数 */
+  /** 次留回访（分子）：cohort 中锚点日仍有 session_start 的去重用户数 */
   retention_d1_returned: number;
   /** 锚点日前 1 日的本地 YYYY-MM-DD（cohort 所在日） */
   retention_d1_cohort_date: string;
   /** 7 日留存率：锚点日前 7 日 cohort ∩ 锚点日有事件 / 锚点日前 7 日 cohort */
   retention_d7_rate: number | null;
-  /** 7 留 cohort（分母）：锚点日前 7 日去重用户数 */
+  /** 7 留 cohort（分母）：锚点日前 7 日首次 session_start 的去重用户数 */
   retention_d7_cohort: number;
-  /** 7 留回访（分子）：cohort 中锚点日仍有事件的去重用户数 */
+  /** 7 留回访（分子）：cohort 中锚点日仍有 session_start 的去重用户数 */
   retention_d7_returned: number;
   /** 锚点日前 7 日的本地 YYYY-MM-DD */
   retention_d7_cohort_date: string;
@@ -61,7 +50,7 @@ export interface OverviewKpi {
 interface CohortStat {
   /** 分母：cohort 中的去重用户数 */
   cohort: number;
-  /** 分子：cohort 中锚点日仍有业务活跃事件的去重用户数 */
+  /** 分子：cohort 中锚点日仍有 session_start 的去重用户数 */
   retain: number;
   /** 比例：cohort 为 0 时为 null（无法算） */
   rate: number | null;
@@ -71,7 +60,7 @@ export interface OverviewSeriesPoint {
   bucket: string;       // 5 分钟桶字符串（与 ad-revenue 同口径）
   ts: number;           // 桶起点 ms
   active_users: number; // 该桶内 session_start 去重用户数（≈每 5min 活跃）
-  new_users: number;    // 该桶内首次出现的用户数（按全表历史判断）
+  new_users: number;    // 该桶内首次 session_start 的用户数（按全表历史判断）
 }
 
 export interface OverviewResult {
@@ -178,8 +167,8 @@ async function countDistinctUsers(
 }
 
 /**
- * 在 [fromTs,toTs] 窗口内首次出现（全表 MIN(event_ts) 在窗口内）的去重用户数。
- * 注意是「全表首次出现」=新增用户，不是「窗口内首次出现」（后者是漏斗指标，不准）。
+ * 在 [fromTs,toTs] 窗口内首次 session_start 的去重用户数。
+ * 注意新增、DAU、留存都用 session_start 作为进入游戏口径，避免任意事件把分母/分子撑大。
  */
 async function countNewUsersInWindow(
   gameKey: string,
@@ -194,9 +183,10 @@ async function countNewUsersInWindow(
          SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
+            AND event_name = ?
           GROUP BY ${USER_KEY_SQL_MYSQL}
        ) t WHERE t.first_ts BETWEEN ? AND ?`,
-      [gameKey, fromTs, toTs],
+      [gameKey, SESSION_START, fromTs, toTs],
     );
     return Number((rows as Array<{ c: number }>)[0]?.c || 0);
   }
@@ -206,16 +196,17 @@ async function countNewUsersInWindow(
          SELECT ${USER_KEY_SQL_SQLITE} AS uk, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
+            AND event_name = ?
           GROUP BY ${USER_KEY_SQL_SQLITE}
        ) t WHERE t.first_ts BETWEEN ? AND ?`,
     )
-    .get(gameKey, fromTs, toTs) as { c: number };
+    .get(gameKey, SESSION_START, fromTs, toTs) as { c: number };
   return Number(r?.c || 0);
 }
 
 /**
- * 计算新增 cohort 留存：分母是 baseFrom..baseTo 内首次进入游戏的用户，
- * 分子是这批用户在 retainFrom..retainTo 内仍有业务活跃事件的人数。
+ * 计算新增 cohort 留存：分母是 baseFrom..baseTo 内首次 session_start 的用户，
+ * 分子是这批用户在 retainFrom..retainTo 内仍有 session_start 的人数。
  * 返回三元组：cohort（分母）、retain（分子）、rate（cohort=0 时为 null）。
  */
 async function cohortRetention(
@@ -237,6 +228,7 @@ async function cohortRetention(
          SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
+            AND event_name = ?
           GROUP BY ${USER_KEY_SQL_MYSQL}
          HAVING first_ts BETWEEN ? AND ?
        ) base
@@ -244,10 +236,10 @@ async function cohortRetention(
          SELECT DISTINCT ${USER_KEY_SQL_MYSQL} AS uk
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name IN (${ACTIVE_EVENTS.map(() => '?').join(',')})
+            AND event_name = ?
             AND event_ts BETWEEN ? AND ?
        ) ret ON base.uk = ret.uk`,
-      [gameKey, baseFrom, baseTo, gameKey, ...ACTIVE_EVENTS, retainFrom, retainTo],
+      [gameKey, SESSION_START, baseFrom, baseTo, gameKey, SESSION_START, retainFrom, retainTo],
     );
     const row = (rows as Array<{ base_cnt: number; retain_cnt: number }>)[0];
     const cohort = Number(row?.base_cnt || 0);
@@ -260,10 +252,11 @@ async function cohortRetention(
       `SELECT ${USER_KEY_SQL_SQLITE} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
         WHERE game_key = ?
+          AND event_name = ?
         GROUP BY ${USER_KEY_SQL_SQLITE}
        HAVING first_ts BETWEEN ? AND ?`,
     )
-    .all(gameKey, baseFrom, baseTo) as Array<{ uk: string }>;
+    .all(gameKey, SESSION_START, baseFrom, baseTo) as Array<{ uk: string }>;
   if (baseRows.length === 0) return empty;
   const baseSet = new Set(baseRows.map((r) => r.uk));
   const retainRows = db
@@ -271,10 +264,10 @@ async function cohortRetention(
       `SELECT DISTINCT ${USER_KEY_SQL_SQLITE} AS uk
          FROM analytics_events
         WHERE game_key = ?
-          AND event_name IN (${ACTIVE_EVENTS.map(() => '?').join(',')})
+          AND event_name = ?
           AND event_ts BETWEEN ? AND ?`,
     )
-    .all(gameKey, ...ACTIVE_EVENTS, retainFrom, retainTo) as Array<{ uk: string }>;
+    .all(gameKey, SESSION_START, retainFrom, retainTo) as Array<{ uk: string }>;
   let hit = 0;
   for (const r of retainRows) {
     if (baseSet.has(r.uk)) hit++;
@@ -285,7 +278,7 @@ async function cohortRetention(
 /**
  * 5 分钟桶活跃 / 新增时间序列。
  * - active_users：每个桶内 session_start 去重用户数
- * - new_users：每个桶内「全表首次出现」用户数
+ * - new_users：每个桶内「全表首次 session_start」用户数
  *
  * 实现：在内存里按桶分组，桶字符串与 ad-revenue 同口径，方便前端做 x 轴对齐
  */
@@ -297,7 +290,7 @@ async function getActiveSeries(
   if (toTs < fromTs) return [];
   // 1) 拉窗口内 session_start 事件，按桶去重
   const sessionRows = await listSessionStarts(gameKey, fromTs, toTs);
-  // 2) 拉每个用户的全表首次出现时间，给 new_users 计算用
+  // 2) 拉每个用户的全表首次 session_start 时间，给 new_users 计算用
   const firstSeenMap = await getFirstSeenMap(gameKey);
 
   // 桶 -> Set<uk>
@@ -360,7 +353,7 @@ async function listSessionStarts(
 }
 
 /**
- * 拉「每个用户的全表最早 event_ts」，用于新增用户判定。
+ * 拉「每个用户的全表最早 session_start」，用于新增用户判定。
  * 用户量小时（数千～几万），全量扫一次完全够用；用户量上 10 万级时再考虑加索引/汇总表。
  */
 async function getFirstSeenMap(gameKey: string): Promise<Map<string, number>> {
@@ -371,8 +364,9 @@ async function getFirstSeenMap(gameKey: string): Promise<Map<string, number>> {
       `SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
         WHERE game_key = ?
+          AND event_name = ?
         GROUP BY ${USER_KEY_SQL_MYSQL}`,
-      [gameKey],
+      [gameKey, SESSION_START],
     );
     for (const r of rows as Array<{ uk: string; first_ts: number }>) {
       map.set(r.uk, Number(r.first_ts));
@@ -384,9 +378,10 @@ async function getFirstSeenMap(gameKey: string): Promise<Map<string, number>> {
       `SELECT ${USER_KEY_SQL_SQLITE} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
         WHERE game_key = ?
+          AND event_name = ?
         GROUP BY ${USER_KEY_SQL_SQLITE}`,
     )
-    .all(gameKey) as Array<{ uk: string; first_ts: number }>;
+    .all(gameKey, SESSION_START) as Array<{ uk: string; first_ts: number }>;
   for (const r of rows) {
     map.set(r.uk, Number(r.first_ts));
   }

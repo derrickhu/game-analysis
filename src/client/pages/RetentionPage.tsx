@@ -353,7 +353,7 @@ export function RetentionPage() {
         message={`留存分析 · 当前游戏：${descriptor?.displayName ?? gameKey}`}
         description={
           data?.notice ||
-          '默认看多天新增 cohort 的 D1/D7 趋势和留存矩阵；点击某一天再钻取 D0-D30 曲线。这里展示的是新增留存，不是活跃次留，也不是 5 分钟实时指标。'
+          '默认看多天新增 cohort 的 D1/D7 趋势和留存矩阵；点击某一天再钻取 D0-D30 曲线。新增和回访统一按 session_start 去重，这里展示的是新增留存，不是活跃次留，也不是 5 分钟实时指标。'
         }
       />
       <Alert
@@ -364,12 +364,12 @@ export function RetentionPage() {
           <Space direction="vertical" size={0}>
             <Text>
               每一行的日期就是 cohort 日期。例如 2026-05-07 这一行，新增人数就是 5 月 7
-              日首次进入游戏的用户数，不是 5 月 6 日；D1 看这批人在 5 月 8 日是否回来，D2 看 5 月 9
-              日，D7 看 5 月 14 日。
+              日首次 session_start 的用户数，不是 5 月 6 日；D1 看这批人在 5 月 8 日是否回来，D2 看 5 月 9
+              日是否再次 session_start，D7 看 5 月 14 日。
             </Text>
             <Text type="secondary">
               格子里第一行是留存率，第二行是“回访人数/该 cohort 新增人数”。未到完整自然日的格子显示“未成熟”，不参与平均值和趋势判断；样本很小的早期日期只作排障参考。
-              活跃次留的分母是前一日活跃用户，新增次留的分母是首次进入游戏的新用户，本页统一使用新增次留/新增留存。
+              活跃次留的分母是前一日活跃用户，新增次留的分母是首次 session_start 的新用户，本页统一使用新增次留/新增留存。
             </Text>
           </Space>
         }
@@ -449,7 +449,7 @@ export function RetentionPage() {
         title={
           <MetricTitle
             label={`Cohort 新增留存矩阵 · ${segment}`}
-            help="行是新增日期 cohort，新增人数就是这一行日期当天首次进入游戏的人数；列是这批新用户在后续第 N 天是否回访。这里不是活跃次留。"
+            help="行是新增日期 cohort，新增人数就是这一行日期当天首次 session_start 的人数；列是这批新用户在后续第 N 天是否再次 session_start。这里不是活跃次留。"
           />
         }
       >
