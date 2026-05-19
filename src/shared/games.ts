@@ -25,6 +25,8 @@
  */
 export type GameplayPanelId =
   | 'level_progress'        // 关卡通关漏斗（hotpot 现役）
+  | 'hotpot_fruit_slice'    // 别捞水果：果切挑战玩法分析
+  | 'hotpot_daily_limited'  // 别捞水果：每日限定玩法分析
   | 'huahua_economy_flow'   // 花花经济流转健康度（花愿 / 钻石 / 体力的入账出账）
   | 'huahua_order_funnel'   // 花花订单转化漏斗（spawn → deliver / expire / ditch + 按 tier）
   | 'huahua_growth'         // 花花星级成长 + 新手引导漏斗
@@ -69,7 +71,7 @@ export const ALL_GAMES: GameDescriptor[] = [
     hasAnalyticsSdk: true,
     // hot-pot 已完成 SDK 标准化打点（含 level_start/clear/fail），存档差分链路下线
     hasSnapshotIngest: false,
-    gameplayPanels: ['level_progress'],
+    gameplayPanels: ['level_progress', 'hotpot_fruit_slice', 'hotpot_daily_limited'],
     monetization: { ads: true, iap: false, ecpmProfile: 'hotpot' },
   },
   {

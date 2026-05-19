@@ -1,6 +1,6 @@
 import { isMysqlMode, getDb, getMysqlPool } from '../db';
 import { estimateRevenueCny, getEstimatedEcpm } from '../config/ecpm';
-import { BUCKET_SIZE_MS, bucketToTs, tsToBucket, tsToHourBucket } from './bucket';
+import { BUCKET_SIZE_MS, bucketToTs, tsToBucket, tsToDayBucket, tsToHourBucket } from './bucket';
 
 const AD_EVENT_NAMES = ['ad_request', 'ad_show', 'ad_click', 'ad_close', 'ad_error'] as const;
 type AdEventName = (typeof AD_EVENT_NAMES)[number];
@@ -127,6 +127,10 @@ export interface SeriesUserBuckets {
   adUauHourly: Map<string, Set<string>>;
   /** 1 小时桶 → 在线 UAU 集合 */
   activeUuHourly: Map<string, Set<string>>;
+  /** 1 天桶 → 看广告去重用户集合 */
+  adUauDaily: Map<string, Set<string>>;
+  /** 1 天桶 → 在线 UAU 集合 */
+  activeUuDaily: Map<string, Set<string>>;
 }
 
 export async function listSeriesUserBuckets(
@@ -138,7 +142,11 @@ export async function listSeriesUserBuckets(
   const activeUu = new Map<string, Set<string>>();
   const adUauHourly = new Map<string, Set<string>>();
   const activeUuHourly = new Map<string, Set<string>>();
-  if (toTs < fromTs) return { adUau, activeUu, adUauHourly, activeUuHourly };
+  const adUauDaily = new Map<string, Set<string>>();
+  const activeUuDaily = new Map<string, Set<string>>();
+  if (toTs < fromTs) {
+    return { adUau, activeUu, adUauHourly, activeUuHourly, adUauDaily, activeUuDaily };
+  }
 
   const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id) AS uk";
   // 不限制 event_name：每条事件都进 active_uu，ad_show 额外进 ad_uau
@@ -161,11 +169,14 @@ export async function listSeriesUserBuckets(
     if (!uk) return;
     const bucket5m = tsToBucket(eventTs);
     const bucket1h = tsToHourBucket(eventTs);
+    const bucket1d = tsToDayBucket(eventTs);
     addToSet(activeUu, bucket5m, uk);
     addToSet(activeUuHourly, bucket1h, uk);
+    addToSet(activeUuDaily, bucket1d, uk);
     if (eventName === 'ad_show') {
       addToSet(adUau, bucket5m, uk);
       addToSet(adUauHourly, bucket1h, uk);
+      addToSet(adUauDaily, bucket1d, uk);
     }
   };
 
@@ -185,7 +196,7 @@ export async function listSeriesUserBuckets(
       onRow(Number(r.event_ts), String(r.event_name), String(r.uk ?? ''));
     }
   }
-  return { adUau, activeUu, adUauHourly, activeUuHourly };
+  return { adUau, activeUu, adUauHourly, activeUuHourly, adUauDaily, activeUuDaily };
 }
 
 async function countDistinctUsersByEvent(

@@ -9,6 +9,7 @@ import { cleanExpiredEvents } from './jobs/clean-expired-events';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 import { recomputeRetentionCohorts } from './metrics/retention';
+import { recomputeLevelPassRates } from './metrics/level-pass-rate';
 
 let started = false;
 
@@ -148,12 +149,32 @@ export function startScheduler(): void {
     void runLtvRecompute('startup');
   }, 5_000);
 
+  // 6) 闯关模式近 30 天通关率：每天凌晨 4:20 计算完整的最近 30 天，并发布给游戏端读取。
+  const levelPassRateCron = process.env.LEVEL_PASS_RATE_CRON || '20 4 * * *';
+  const runLevelPassRateRecompute = async (trigger: 'cron' | 'startup') => {
+    try {
+      const result = await recomputeLevelPassRates({ gameKey: 'hotpot', windowDays: 30, publish: true });
+      console.log(
+        `[scheduler] level_pass_rate(${trigger}) ${result.game_key}: rows=${result.rows}, ` +
+          `range=${result.window_start_date}~${result.window_end_date}, published=${result.published}`,
+      );
+    } catch (error) {
+      console.error(`[scheduler] level_pass_rate 回算失败 (${trigger}):`, error);
+    }
+  };
+  cron.schedule(levelPassRateCron, () => {
+    void runLevelPassRateRecompute('cron');
+  });
+  setTimeout(() => {
+    void runLevelPassRateRecompute('startup');
+  }, 8_000);
+
   const enabledKeys = getEnabledAnalyticsGames().map((g) => g.gameKey);
   console.log(
     `[scheduler] started: snapshots(games=${GAME_CONFIGS.length}), ` +
       `events(enabled=${enabledKeys.length}/${ANALYTICS_GAMES.length} [${enabledKeys.join(',')}], cron=${eventsCron}), ` +
       `cleanup(cron=${cleanCron}, local=${retentionDaysLocal}d, cloud=${retentionDaysCloud}d), ` +
       `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d), ` +
-      `ltv_recompute(cron=${ltvCron})`,
+      `ltv_recompute(cron=${ltvCron}), level_pass_rate(cron=${levelPassRateCron})`,
   );
 }

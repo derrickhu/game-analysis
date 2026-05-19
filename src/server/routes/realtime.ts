@@ -32,6 +32,10 @@ import {
   getHuahuaSnapshotOverview,
   listHuahuaPlayerSnapshots,
 } from '../metrics/realtime-huahua-snapshot';
+import {
+  getHotpotDailyLimitedOverview,
+  getHotpotFruitSliceOverview,
+} from '../metrics/realtime-hotpot-modes';
 import { ingestHuahuaSnapshots } from '../jobs/ingest-huahua-snapshot';
 import { getOverview } from '../metrics/realtime-overview';
 import { getProgressOverview } from '../metrics/realtime-progress';
@@ -48,6 +52,7 @@ import {
   getRetentionCohortRangeOverview,
   getPrecomputedRetentionCohortOverview,
 } from '../metrics/retention';
+import { recomputeLevelPassRates } from '../metrics/level-pass-rate';
 import {
   getBusinessRoiDecision,
   getBusinessRoiOverview,
@@ -61,6 +66,7 @@ import {
   HOUR_BUCKET_SIZE_MS,
   bucketToTs,
   tsToBucket,
+  tsToDayBucket,
   tsToHourBucket,
 } from '../metrics/bucket';
 
@@ -130,6 +136,12 @@ interface BusinessRoiAiBody {
   game?: string;
   baseline_days?: number;
   maturity_day?: number;
+}
+
+interface LevelPassRateBody {
+  game?: string;
+  window_days?: number;
+  publish?: boolean;
 }
 
 interface AdRevenueSeriesItem {
@@ -219,6 +231,8 @@ interface AdRevenueResponse {
   series: AdRevenueSeriesItem[];
   /** 同窗口的小时桶聚合，给「关键变现指标趋势」长尺度对比图使用，避免 5 分钟桶过密 */
   series_hourly: AdRevenueHourlySeriesItem[];
+  /** 同窗口的天桶聚合，给跨日观察使用 */
+  series_daily: AdRevenueHourlySeriesItem[];
   breakdown_by_scene: AdRevenueBreakdown[];
 }
 
@@ -332,6 +346,36 @@ function foldHourlySeries(
   return out;
 }
 
+function foldDailySeries(
+  fiveMinSeries: AdRevenueSeriesItem[],
+  fromBucket: string,
+  toBucket: string,
+): AdRevenueHourlySeriesItem[] {
+  const map = new Map<string, AdRevenueHourlySeriesItem>();
+  for (const item of fiveMinSeries) {
+    const dayKey = tsToDayBucket(bucketToTs(item.minute));
+    const acc = map.get(dayKey) || emptySeriesItem(dayKey);
+    acc.ad_request_cnt += item.ad_request_cnt;
+    acc.ad_show_cnt += item.ad_show_cnt;
+    acc.ad_click_cnt += item.ad_click_cnt;
+    acc.ad_complete_cnt += item.ad_complete_cnt;
+    acc.ad_error_cnt += item.ad_error_cnt;
+    acc.ad_revenue_estimated_cny += item.ad_revenue_estimated_cny;
+    map.set(dayKey, acc);
+  }
+  const fromDayTs = bucketToTs(tsToDayBucket(bucketToTs(fromBucket)));
+  const toDayTs = bucketToTs(tsToDayBucket(bucketToTs(toBucket)));
+  const out: AdRevenueHourlySeriesItem[] = [];
+  for (let ts = fromDayTs; ts <= toDayTs; ts += 24 * HOUR_BUCKET_SIZE_MS) {
+    const k = tsToDayBucket(ts);
+    out.push(map.get(k) || emptySeriesItem(k));
+  }
+  for (const item of out) {
+    item.ad_revenue_estimated_cny = Math.round(item.ad_revenue_estimated_cny * 100) / 100;
+  }
+  return out;
+}
+
 function buildBreakdown(gameKey: string, rows: AdMinuteRow[]): AdRevenueBreakdown[] {
   const map = new Map<string, AdRevenueBreakdown>();
   for (const row of rows) {
@@ -384,6 +428,11 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     patchSeriesUserMetrics(seriesHourly, {
       adUau: seriesUserBuckets.adUauHourly,
       activeUu: seriesUserBuckets.activeUuHourly,
+    });
+    const seriesDaily = foldDailySeries(series, fromMinute, toMinute);
+    patchSeriesUserMetrics(seriesDaily, {
+      adUau: seriesUserBuckets.adUauDaily,
+      activeUu: seriesUserBuckets.activeUuDaily,
     });
 
     let totalShow = 0;
@@ -438,6 +487,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       },
       series,
       series_hourly: seriesHourly,
+      series_daily: seriesDaily,
       breakdown_by_scene: breakdown,
     };
     return response;
@@ -546,6 +596,29 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       toCohortDate: body.to_date,
     });
     return { ok: true, user_daily: userDaily, cohort_ltv: cohort };
+  });
+
+  // 手动回算闯关模式近 N 天通关率，并发布最新 30 天快照给 hot-pot 读取。
+  app.post('/api/realtime/recompute-level-pass-rates', async (request) => {
+    const body = (request.body || {}) as LevelPassRateBody;
+    const gameKey = body.game || 'hotpot';
+    if (gameKey !== 'hotpot') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'level-pass-rates 当前只支持 hotpot' };
+    }
+    try {
+      const result = await recomputeLevelPassRates({
+        gameKey,
+        windowDays: Number(body.window_days) || 30,
+        publish: body.publish !== false,
+      });
+      return { ok: true, ...result };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'RECOMPUTE_LEVEL_PASS_RATES_FAILED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   // 通用看板数据：DAU / 当日新增 / 次留 / 7留 / 5 分钟桶活跃序列
@@ -873,6 +946,38 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       kpi: result.kpi,
       distribution: result.distribution,
       series: result.series,
+    };
+  });
+
+  // hot-pot 专属：果切挑战玩法看板（开始/结束/复活/道具/档位）
+  app.get('/api/realtime/hotpot-fruit-slice', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'hotpot';
+    if (gameKey !== 'hotpot') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'hotpot-fruit-slice 当前只服务 hotpot' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getHotpotFruitSliceOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
+      ...result,
+    };
+  });
+
+  // hot-pot 专属：每日限定玩法看板（挑战完成率/失败原因/道具/解锁）
+  app.get('/api/realtime/hotpot-daily-limited', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'hotpot';
+    if (gameKey !== 'hotpot') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'hotpot-daily-limited 当前只服务 hotpot' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getHotpotDailyLimitedOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
+      ...result,
     };
   });
 

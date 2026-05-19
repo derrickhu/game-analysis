@@ -5,6 +5,13 @@ import {
 } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import {
+  defaultSeriesZoomStart,
+  formatSeriesBucketLabel,
+  SERIES_GRANULARITY_LABEL,
+  SeriesGranularitySwitch,
+  type SeriesGranularity,
+} from './SeriesGranularitySwitch';
 import { type WindowValue, buildWindowQuery } from './timeWindow';
 
 // 顶部 App.tsx 全局选择器统一管控：gameKey、windowSel（时间窗口）、refreshToken（手动刷新计数）
@@ -74,6 +81,8 @@ interface AdRevenueResponse {
   series: AdSeriesItem[];
   /** 小时桶 series：字段同 5 分钟桶，仅给「关键变现指标趋势」长尺度对比图用 */
   series_hourly: AdSeriesItem[];
+  /** 天桶 series：字段同 5 分钟桶，给跨日走势使用 */
+  series_daily: AdSeriesItem[];
   breakdown_by_scene: AdBreakdown[];
 }
 
@@ -114,15 +123,6 @@ function formatTs(ts: number | null): string {
   return new Date(ts).toLocaleString('zh-CN');
 }
 
-function formatMinuteLabel(minute: string): string {
-  // YYYY-MM-DDTHH:mm -> MM-DD HH:mm（按本地时区显示）
-  if (!minute) return '';
-  const utcDate = new Date(`${minute}:00.000Z`);
-  if (isNaN(utcDate.getTime())) return minute;
-  const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
-  return `${pad(utcDate.getMonth() + 1)}-${pad(utcDate.getDate())} ${pad(utcDate.getHours())}:${pad(utcDate.getMinutes())}`;
-}
-
 /**
  * 各游戏广告场景中文名映射。
  * key 与客户端打点的 scene 字段保持一致，便于经分人员一眼读懂场景含义。
@@ -145,6 +145,12 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     fruit_slice_remove_pipe_block: '果切无尽 - 移除管道木板',
     fruit_slice_tool_eliminate: '果切无尽 - 消除道具',
     fruit_slice_tool_shuffle: '果切无尽 - 打乱道具',
+    fruit_slice_checkpoint_start: '果切无尽 - 从档位开始',
+    // === DailyLimitedScene 每日限定 ===
+    daily_limited_tool_lift: '每日限定 - 暂存水果移出',
+    daily_limited_tool_shuffle: '每日限定 - 洗牌道具',
+    daily_limited_tool_undo: '每日限定 - 撤销上一步',
+    daily_limited_unlock_buffer_slot: '每日限定 - 解锁额外暂存格',
   },
   // huahua 的广告位定义见 game2D_huahua/src/managers/AdManager.ts 的 AdScene 枚举
   huahua: {
@@ -225,6 +231,8 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
   const [adErrors, setAdErrors] = useState<AdErrorsResponse | null>(null);
   // 广告错误表格默认折叠为 5 行紧凑视图，避免占满屏。需要排查时再展开看完整列表。
   const [adErrorsExpanded, setAdErrorsExpanded] = useState(false);
+  const [revenueGranularity, setRevenueGranularity] = useState<SeriesGranularity>('five_min');
+  const [keyMetricGranularity, setKeyMetricGranularity] = useState<SeriesGranularity>('hour');
 
   const loadData = useCallback(async () => {
     try {
@@ -261,16 +269,20 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     // refreshToken 变化即触发重新拉取（来自顶部刷新按钮 / 自动 5 分钟 timer / 立即拉取后强制刷新）
   }, [loadData, loadAdErrors, refreshToken]);
 
-  const xLabels = useMemo(
-    () => (data?.series || []).map((s) => formatMinuteLabel(s.minute)),
+  const getSeriesByGranularity = useCallback(
+    (granularity: SeriesGranularity): AdSeriesItem[] => {
+      if (!data) return [];
+      if (granularity === 'day') return data.series_daily || [];
+      if (granularity === 'hour') return data.series_hourly || [];
+      return data.series || [];
+    },
     [data],
   );
 
   const chartOption = useMemo(() => {
-    const series = data?.series || [];
-    // 5 分钟粒度下，1 小时只有 12 桶、6 小时 72 桶，默认全展示就好
-    // 仅当 24 小时这种宽窗口（288 桶）才默认缩到最近 60 桶以避免过密
-    const zoomStart = series.length > 60 ? Math.max(0, 100 - (60 / series.length) * 100) : 0;
+    const series = getSeriesByGranularity(revenueGranularity);
+    const xLabels = series.map((s) => formatSeriesBucketLabel(s.minute, revenueGranularity));
+    const zoomStart = defaultSeriesZoomStart(series.length, revenueGranularity);
     return {
       tooltip: {
         trigger: 'axis' as const,
@@ -353,7 +365,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         },
       ],
     };
-  }, [data, xLabels]);
+  }, [getSeriesByGranularity, revenueGranularity]);
 
   /**
    * 关键变现指标趋势图：3 条折线共享 1 小时桶 x 轴，分别走 3 个 y 轴。
@@ -363,10 +375,9 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
    * - 用法：发版时刻在心里画一根竖线，前后曲线对比即可看出趋势变化
    */
   const keyRatioChartOption = useMemo(() => {
-    const series = data?.series_hourly || [];
-    // 小时桶 24h 窗口 24 点、7 天窗口 168 点，168 以下默认全展示，超过才缩
-    const zoomStart = series.length > 96 ? Math.max(0, 100 - (96 / series.length) * 100) : 0;
-    const hourLabels = series.map((s) => formatMinuteLabel(s.minute));
+    const series = getSeriesByGranularity(keyMetricGranularity);
+    const zoomStart = defaultSeriesZoomStart(series.length, keyMetricGranularity);
+    const bucketLabels = series.map((s) => formatSeriesBucketLabel(s.minute, keyMetricGranularity));
     return {
       tooltip: {
         trigger: 'axis' as const,
@@ -388,7 +399,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
       ],
       xAxis: {
         type: 'category' as const,
-        data: hourLabels,
+        data: bucketLabels,
         boundaryGap: false,
         axisLabel: { fontSize: 11, hideOverlap: true, color: '#595959' },
         axisTick: { alignWithLabel: true },
@@ -462,7 +473,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         },
       ],
     };
-  }, [data]);
+  }, [getSeriesByGranularity, keyMetricGranularity]);
 
   const breakdownColumns = [
     { title: '广告类型', dataIndex: 'ad_type', key: 'ad_type' },
@@ -707,11 +718,15 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         </Row>
       </Card>
 
-      <Card size="small" title="分钟级趋势 · 曝光数 vs 估算收益">
-        {data && data.series.length > 0 ? (
+      <Card
+        size="small"
+        title={`${SERIES_GRANULARITY_LABEL[revenueGranularity]}趋势 · 曝光数 vs 估算收益`}
+        extra={<SeriesGranularitySwitch value={revenueGranularity} onChange={setRevenueGranularity} />}
+      >
+        {data && getSeriesByGranularity(revenueGranularity).length > 0 ? (
           <ReactECharts option={chartOption} style={{ height: 380 }} notMerge lazyUpdate />
         ) : (
-          <Empty description="暂无数据。后端按 5 分钟粒度聚合、cron 每 5 分钟拉取一次，刚上报的事件最长延迟 5 分钟才会出现" />
+          <Empty description="暂无数据。刚上报的事件最长延迟 5 分钟才会进入聚合" />
         )}
       </Card>
 
@@ -722,23 +737,26 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
       */}
       <Card
         size="small"
-        title="关键变现指标趋势 · 1 小时桶"
+        title={`关键变现指标趋势 · ${SERIES_GRANULARITY_LABEL[keyMetricGranularity]}粒度`}
         extra={
-          <Tooltip
-            title={
-              <div style={{ lineHeight: 1.7 }}>
-                <div>按 1 小时桶聚合，发版前后对比直接对应小时刻度。</div>
-                <div>桶级分母用「该小时任意事件去重的在线 UAU」，保证 ad_uau ≤ 在线 UAU、渗透率 ≤ 100%。</div>
-                <div>顶部 KPI 区的窗口级渗透率 / ARPDAU 仍按 session_start DAU 计算，与总览看板同口径。</div>
-                <div>桶内无任何事件时派生指标显示为 0，可视为该小时无在线流量，非数据异常。</div>
-              </div>
-            }
-          >
-            <Tag color="blue" style={{ cursor: 'help' }}>发版对比 ⓘ</Tag>
-          </Tooltip>
+          <Space size="small">
+            <SeriesGranularitySwitch value={keyMetricGranularity} onChange={setKeyMetricGranularity} />
+            <Tooltip
+              title={
+                <div style={{ lineHeight: 1.7 }}>
+                  <div>支持 5 分钟 / 小时 / 天切换：看短期波动用 5 分钟，看发版前后用小时，看跨日趋势用天。</div>
+                  <div>桶级分母用「该桶任意事件去重的在线 UAU」，保证 ad_uau ≤ 在线 UAU、渗透率 ≤ 100%。</div>
+                  <div>顶部 KPI 区的窗口级渗透率 / ARPDAU 仍按 session_start DAU 计算，与总览看板同口径。</div>
+                  <div>桶内无任何事件时派生指标显示为 0，可视为该桶无在线流量，非数据异常。</div>
+                </div>
+              }
+            >
+              <Tag color="blue" style={{ cursor: 'help' }}>发版对比 ⓘ</Tag>
+            </Tooltip>
+          </Space>
         }
       >
-        {data && data.series.length > 0 ? (
+        {data && getSeriesByGranularity(keyMetricGranularity).length > 0 ? (
           <ReactECharts option={keyRatioChartOption} style={{ height: 320 }} notMerge lazyUpdate />
         ) : (
           <Empty description="暂无数据" />

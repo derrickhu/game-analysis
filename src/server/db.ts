@@ -368,6 +368,29 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
     )
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS game_level_pass_rates (
+      game_key VARCHAR(64) NOT NULL,
+      mode_key VARCHAR(64) NOT NULL,
+      level_id INT NOT NULL,
+      window_days INT NOT NULL,
+      window_start_date VARCHAR(10) NOT NULL,
+      window_end_date VARCHAR(10) NOT NULL,
+      start_users INT NOT NULL DEFAULT 0,
+      clear_users INT NOT NULL DEFAULT 0,
+      fail_users INT NOT NULL DEFAULT 0,
+      started_and_cleared_users INT NOT NULL DEFAULT 0,
+      start_attempts INT NOT NULL DEFAULT 0,
+      clear_attempts INT NOT NULL DEFAULT 0,
+      fail_attempts INT NOT NULL DEFAULT 0,
+      pass_rate DOUBLE NOT NULL DEFAULT 0,
+      is_sample_low TINYINT NOT NULL DEFAULT 0,
+      computed_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, mode_key, level_id, window_days),
+      INDEX idx_level_pass_rates_game_mode (game_key, mode_key, window_days)
+    )
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS raw_events (
       id BIGINT PRIMARY KEY AUTO_INCREMENT,
       game_key VARCHAR(64) NOT NULL,

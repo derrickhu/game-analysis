@@ -5,6 +5,8 @@ import type { GameplayPanelId } from '../../shared/games';
 import { EconomyFlowPanel } from './EconomyFlowPanel';
 import { EngagementPanel } from './EngagementPanel';
 import { GrowthProgressPanel } from './GrowthProgressPanel';
+import { HotpotDailyLimitedPanel } from './HotpotDailyLimitedPanel';
+import { HotpotFruitSlicePanel } from './HotpotFruitSlicePanel';
 import { LevelProgressPanel } from './LevelProgressPanel';
 import { OrderFunnelPanel } from './OrderFunnelPanel';
 
@@ -48,6 +50,16 @@ export const GAMEPLAY_PANEL_REGISTRY: Record<GameplayPanelId, GameplayPanelMeta>
     id: 'level_progress',
     title: '关卡通关漏斗',
     Component: LevelProgressPanel,
+  },
+  hotpot_fruit_slice: {
+    id: 'hotpot_fruit_slice',
+    title: '果切挑战分析',
+    Component: HotpotFruitSlicePanel,
+  },
+  hotpot_daily_limited: {
+    id: 'hotpot_daily_limited',
+    title: '每日限定分析',
+    Component: HotpotDailyLimitedPanel,
   },
   huahua_economy_flow: {
     id: 'huahua_economy_flow',
