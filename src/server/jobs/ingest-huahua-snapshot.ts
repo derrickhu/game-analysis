@@ -260,11 +260,13 @@ export function parseHuahuaPlayerSnapshot(doc: any, snapshotDate: string): Playe
   // 订单池
   const activeCustomerCount = countActiveCustomers(save);
 
-  const lastActiveAt = Math.max(
+  const now = Date.now();
+  const maxAllowedActiveAt = now + 10 * 60 * 1000;
+  const lastActiveAt = [
     toNumber(save.timestamp),
     toNumber(doc?.lastWriteAt),
     toNumber(doc?.updatedAt),
-  );
+  ].reduce((max, ts) => (ts > 0 && ts <= maxAllowedActiveAt ? Math.max(max, ts) : max), 0) || now;
 
   return {
     user_id: userId,

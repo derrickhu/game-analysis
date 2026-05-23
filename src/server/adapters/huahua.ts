@@ -38,11 +38,13 @@ export function parseHuahuaSnapshot(snapshot: RawSnapshot): PlayerFacts {
   const tutorial = parseJson(payload.huahua_tutorial);
 
   const currency = readCurrency(save);
-  const activeTimestamp = Math.max(
+  const maxAllowedActiveAt = Date.now() + 10 * 60 * 1000;
+  // 客户端存档时间可能受玩家设备时间影响写到未来，超过当前拉取时间 10 分钟的值不参与最后活跃计算。
+  const activeTimestamp = [
     toNumber(save.timestamp),
     toNumber(snapshot.lastWriteAt),
     toNumber(snapshot.updatedAt),
-  );
+  ].reduce((max, ts) => (ts > 0 && ts <= maxAllowedActiveAt ? Math.max(max, ts) : max), 0) || Date.now();
 
   return {
     gameKey: snapshot.gameKey,
