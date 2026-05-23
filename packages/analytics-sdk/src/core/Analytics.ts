@@ -16,6 +16,40 @@ import { debug, now, randomId } from './utils';
 
 const SDK_VERSION = '0.1.0';
 
+type CommonParams = Record<string, EventParamValue>;
+
+export interface AnalyticsAdContext {
+  /** 业务广告位场景，必须稳定，例：level_prop_color_blast */
+  scene: string;
+  /** 广告单元 ID */
+  adUnitId: string;
+  /** 广告类型，默认 reward */
+  adType?: string;
+  /** 关卡型游戏可传关卡 ID */
+  levelId?: number | string;
+  /** 额外业务字段，会扁平合入 params */
+  extra?: CommonParams;
+}
+
+export interface AnalyticsLevelContext {
+  /** 关卡 ID，统一从 1 开始 */
+  levelId: number | string;
+  levelName?: string;
+  mode?: string;
+  durationMs?: number;
+  reason?: string;
+  extra?: CommonParams;
+}
+
+export interface AnalyticsTutorialStepContext {
+  stepId: string;
+  stepIndex: number;
+  status: 'done' | 'skip';
+  durationMs?: number;
+  isForce?: boolean;
+  extra?: CommonParams;
+}
+
 export interface AnalyticsInitOptions {
   /** 上报地址，例：https://xxx.service.tcloudbase.com/track */
   endpoint: string;
@@ -174,6 +208,99 @@ class AnalyticsImpl {
     }
   }
 
+  trackSessionStart(params: CommonParams = {}): void {
+    this.track(EVENT_NAMES.SESSION_START, params);
+  }
+
+  trackSessionEnd(reason: string, params: CommonParams = {}): void {
+    this.track(EVENT_NAMES.SESSION_END, { ...params, reason });
+  }
+
+  trackAppShow(params: CommonParams = {}): void {
+    this.track(EVENT_NAMES.APP_SHOW, params);
+  }
+
+  trackAppError(err: unknown, params: CommonParams = {}): void {
+    const message = err instanceof Error ? err.message : String(err || 'unknown');
+    const stack = err instanceof Error ? String(err.stack || '').slice(0, 800) : '';
+    this.track(EVENT_NAMES.APP_ERROR, {
+      ...params,
+      err_code: params.err_code ?? 'client_error',
+      err_msg: message.slice(0, 240),
+      stack,
+    });
+  }
+
+  trackLevelStart(context: AnalyticsLevelContext): void {
+    this.track(EVENT_NAMES.LEVEL_START, this.buildLevelParams(context));
+  }
+
+  trackLevelClear(context: AnalyticsLevelContext): void {
+    this.track(EVENT_NAMES.LEVEL_CLEAR, this.buildLevelParams(context));
+  }
+
+  trackLevelFail(context: AnalyticsLevelContext): void {
+    this.track(EVENT_NAMES.LEVEL_FAIL, this.buildLevelParams(context));
+  }
+
+  trackTutorialStep(context: AnalyticsTutorialStepContext): void {
+    this.track(EVENT_NAMES.TUTORIAL_STEP, {
+      step_id: context.stepId,
+      step_index: context.stepIndex,
+      status: context.status,
+      ...(context.durationMs !== undefined ? { duration_ms: context.durationMs } : {}),
+      ...(context.isForce !== undefined ? { is_force: context.isForce } : {}),
+      ...(context.extra || {}),
+    });
+  }
+
+  trackShareAppMessage(
+    entryPoint: string,
+    params: { title?: string; imageUrl?: string; query?: string; extra?: CommonParams } = {},
+  ): void {
+    this.track(EVENT_NAMES.SHARE_APP_MESSAGE, {
+      entry_point: entryPoint,
+      ...(params.title ? { title: params.title } : {}),
+      ...(params.imageUrl ? { image_url: params.imageUrl } : {}),
+      ...(params.query ? { query: params.query } : {}),
+      ...(params.extra || {}),
+    });
+  }
+
+  trackShareTimeline(
+    entryPoint: string,
+    params: { title?: string; imageUrl?: string; query?: string; extra?: CommonParams } = {},
+  ): void {
+    this.track(EVENT_NAMES.SHARE_TIMELINE, {
+      entry_point: entryPoint,
+      ...(params.title ? { title: params.title } : {}),
+      ...(params.imageUrl ? { image_url: params.imageUrl } : {}),
+      ...(params.query ? { query: params.query } : {}),
+      ...(params.extra || {}),
+    });
+  }
+
+  trackAdRequest(context: AnalyticsAdContext): void {
+    this.track(EVENT_NAMES.AD_REQUEST, this.buildAdParams(context));
+  }
+
+  trackAdShow(context: AnalyticsAdContext): void {
+    this.track(EVENT_NAMES.AD_SHOW, this.buildAdParams(context));
+  }
+
+  trackAdClose(context: AnalyticsAdContext, params: CommonParams = {}): void {
+    this.track(EVENT_NAMES.AD_CLOSE, this.buildAdParams(context, params));
+  }
+
+  trackAdError(context: AnalyticsAdContext, params: { errCode: number | string; errMsg: string } & CommonParams): void {
+    const { errCode, errMsg, ...rest } = params;
+    this.track(EVENT_NAMES.AD_ERROR, this.buildAdParams(context, {
+      ...rest,
+      err_code: errCode,
+      err_msg: errMsg || 'unknown',
+    }));
+  }
+
   /** 业务方主动 flush（一般无需调用，onHide 已自动 flush） */
   async flush(reason = 'manual'): Promise<void> {
     await this.batcher?.flushNow(reason);
@@ -214,6 +341,28 @@ class AnalyticsImpl {
         network: ctx.deviceInfo.network || 'unknown',
       },
       params: params || {},
+    };
+  }
+
+  private buildLevelParams(context: AnalyticsLevelContext): CommonParams {
+    return {
+      level_id: context.levelId,
+      ...(context.levelName ? { level_name: context.levelName } : {}),
+      ...(context.mode ? { mode: context.mode } : {}),
+      ...(context.durationMs !== undefined ? { duration_ms: context.durationMs } : {}),
+      ...(context.reason ? { reason: context.reason } : {}),
+      ...(context.extra || {}),
+    };
+  }
+
+  private buildAdParams(context: AnalyticsAdContext, extras: CommonParams = {}): CommonParams {
+    return {
+      ad_unit_id: context.adUnitId,
+      ad_type: context.adType || 'reward',
+      scene: context.scene || 'unknown',
+      ...(context.levelId !== undefined && context.levelId !== null ? { level_id: context.levelId } : {}),
+      ...(context.extra || {}),
+      ...extras,
     };
   }
 

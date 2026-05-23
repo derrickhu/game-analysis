@@ -9,7 +9,12 @@
  *   Analytics.track(EVENT_NAMES.AD_SHOW, { ad_unit_id: '...', scene: 'level_fail_revive' });
  */
 export { Analytics } from './core/Analytics';
-export type { AnalyticsInitOptions } from './core/Analytics';
+export type {
+  AnalyticsAdContext,
+  AnalyticsInitOptions,
+  AnalyticsLevelContext,
+  AnalyticsTutorialStepContext,
+} from './core/Analytics';
 export { EVENT_NAMES, DEFAULT_SAMPLING_RULES } from './core/EventSchema';
 export type { AnalyticsEvent, EventParamValue } from './core/EventSchema';
 export type {
