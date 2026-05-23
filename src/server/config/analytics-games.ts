@@ -42,7 +42,7 @@ export const ANALYTICS_GAMES: AnalyticsGameConfig[] = [
     gameKey: 'caizhu',
     displayName: '彩珠五连',
     cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: false,
+    enabled: true,
   },
 ];
 

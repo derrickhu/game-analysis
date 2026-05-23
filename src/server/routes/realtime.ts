@@ -36,6 +36,7 @@ import {
   getHotpotDailyLimitedOverview,
   getHotpotFruitSliceOverview,
 } from '../metrics/realtime-hotpot-modes';
+import { getCaizhuGameplayOverview } from '../metrics/realtime-caizhu';
 import { ingestHuahuaSnapshots } from '../jobs/ingest-huahua-snapshot';
 import { getOverview } from '../metrics/realtime-overview';
 import { getProgressOverview } from '../metrics/realtime-progress';
@@ -947,13 +948,10 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     return { ok: true, names };
   });
 
-  // hot-pot 专属：关卡分布 / 通关失败趋势
-  // 路径有意写成 hotpot-progress，强调这是游戏独立指标，不要被其他游戏复用
-  app.get('/api/realtime/hotpot-progress', async (request) => {
-    const query = (request.query || {}) as AdRevenueQuery;
+  async function buildLevelProgressResponse(query: AdRevenueQuery) {
     const gameKey = query.game || 'hotpot';
-    if (gameKey !== 'hotpot') {
-      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'hotpot-progress 当前只服务 hotpot' };
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromBucket = tsToBucket(fromTs);
@@ -966,6 +964,33 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       kpi: result.kpi,
       distribution: result.distribution,
       series: result.series,
+    };
+  }
+
+  // 通用关卡型玩法：只依赖 level_start / level_clear / level_fail 三件套，可被 hotpot / caizhu 复用。
+  app.get('/api/realtime/level-progress', async (request) => {
+    return buildLevelProgressResponse((request.query || {}) as AdRevenueQuery);
+  });
+
+  // 兼容旧路径：hot-pot 面板早期使用此路径，保留避免历史链接失效。
+  app.get('/api/realtime/hotpot-progress', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    return buildLevelProgressResponse({ ...query, game: query.game || 'hotpot' });
+  });
+
+  // 彩珠五连专属：入口、经典模式、道具、教程步骤聚合。
+  app.get('/api/realtime/caizhu-gameplay', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'caizhu';
+    if (gameKey !== 'caizhu') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'caizhu-gameplay 当前只服务 caizhu' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getCaizhuGameplayOverview(gameKey, fromTs, toTs);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
+      ...result,
     };
   });
 

@@ -170,6 +170,12 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     reward_box_organize: '奖励箱整理',
     checkin_ad_bonus: '签到加餐',
   },
+  caizhu: {
+    level_prop_colorBlast: '闯关道具 - 同色爆破',
+    level_prop_crossClear: '闯关道具 - 十字清场',
+    level_prop_wildNext: '闯关道具 - 万能预备',
+    classic_native_template: '经典模式 - 原生模板广告',
+  },
 };
 
 /**

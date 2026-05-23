@@ -89,9 +89,8 @@ function bucketShort(bucket: string): string {
 /**
  * 关卡通关漏斗（hotpot 现役 / 后续可拓展到任何 level_start/level_clear/level_fail 三件套游戏）。
  *
- * 数据源：/api/realtime/hotpot-progress（query=game/from/to）。
- * 即使路径上写了 hotpot 命名，但接口本身是按 level_* 事件做去重和聚合，对任何"关卡型"游戏都通用，
- * 后续接彩珠的 match_progress 可直接复用此 panel（届时把后端接口改名 /api/realtime/level-progress 更恰当）。
+ * 数据源：/api/realtime/level-progress（query=game/from/to）。
+ * 接口按 level_start / level_clear / level_fail 三件套做去重和聚合，任何"关卡型"游戏都能复用。
  *
  * 受全局 AnalyticsFilterContext 控制：gameKey/windowSel/refreshToken 变化都会触发重新拉取。
  */
@@ -107,7 +106,7 @@ export function LevelProgressPanel() {
       try {
         const queryStr = buildWindowQuery(nextWindow);
         const res = await fetch(
-          `/api/realtime/hotpot-progress?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
+          `/api/realtime/level-progress?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         );
         const json = (await res.json()) as ProgressResponse;
         if (seq !== requestSeqRef.current) return;

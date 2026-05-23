@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 import { Card, Empty } from 'antd';
 
 import type { GameplayPanelId } from '../../shared/games';
+import { CaizhuGameplayPanel } from './CaizhuGameplayPanel';
 import { EconomyFlowPanel } from './EconomyFlowPanel';
 import { EngagementPanel } from './EngagementPanel';
 import { GrowthProgressPanel } from './GrowthProgressPanel';
@@ -80,6 +81,11 @@ export const GAMEPLAY_PANEL_REGISTRY: Record<GameplayPanelId, GameplayPanelMeta>
     id: 'huahua_engagement',
     title: '玩法参与度',
     Component: EngagementPanel,
+  },
+  caizhu_gameplay: {
+    id: 'caizhu_gameplay',
+    title: '彩珠玩法总览',
+    Component: CaizhuGameplayPanel,
   },
   match_progress: {
     id: 'match_progress',

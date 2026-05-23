@@ -31,6 +31,7 @@ export type GameplayPanelId =
   | 'huahua_order_funnel'   // 花花订单转化漏斗（spawn → deliver / expire / ditch + 按 tier）
   | 'huahua_growth'         // 花花星级成长 + 新手引导漏斗
   | 'huahua_engagement'     // 花花参与度（任务/签到/抽奖/熟客/合成）
+  | 'caizhu_gameplay'       // 彩珠五连：入口/经典模式/道具/教程
   | 'match_progress';       // 消除关卡进度（caizhu 待补）
 
 /**
@@ -93,10 +94,10 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'caizhu',
     displayName: '彩珠五连',
-    hasAnalyticsSdk: false,
+    hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
-    gameplayPanels: [],
-    monetization: { ads: false, iap: false, ecpmProfile: 'caizhu' },
+    gameplayPanels: ['level_progress', 'caizhu_gameplay'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'caizhu' },
   },
 ];
 

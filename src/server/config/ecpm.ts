@@ -26,9 +26,14 @@ const ECPM_TABLE: Record<string, number> = {
   'huahua._default': 18,
 
   // caizhu
+  'caizhu.reward.level_prop_colorBlast': 24,
+  'caizhu.reward.level_prop_crossClear': 24,
+  'caizhu.reward.level_prop_wildNext': 24,
+  'caizhu.custom.classic_native_template': 8,
   'caizhu.reward.daily_bonus': 26,
   'caizhu.interstitial.level_clear': 9,
   'caizhu.reward': 24,
+  'caizhu.custom': 8,
   'caizhu.interstitial': 9,
   'caizhu._default': 15,
 
