@@ -43,6 +43,33 @@ interface ProgressResponse {
   error?: string;
 }
 
+interface LevelPassRateSnapshot {
+  game_key: string;
+  mode_key: string;
+  window_days: number;
+  window_start_date: string;
+  window_end_date: string;
+  computed_at: number;
+  levels: Array<{
+    level_id: number;
+    pass_rate: number;
+    start_users: number;
+    clear_users: number;
+    started_and_cleared_users: number;
+    start_attempts: number;
+    clear_attempts: number;
+    fail_attempts: number;
+    is_sample_low: boolean;
+  }>;
+}
+
+interface LevelPassRateResponse {
+  ok: boolean;
+  snapshot?: LevelPassRateSnapshot | null;
+  code?: string;
+  error?: string;
+}
+
 function formatDuration(ms: number): string {
   if (!ms) return '-';
   const sec = Math.round(ms / 1000);
@@ -71,6 +98,7 @@ function bucketShort(bucket: string): string {
 export function LevelProgressPanel() {
   const { gameKey, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
+  const [passRateSnapshot, setPassRateSnapshot] = useState<LevelPassRateSnapshot | null>(null);
   const requestSeqRef = useRef(0);
 
   const load = useCallback(
@@ -87,6 +115,19 @@ export function LevelProgressPanel() {
           message.error(`获取关卡进度失败: ${json.error || json.code}`);
         }
         setProgress(json);
+        if (nextGameKey === 'hotpot') {
+          const snapshotRes = await fetch(
+            `/api/realtime/level-pass-rates?game=${encodeURIComponent(nextGameKey)}&window_days=30`,
+          );
+          const snapshotJson = (await snapshotRes.json()) as LevelPassRateResponse;
+          if (seq !== requestSeqRef.current) return;
+          if (!snapshotJson.ok) {
+            message.error(`获取通关率快照失败: ${snapshotJson.error || snapshotJson.code}`);
+          }
+          setPassRateSnapshot(snapshotJson.snapshot || null);
+        } else {
+          setPassRateSnapshot(null);
+        }
         setLastRefreshedAt(Date.now());
       } catch (error) {
         if (seq !== requestSeqRef.current) return;
@@ -194,6 +235,117 @@ export function LevelProgressPanel() {
   }, [progress?.series]);
 
   const progressKpi = progress?.kpi;
+  const passRateLevels = passRateSnapshot?.levels || [];
+  const passRateSummary = useMemo(() => {
+    if (!passRateSnapshot || passRateLevels.length === 0) {
+      return null;
+    }
+    const sorted = [...passRateLevels].sort((a, b) => a.level_id - b.level_id);
+    const first = sorted[0];
+    const level3 = sorted.find((row) => row.level_id === 3) || null;
+    const validRows = sorted.filter((row) => row.start_users >= 10);
+    const lowestPass = validRows.reduce<typeof validRows[number] | null>(
+      (lowest, row) => (!lowest || row.pass_rate < lowest.pass_rate ? row : lowest),
+      null,
+    );
+    let maxReachDrop: { from_level: number; to_level: number; drop: number } | null = null;
+    for (let i = 1; i < sorted.length; i += 1) {
+      const prev = sorted[i - 1]!;
+      const curr = sorted[i]!;
+      if (!prev.start_users) continue;
+      const drop = 1 - curr.start_users / prev.start_users;
+      if (!maxReachDrop || drop > maxReachDrop.drop) {
+        maxReachDrop = { from_level: prev.level_id, to_level: curr.level_id, drop };
+      }
+    }
+    const firstStartUsers = first?.start_users || 0;
+    const totalStartUsers = passRateLevels.reduce((sum, row) => sum + row.start_users, 0);
+    const totalClearedUsers = passRateLevels.reduce((sum, row) => sum + row.started_and_cleared_users, 0);
+    const totalStartAttempts = passRateLevels.reduce((sum, row) => sum + row.start_attempts, 0);
+    const lowSampleLevels = passRateLevels.filter((row) => row.start_users < 10).length;
+    return {
+      firstStartUsers,
+      totalStartUsers,
+      totalClearedUsers,
+      totalStartAttempts,
+      lowSampleLevels,
+      level3,
+      lowestPass,
+      maxReachDrop,
+      avgPassRate: totalStartUsers > 0 ? totalClearedUsers / totalStartUsers : null,
+    };
+  }, [passRateLevels, passRateSnapshot]);
+
+  const passRateOption = useMemo(() => {
+    const rows = passRateSnapshot?.levels || [];
+    return {
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          if (!Array.isArray(params) || params.length === 0) return '';
+          const row = rows[params[0].dataIndex];
+          if (!row) return '';
+          const rateText = row.start_users < 10 ? '少于10人，不对外展示比例' : `${(row.pass_rate * 100).toFixed(1)}%`;
+          const reachText = rows[0]?.start_users ? `${((row.start_users / rows[0].start_users) * 100).toFixed(1)}%` : '-';
+          const retryText = row.start_users ? `${(row.start_attempts / row.start_users).toFixed(2)}次/人` : '-';
+          return `第${row.level_id}关<br/>开始用户: ${row.start_users}<br/>开始次数: ${row.start_attempts}<br/>通关用户: ${row.clear_users}<br/>到达率: ${reachText}<br/>平均尝试: ${retryText}<br/>游戏展示口径: ${rateText}`;
+        },
+      },
+      legend: {
+        data: ['开始用户', '通关用户', '单关通关率', '到达率', '平均尝试'],
+        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
+      },
+      grid: { left: 50, right: 56, top: 50, bottom: 62 },
+      xAxis: { type: 'category', data: rows.map((row) => `第${row.level_id}关`) },
+      yAxis: [
+        { type: 'value', name: '人数', minInterval: 1 },
+        { type: 'value', name: '通关率', min: 0, max: 1, axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%` } },
+      ],
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 10 }],
+      series: [
+        {
+          name: '开始用户',
+          type: 'bar',
+          barMaxWidth: 18,
+          itemStyle: { color: '#94a3b8', borderRadius: [4, 4, 0, 0] },
+          data: rows.map((row) => row.start_users),
+        },
+        {
+          name: '通关用户',
+          type: 'bar',
+          barMaxWidth: 18,
+          itemStyle: { color: '#10b981', borderRadius: [4, 4, 0, 0] },
+          data: rows.map((row) => row.clear_users),
+        },
+        {
+          name: '单关通关率',
+          type: 'line',
+          yAxisIndex: 1,
+          smooth: true,
+          itemStyle: { color: '#2563eb' },
+          data: rows.map((row) => row.pass_rate),
+        },
+        {
+          name: '到达率',
+          type: 'line',
+          yAxisIndex: 1,
+          smooth: true,
+          itemStyle: { color: '#f59e0b' },
+          data: rows.map((row) => (rows[0]?.start_users ? row.start_users / rows[0].start_users : 0)),
+        },
+        {
+          name: '平均尝试',
+          type: 'line',
+          yAxisIndex: 1,
+          smooth: true,
+          itemStyle: { color: '#8b5cf6' },
+          lineStyle: { type: 'dashed' },
+          data: rows.map((row) => (row.start_users ? Math.min(row.start_attempts / row.start_users / 5, 1) : 0)),
+        },
+      ],
+    };
+  }, [passRateSnapshot?.levels]);
 
   return (
     <Card
@@ -258,6 +410,123 @@ export function LevelProgressPanel() {
             <ReactECharts option={levelDistOption} style={{ height: 320 }} />
           ) : (
             <Empty description="暂无关卡数据，请玩游戏触发 level_start" />
+          )}
+        </Card>
+
+        <Card
+          type="inner"
+          title="近30天游戏端通关快照"
+          extra={
+            passRateSnapshot ? (
+              <Text type="secondary">
+                {passRateSnapshot.window_start_date} ~ {passRateSnapshot.window_end_date}，每日 04:20 更新
+              </Text>
+            ) : null
+          }
+        >
+          {passRateSnapshot && passRateSummary ? (
+            <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+              <Row gutter={[16, 16]}>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic title="快照关卡数" value={passRateSnapshot.levels.length} suffix="关" />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic title="开始用户合计" value={passRateSummary.totalStartUsers} suffix="人次关" />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Tooltip title="各关 level_start 次数合计，同一用户失败重开会重复计数。">
+                      <Statistic title="开始次数合计" value={passRateSummary.totalStartAttempts} suffix="次" />
+                    </Tooltip>
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic title="通关用户合计" value={passRateSummary.totalClearedUsers} suffix="人次关" />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic title="少于10人关卡" value={passRateSummary.lowSampleLevels} suffix="关" />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic
+                      title="第3关通关率"
+                      value={passRateSummary.level3 ? (passRateSummary.level3.pass_rate * 100).toFixed(1) : '-'}
+                      suffix={passRateSummary.level3 ? '%' : ''}
+                    />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Tooltip title="= 第3关开始次数 / 第3关开始用户。高于 1 说明玩家在重复尝试。">
+                      <Statistic
+                        title="第3关平均尝试"
+                        value={
+                          passRateSummary.level3 && passRateSummary.level3.start_users
+                            ? (passRateSummary.level3.start_attempts / passRateSummary.level3.start_users).toFixed(2)
+                            : '-'
+                        }
+                        suffix={passRateSummary.level3 ? '次/人' : ''}
+                      />
+                    </Tooltip>
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic
+                      title="第3关到达率"
+                      value={
+                        passRateSummary.level3 && passRateSummary.firstStartUsers
+                          ? ((passRateSummary.level3.start_users / passRateSummary.firstStartUsers) * 100).toFixed(1)
+                          : '-'
+                      }
+                      suffix={passRateSummary.level3 && passRateSummary.firstStartUsers ? '%' : ''}
+                    />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic
+                      title="最大到达流失"
+                      value={
+                        passRateSummary.maxReachDrop
+                          ? `第${passRateSummary.maxReachDrop.from_level}→${passRateSummary.maxReachDrop.to_level}关`
+                          : '-'
+                      }
+                      suffix={
+                        passRateSummary.maxReachDrop
+                          ? ` -${(passRateSummary.maxReachDrop.drop * 100).toFixed(1)}%`
+                          : ''
+                      }
+                    />
+                  </Card>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Card size="small">
+                    <Statistic
+                      title="最低通关率关卡"
+                      value={passRateSummary.lowestPass ? `第${passRateSummary.lowestPass.level_id}关` : '-'}
+                      suffix={
+                        passRateSummary.lowestPass ? ` ${(passRateSummary.lowestPass.pass_rate * 100).toFixed(1)}%` : ''
+                      }
+                    />
+                  </Card>
+                </Col>
+              </Row>
+              <Text type="secondary">
+                与游戏内读取同一份 MySQL 快照；少于 10 个开始用户的关卡，游戏内只展示“通关少于10人”，不展示比例。
+              </Text>
+              <ReactECharts option={passRateOption} style={{ height: 340 }} />
+            </Space>
+          ) : (
+            <Empty description="暂无近30天通关率快照，请等待每日任务或手动回算" />
           )}
         </Card>
 

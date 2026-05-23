@@ -52,7 +52,7 @@ import {
   getRetentionCohortRangeOverview,
   getPrecomputedRetentionCohortOverview,
 } from '../metrics/retention';
-import { recomputeLevelPassRates } from '../metrics/level-pass-rate';
+import { getLatestLevelPassRateOverview, recomputeLevelPassRates } from '../metrics/level-pass-rate';
 import {
   getBusinessRoiDecision,
   getBusinessRoiOverview,
@@ -616,6 +616,26 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return {
         ok: false,
         code: 'RECOMPUTE_LEVEL_PASS_RATES_FAILED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  // 游戏端同源快照：展示当前每天发布给 hot-pot 的近 30 天各关通关数据，便于人工核对。
+  app.get('/api/realtime/level-pass-rates', async (request) => {
+    const query = (request.query || {}) as { game?: string; window_days?: string | number };
+    const gameKey = query.game || 'hotpot';
+    if (gameKey !== 'hotpot') {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'level-pass-rates 当前只支持 hotpot' };
+    }
+    const windowDays = Number(query.window_days) || 30;
+    try {
+      const snapshot = await getLatestLevelPassRateOverview(gameKey, windowDays);
+      return { ok: true, snapshot };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'GET_LEVEL_PASS_RATES_FAILED',
         error: error instanceof Error ? error.message : String(error),
       };
     }

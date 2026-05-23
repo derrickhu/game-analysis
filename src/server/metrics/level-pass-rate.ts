@@ -66,6 +66,26 @@ export interface RecomputeLevelPassRatesResult {
   computed_at: number;
 }
 
+export interface LevelPassRateOverview {
+  game_key: string;
+  mode_key: string;
+  window_days: number;
+  window_start_date: string;
+  window_end_date: string;
+  computed_at: number;
+  levels: Array<{
+    level_id: number;
+    pass_rate: number;
+    start_users: number;
+    clear_users: number;
+    started_and_cleared_users: number;
+    start_attempts: number;
+    clear_attempts: number;
+    fail_attempts: number;
+    is_sample_low: boolean;
+  }>;
+}
+
 interface RecomputeOptions {
   gameKey?: string;
   windowDays?: number;
@@ -107,6 +127,75 @@ export async function recomputeLevelPassRates(options: RecomputeOptions = {}): P
     rows: rows.length,
     published: publish && gameKey === 'hotpot' && windowDays === WINDOW_DAYS,
     computed_at: computedAt,
+  };
+}
+
+export async function getLatestLevelPassRateOverview(
+  gameKey = 'hotpot',
+  windowDays = WINDOW_DAYS,
+): Promise<LevelPassRateOverview | null> {
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `SELECT
+       game_key,
+       mode_key,
+       level_id,
+       window_days,
+       window_start_date,
+       window_end_date,
+       start_users,
+       clear_users,
+       started_and_cleared_users,
+      start_attempts,
+      clear_attempts,
+      fail_attempts,
+       pass_rate,
+       is_sample_low,
+       computed_at
+     FROM game_level_pass_rates
+     WHERE game_key = ? AND mode_key = ? AND window_days = ?
+     ORDER BY level_id ASC`,
+    [gameKey, MODE_KEY, windowDays],
+  );
+  const list = rows as Array<{
+    game_key: string;
+    mode_key: string;
+    level_id: number;
+    window_days: number;
+    window_start_date: string;
+    window_end_date: string;
+    start_users: number;
+    clear_users: number;
+    started_and_cleared_users: number;
+    start_attempts: number;
+    clear_attempts: number;
+    fail_attempts: number;
+    pass_rate: number;
+    is_sample_low: number;
+    computed_at: number;
+  }>;
+  const first = list[0];
+  if (!first) {
+    return null;
+  }
+  return {
+    game_key: first.game_key,
+    mode_key: first.mode_key,
+    window_days: Number(first.window_days),
+    window_start_date: String(first.window_start_date),
+    window_end_date: String(first.window_end_date),
+    computed_at: Number(first.computed_at),
+    levels: list.map((row) => ({
+      level_id: Number(row.level_id),
+      pass_rate: Number(row.pass_rate),
+      start_users: Number(row.start_users),
+      clear_users: Number(row.clear_users),
+      started_and_cleared_users: Number(row.started_and_cleared_users),
+      start_attempts: Number(row.start_attempts),
+      clear_attempts: Number(row.clear_attempts),
+      fail_attempts: Number(row.fail_attempts),
+      is_sample_low: Boolean(row.is_sample_low),
+    })),
   };
 }
 
