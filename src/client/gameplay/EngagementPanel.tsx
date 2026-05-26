@@ -5,7 +5,15 @@ import ReactECharts from 'echarts-for-react';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
-import { bucketShort, defaultZoomStart, formatInt, formatPercent } from './utils';
+import {
+  CHART_GRID_WITH_ZOOM,
+  CHART_LEGEND_TOP,
+  bucketShort,
+  defaultZoomStart,
+  formatInt,
+  formatPercent,
+  makeDataZoom,
+} from './utils';
 
 const { Text } = Typography;
 
@@ -113,16 +121,13 @@ export function EngagementPanel() {
       tooltip: { trigger: 'axis' },
       legend: {
         data: ['日常任务', '周里程碑', '签到', '许愿喷泉', '熟客卡掉落', '合成（×10 估算）'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
         type: 'scroll',
+        ...CHART_LEGEND_TOP,
       },
-      grid: { left: 50, right: 30, top: 60, bottom: 60 },
+      grid: CHART_GRID_WITH_ZOOM,
       xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
       yAxis: { type: 'value', name: '次数', minInterval: 1 },
-      dataZoom: [
-        { type: 'inside', start: zoomStart, end: 100 },
-        { type: 'slider', height: 18, bottom: 10, start: zoomStart, end: 100 },
-      ],
+      dataZoom: makeDataZoom(zoomStart, 100),
       series: [
         {
           name: '日常任务',

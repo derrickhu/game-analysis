@@ -5,7 +5,15 @@ import ReactECharts from 'echarts-for-react';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
-import { bucketShort, defaultZoomStart, formatInt, formatPercent } from './utils';
+import {
+  CHART_GRID_WITH_ZOOM,
+  CHART_LEGEND_TOP,
+  bucketShort,
+  defaultZoomStart,
+  formatInt,
+  formatPercent,
+  makeDataZoom,
+} from './utils';
 
 const { Text } = Typography;
 
@@ -130,17 +138,11 @@ export function OrderFunnelPanel() {
     const zoomStart = defaultZoomStart(series.length);
     return {
       tooltip: { trigger: 'axis' },
-      legend: {
-        data: ['生成', '完成', '超时', '撕单'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
-      },
-      grid: { left: 50, right: 30, top: 50, bottom: 60 },
+      legend: { data: ['生成', '完成', '超时', '撕单'], ...CHART_LEGEND_TOP },
+      grid: CHART_GRID_WITH_ZOOM,
       xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
       yAxis: { type: 'value', name: '次数', minInterval: 1 },
-      dataZoom: [
-        { type: 'inside', start: zoomStart, end: 100 },
-        { type: 'slider', height: 18, bottom: 10, start: zoomStart, end: 100 },
-      ],
+      dataZoom: makeDataZoom(zoomStart, 100),
       series: [
         {
           name: '生成',

@@ -5,7 +5,14 @@ import ReactECharts from 'echarts-for-react';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
-import { bucketShort, defaultZoomStart, formatInt } from './utils';
+import {
+  CHART_GRID_WITH_ZOOM,
+  CHART_LEGEND_TOP,
+  bucketShort,
+  defaultZoomStart,
+  formatInt,
+  makeDataZoom,
+} from './utils';
 
 const { Text } = Typography;
 
@@ -117,18 +124,16 @@ export function EconomyFlowPanel() {
       tooltip: { trigger: 'axis' },
       legend: {
         data: ['花愿入账', '花愿出账', '钻石入账', '钻石出账'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
+        ...CHART_LEGEND_TOP,
       },
-      grid: { left: 50, right: 50, top: 50, bottom: 60 },
+      // 双 Y 轴右侧需要更多空间，单独覆盖 right
+      grid: { ...CHART_GRID_WITH_ZOOM, right: 56 },
       xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
       yAxis: [
         { type: 'value', name: '花愿', minInterval: 1 },
         { type: 'value', name: '钻石', minInterval: 1, position: 'right' },
       ],
-      dataZoom: [
-        { type: 'inside', start: zoomStart, end: 100 },
-        { type: 'slider', height: 18, bottom: 10, start: zoomStart, end: 100 },
-      ],
+      dataZoom: makeDataZoom(zoomStart, 100),
       series: [
         {
           name: '花愿入账',

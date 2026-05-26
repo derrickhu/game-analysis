@@ -5,7 +5,13 @@ import ReactECharts from 'echarts-for-react';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
-import { formatInt, formatPercent } from './utils';
+import {
+  CHART_GRID_WITH_ZOOM,
+  CHART_LEGEND_TOP,
+  formatInt,
+  formatPercent,
+  makeDataZoom,
+} from './utils';
 
 const { Text } = Typography;
 
@@ -112,14 +118,11 @@ export function GrowthProgressPanel() {
           return `${lv}<br/>到达用户：${row.user_cnt}<br/>升星事件：${row.event_cnt}`;
         },
       },
-      legend: {
-        data: ['到达用户', '升星事件'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
-      },
-      grid: { left: 50, right: 30, top: 50, bottom: 60 },
-      xAxis: { type: 'category', data: xAxis },
+      legend: { data: ['到达用户', '升星事件'], ...CHART_LEGEND_TOP },
+      grid: CHART_GRID_WITH_ZOOM,
+      xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
       yAxis: { type: 'value', name: '人数 / 次数', minInterval: 1 },
-      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 10 }],
+      dataZoom: makeDataZoom(),
       series: [
         {
           name: '到达用户',

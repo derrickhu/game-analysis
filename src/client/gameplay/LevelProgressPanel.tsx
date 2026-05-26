@@ -4,6 +4,12 @@ import ReactECharts from 'echarts-for-react';
 
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
+import {
+  CHART_GRID_WITH_ZOOM,
+  CHART_LEGEND_TOP,
+  defaultZoomStart,
+  makeDataZoom,
+} from './utils';
 
 const { Text } = Typography;
 
@@ -157,13 +163,24 @@ export function LevelProgressPanel() {
         },
       },
       legend: {
-        data: ['尝试', '通关', '放弃'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
+        data: ['尝试', '通关', '放弃', '通关率'],
+        ...CHART_LEGEND_TOP,
       },
-      grid: { left: 50, right: 30, top: 50, bottom: 60 },
-      xAxis: { type: 'category', data: xAxis },
-      yAxis: { type: 'value', name: '人数', minInterval: 1 },
-      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 10 }],
+      // 左轴：柱状人数；右轴：通关率折线（0-100%）。grid 右边距加大给右轴留空间。
+      grid: { ...CHART_GRID_WITH_ZOOM, right: 56 },
+      xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
+      yAxis: [
+        { type: 'value', name: '人数', minInterval: 1 },
+        {
+          type: 'value',
+          name: '通关率',
+          min: 0,
+          max: 1,
+          splitLine: { show: false },
+          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%` },
+        },
+      ],
+      dataZoom: makeDataZoom(),
       series: [
         {
           name: '尝试',
@@ -186,6 +203,18 @@ export function LevelProgressPanel() {
           itemStyle: { color: '#ef4444', borderRadius: [4, 4, 0, 0] },
           data: dist.map((d) => d.fail_users),
         },
+        {
+          // 通关率折线挂右轴，与三个柱状共享 x 轴；pass_rate 为 null（无尝试）跳过描点。
+          name: '通关率',
+          type: 'line',
+          yAxisIndex: 1,
+          smooth: true,
+          symbol: 'circle',
+          symbolSize: 6,
+          itemStyle: { color: '#2563eb' },
+          lineStyle: { width: 2 },
+          data: dist.map((d) => (d.pass_rate === null ? null : d.pass_rate)),
+        },
       ],
     };
   }, [progress?.distribution]);
@@ -193,20 +222,14 @@ export function LevelProgressPanel() {
   const levelTrendOption = useMemo(() => {
     const series = progress?.series || [];
     const xAxis = series.map((p) => bucketShort(p.bucket));
-    const zoomStart = series.length > 60 ? Math.max(0, 100 - (60 / series.length) * 100) : 0;
+    const zoomStart = defaultZoomStart(series.length, 60);
     return {
       tooltip: { trigger: 'axis' },
-      legend: {
-        data: ['开始', '通关', '失败'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
-      },
-      grid: { left: 50, right: 30, top: 50, bottom: 60 },
+      legend: { data: ['开始', '通关', '失败'], ...CHART_LEGEND_TOP },
+      grid: CHART_GRID_WITH_ZOOM,
       xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
       yAxis: { type: 'value', name: '次数', minInterval: 1 },
-      dataZoom: [
-        { type: 'inside', start: zoomStart, end: 100 },
-        { type: 'slider', height: 18, bottom: 10, start: zoomStart, end: 100 },
-      ],
+      dataZoom: makeDataZoom(zoomStart, 100),
       series: [
         {
           name: '开始',
@@ -293,15 +316,15 @@ export function LevelProgressPanel() {
       },
       legend: {
         data: ['开始用户', '通关用户', '单关通关率', '到达率', '平均尝试'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
+        ...CHART_LEGEND_TOP,
       },
-      grid: { left: 50, right: 56, top: 50, bottom: 62 },
-      xAxis: { type: 'category', data: rows.map((row) => `第${row.level_id}关`) },
+      grid: { ...CHART_GRID_WITH_ZOOM, right: 56 },
+      xAxis: { type: 'category', data: rows.map((row) => `第${row.level_id}关`), axisLabel: { hideOverlap: true } },
       yAxis: [
         { type: 'value', name: '人数', minInterval: 1 },
         { type: 'value', name: '通关率', min: 0, max: 1, axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%` } },
       ],
-      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 10 }],
+      dataZoom: makeDataZoom(),
       series: [
         {
           name: '开始用户',

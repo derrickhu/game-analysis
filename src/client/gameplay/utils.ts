@@ -35,3 +35,43 @@ export function defaultZoomStart(seriesLength: number, visibleCount = 60): numbe
   if (seriesLength <= visibleCount) return 0;
   return Math.max(0, 100 - (visibleCount / seriesLength) * 100);
 }
+
+// ─── ECharts 通用布局常量 ─────────────────────────────────────
+//
+// 历史问题：很多图表 grid.bottom=60 + dataZoom.slider {bottom:10, height:18}，
+// xAxis 标签紧贴 grid 底（≈30px），dataZoom 顶部到 bottom=28，留给 xAxis 的
+// (60-28)=32px 经常不够，导致 “第1关 第2关...” 这种类目标签和缩略图重叠。
+//
+// 统一改成 grid.bottom=80 + slider {bottom:14, height:18}（顶部到容器底 32px），
+// 给 xAxis tick+label 留 (80-32)=48px 富裕空间，所有带 dataZoom 的图都套这套。
+//
+// 不带 dataZoom 的图可以继续用 grid.bottom: 40~50，不需要这么多余白。
+
+/** 带 dataZoom slider 的图表统一 grid 余白，确保 xAxis label 不会压在缩略图上 */
+export const CHART_GRID_WITH_ZOOM = { left: 50, right: 30, top: 56, bottom: 80 } as const;
+
+/** 不带 dataZoom slider、且没有顶部 legend 的紧凑图表 */
+export const CHART_GRID_COMPACT = { left: 50, right: 30, top: 40, bottom: 48 } as const;
+
+/** 顶部 legend 通用样式：放在 chart 顶部 12px，给 grid.top: 56 让出空间 */
+export const CHART_LEGEND_TOP = {
+  top: 12,
+  textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
+} as const;
+
+/**
+ * dataZoom slider 通用样式：bottom:14 + height:18 → 占容器底 [14, 32]，
+ * 与 grid.bottom=80 留出的 xAxis 区 [32, 80] 不重叠。
+ */
+export function makeDataZoom(zoomStart = 0, zoomEnd = 100) {
+  return [
+    { type: 'inside' as const, start: zoomStart, end: zoomEnd },
+    {
+      type: 'slider' as const,
+      height: 18,
+      bottom: 14,
+      start: zoomStart,
+      end: zoomEnd,
+    },
+  ];
+}
