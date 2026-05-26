@@ -14,6 +14,7 @@
     "seed:ad-events": "node scripts/seed-ad-events.mjs",
     "migrate:mysql": "tsx src/server/jobs/migrate-sqlite-to-mysql.ts",
     "verify:mysql": "tsx src/server/jobs/verify-mysql-storage.ts",
+    "demo:restart": "node scripts/restart-demo.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "npm run typecheck && vite build"
   },

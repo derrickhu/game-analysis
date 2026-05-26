@@ -74,7 +74,7 @@ interface AdBreakdown {
 
 interface AdRevenueResponse {
   ok: true;
-  estimated: true;
+  estimated: boolean;
   notice: string;
   query: { game_key: string; from: string; to: string; window_minutes: number };
   summary: AdSummary;
@@ -296,7 +296,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(2) : String(v ?? '')),
       },
       legend: {
-        data: ['曝光数', '估算收益(元)'],
+        data: ['曝光数', '广告收益(元)'],
         top: 6,
         itemGap: 28,
         itemWidth: 18,
@@ -326,7 +326,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         },
         {
           type: 'value' as const,
-          name: '估算收益(元)',
+          name: '广告收益(元)',
           position: 'right' as const,
           nameTextStyle: { fontSize: 12, color: '#FF8A3D', padding: [0, 0, 0, 24] },
           axisLabel: { fontSize: 11, color: '#FF8A3D', formatter: (v: number) => v.toFixed(2) },
@@ -346,7 +346,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           yAxisIndex: 0,
         },
         {
-          name: '估算收益(元)',
+          name: '广告收益(元)',
           type: 'line' as const,
           smooth: true,
           symbol: 'circle' as const,
@@ -581,8 +581,8 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     {
       title: (
         <span>
-          估算收益(元)
-          <Tag color="orange" style={{ marginLeft: 6 }}>估算</Tag>
+          广告收益(元)
+          {data?.estimated ? <Tag color="orange" style={{ marginLeft: 6 }}>估算</Tag> : <Tag color="green" style={{ marginLeft: 6 }}>真实eCPM</Tag>}
         </span>
       ),
       dataIndex: 'ad_revenue_estimated_cny',
@@ -596,21 +596,21 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
       <Alert
         type="warning"
         showIcon
-        message="广告金额均为估算值"
-        description={data?.notice || '所有金额来自客户端 ad_show 计数 × 配置 eCPM 的估算，并非真实结算收入。'}
+        message={data?.estimated ? '广告金额暂按配置 eCPM 估算' : '广告金额使用真实 eCPM 分摊'}
+        description={data?.notice || '广告收益优先使用微信流量主真实 eCPM；缺少真实收入/曝光时回退配置 eCPM。'}
       />
 
       <Card
         size="small"
-        title={`实时广告收益（估算） · ${gameKey}`}
+        title={`实时广告收益 · ${gameKey}`}
         extra={
           <Tooltip
             title={
               <div style={{ lineHeight: 1.7 }}>
-                <div><b>估算收入 = 曝光数 ÷ 1000 × eCPM</b></div>
-                <div>eCPM 来自配置表 <code>server/config/ecpm.ts</code>，按下列五级回退查找：</div>
-                <div>(game.adType.scene) → (game.adType) → (game._default) → (_default.adType) → (_default)</div>
-                <div style={{ marginTop: 4 }}>不同 (ad_type, scene) eCPM 不同，下表「eCPM」列展示每个场景实际命中的口径。</div>
+                <div><b>广告收益 = 曝光数 ÷ 1000 × eCPM</b></div>
+                <div>eCPM 优先来自微信流量主真实收入/曝光；今天未结算时用最近 14 天真实加权 eCPM 预测。</div>
+                <div>只有完全没有真实流量主数据时，才回退配置表 <code>server/config/ecpm.ts</code>。</div>
+                <div style={{ marginTop: 4 }}>下表「eCPM」列展示每个广告场景实际使用的口径。</div>
               </div>
             }
           >
@@ -623,7 +623,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         {/*
           KPI 卡片：3x3 共 9 张，所有卡片用同一套 styles 保持高度对齐
           - 第 1 行：漏斗维度（曝光 / 填充率 / 错误率）
-          - 第 2 行：变现维度（完播率 / 估算收益 / ARPDAU）
+          - 第 2 行：变现维度（完播率 / 广告收益 / ARPDAU）
           - 第 3 行：用户维度（看广告 UAU / 渗透率 / 人均广告次数）
 
           已下线指标说明：
@@ -663,11 +663,11 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           </Col>
           <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
             <Card style={kpiCardStyle} styles={kpiCardStyles}>
-              <Tooltip title="曝光数 ÷ 1000 × eCPM 的估算值，非真实结算；以微信流量主结算数据为准">
+              <Tooltip title="曝光数 ÷ 1000 × eCPM。eCPM 优先使用微信流量主真实收入/曝光；缺失时回退配置 eCPM。">
                 <Statistic
                   title={(
                     <span>
-                      估算收益(元) <Tag color="orange" style={{ marginLeft: 4 }}>估算</Tag>
+                      广告收益(元) {data?.estimated ? <Tag color="orange" style={{ marginLeft: 4 }}>估算</Tag> : <Tag color="green" style={{ marginLeft: 4 }}>真实eCPM</Tag>}
                     </span>
                   ) as unknown as string}
                   value={data?.summary.total_revenue_estimated_cny ?? 0}
@@ -678,7 +678,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           </Col>
           <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
             <Card style={kpiCardStyle} styles={kpiCardStyles}>
-              <Tooltip title="估算收益 / DAU。行业参考：超休闲品类（玩法极简的轻量小游戏）¥0.3~¥1.0，普通休闲游戏更低。按窗口聚合，非自然日聚合。">
+              <Tooltip title="广告收益 / DAU。收益优先使用真实 eCPM 分摊；按窗口聚合，非自然日聚合。">
                 <Statistic
                   title={(
                     <span>
@@ -726,7 +726,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
 
       <Card
         size="small"
-        title={`${SERIES_GRANULARITY_LABEL[revenueGranularity]}趋势 · 曝光数 vs 估算收益`}
+        title={`${SERIES_GRANULARITY_LABEL[revenueGranularity]}趋势 · 曝光数 vs 广告收益`}
         extra={<SeriesGranularitySwitch value={revenueGranularity} onChange={setRevenueGranularity} />}
       >
         {data && getSeriesByGranularity(revenueGranularity).length > 0 ? (

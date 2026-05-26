@@ -743,19 +743,19 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
             message={headline}
             description={
               decision
-                ? `置信度：${confidenceLabel(commercialDecision?.confidence ?? decision.confidence)}；核心问题：${problemLabel(commercialDecision?.primary_problem)}；判断样本：${coreMetrics?.sample_days ?? decision.commercial_summary?.early_sample_days ?? 0} 天（${d30RoasBasisLabel(d30Basis)}）；建议预算：${money(decision.budget_recommendation?.recommended_min_cny)}-${money(decision.budget_recommendation?.recommended_max_cny)} 元；止损 CPI：${money(decision.budget_recommendation?.hard_stop_cpi_cny, 4)} 元。`
+                ? `统计窗口：${rangeLabel}；置信度：${confidenceLabel(commercialDecision?.confidence ?? decision.confidence)}；核心问题：${problemLabel(commercialDecision?.primary_problem)}；D30 判断样本：${coreMetrics?.sample_days ?? decision.commercial_summary?.early_sample_days ?? 0} 天（${d30RoasBasisLabel(d30Basis)}）；建议预算：${money(decision.budget_recommendation?.recommended_min_cny)}-${money(decision.budget_recommendation?.recommended_max_cny)} 元；止损 CPI：${money(decision.budget_recommendation?.hard_stop_cpi_cny, 4)} 元。`
                 : `当前游戏：${descriptor?.displayName ?? gameKey}；系统会基于腾讯广告消耗、微信流量主收入/曝光、游戏新增和 LTV 自动判断。`
             }
           />
           <Row gutter={[16, 16]}>
             <Col xs={12} md={5}>
-              <MetricCard title="周期总消耗" value={`${money(coreMetrics?.total_spend_cny ?? summary?.total_spend_cny)} 元`} hint="腾讯广告 cost" />
+              <MetricCard title="窗口总消耗" value={`${money(summary?.total_spend_cny)} 元`} hint={`统计窗口：${rangeLabel}`} />
             </Col>
             <Col xs={12} md={5}>
-              <MetricCard title="周期新增用户" value={`${coreMetrics?.total_new_users ?? summary?.total_game_new_users ?? 0}`} hint="游戏 first_seen" />
+              <MetricCard title="窗口新增用户" value={`${summary?.total_game_new_users ?? 0}`} hint="游戏 first_seen" />
             </Col>
             <Col xs={12} md={5}>
-              <MetricCard title="平均 CPI" value={`${money(coreMetrics?.avg_cpi_cny ?? summary?.avg_cpi_cny, 4)} 元`} hint="消耗 / 新增，不依赖 click" />
+              <MetricCard title="窗口平均 CPI" value={`${money(summary?.avg_cpi_cny, 4)} 元`} hint="窗口消耗 / 窗口新增，不依赖 click" />
             </Col>
             <Col xs={12} md={5}>
               <MetricCard
@@ -765,7 +765,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
               />
             </Col>
             <Col xs={12} md={4}>
-              <MetricCard title="周期 D0 ROI" value={percent(coreMetrics?.d0_roas ?? summary?.d0_roi)} hint="真实收入 / 消耗" />
+              <MetricCard title="窗口 D0 ROI" value={percent(summary?.d0_roi)} hint="窗口真实收入 / 窗口消耗" />
             </Col>
           </Row>
           <Row gutter={[16, 16]}>

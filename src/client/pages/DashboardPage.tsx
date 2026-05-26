@@ -20,7 +20,7 @@ import { getGameDescriptor } from '../../shared/games';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { RealtimeAdRevenue } from '../RealtimeAdRevenue';
 import { RealtimeShare } from '../RealtimeShare';
-import { buildWindowQuery, type WindowValue } from '../timeWindow';
+import { buildWindowQuery, resolveWindow, tsToUtcBucketStr, type WindowValue } from '../timeWindow';
 
 const { Text } = Typography;
 
@@ -66,9 +66,23 @@ interface OverviewResponse {
  */
 interface AdSummaryLiteResponse {
   ok: boolean;
-  summary?: { total_revenue_estimated_cny?: number };
+  summary?: {
+    total_revenue_estimated_cny?: number;
+    ad_penetration_rate?: number;
+    ad_show_per_uu?: number;
+    fill_rate?: number;
+  };
   code?: string;
   error?: string;
+}
+
+interface AcquisitionCostResponse {
+  ok: boolean;
+  total_spend_cny?: number;
+  rows?: number;
+  source?: string;
+  error?: string;
+  code?: string;
 }
 
 interface RetentionSummaryResponse {
@@ -129,6 +143,55 @@ function formatRetentionFraction(
   return `${cohortLabel} ${cohort} 人 → ${anchorLabel} ${returned ?? 0} 人`;
 }
 
+function buildShiftedWindowQuery(window: WindowValue, shiftMs: number): string {
+  const { fromTs, toTs } = resolveWindow(window);
+  return `from=${encodeURIComponent(tsToUtcBucketStr(fromTs + shiftMs))}&to=${encodeURIComponent(tsToUtcBucketStr(toTs + shiftMs))}`;
+}
+
+function dateKey(ts: number): string {
+  const date = new Date(ts);
+  const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function buildDateRangeQuery(window: WindowValue, shiftMs = 0): string {
+  const { fromTs, toTs } = resolveWindow(window);
+  return `from_date=${encodeURIComponent(dateKey(fromTs + shiftMs))}&to_date=${encodeURIComponent(dateKey(toTs + shiftMs))}`;
+}
+
+function deltaText(current: number | null | undefined, previous: number | null | undefined, options: {
+  digits?: number;
+  reverseGood?: boolean;
+  unavailableText?: string;
+} = {}): { text: string; color?: string } {
+  if (current === null || current === undefined || previous === null || previous === undefined) {
+    return { text: options.unavailableText || '较昨日同期 -' };
+  }
+  if (previous === 0) {
+    return { text: current === 0 ? '较昨日 0.0%' : '昨日为 0，无法算涨跌' };
+  }
+  const diff = ((current - previous) / Math.abs(previous)) * 100;
+  const sign = diff > 0 ? '+' : '';
+  const digits = options.digits ?? 0;
+  const isGood = options.reverseGood ? diff < 0 : diff > 0;
+  const color = diff === 0 ? undefined : isGood ? '#16a34a' : '#dc2626';
+  return {
+    text: `较昨日同期 ${sign}${diff.toFixed(digits)}%`,
+    color,
+  };
+}
+
+function rateDeltaText(current: number | null | undefined, previous: number | null | undefined): { text: string; color?: string } {
+  if (current === null || current === undefined || previous === null || previous === undefined) {
+    return { text: '较昨日同期 -' };
+  }
+  return deltaText(current, previous, { digits: 1 });
+}
+
+function KpiDeltaText({ delta }: { delta: { text: string; color?: string } }) {
+  return <Text type={delta.color ? undefined : 'secondary'} style={delta.color ? { color: delta.color } : undefined}>{delta.text}</Text>;
+}
+
 /** 7 张 KPI 卡片共用容器样式：同高 + 统一 padding，避免"次留多一行副标题"造成的高度抖动 */
 const kpiCardStyle = { width: '100%', height: '100%' } as const;
 const kpiCardStyles = {
@@ -174,6 +237,12 @@ export function DashboardPage() {
 
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [adSummary, setAdSummary] = useState<AdSummaryLiteResponse | null>(null);
+  const [acquisitionCost, setAcquisitionCost] = useState<AcquisitionCostResponse | null>(null);
+  const [comparison, setComparison] = useState<{ overview: OverviewResponse | null; ad: AdSummaryLiteResponse | null }>({
+    overview: null,
+    ad: null,
+  });
+  const [comparisonCost, setComparisonCost] = useState<AcquisitionCostResponse | null>(null);
   const [retentionSummary, setRetentionSummary] = useState<RetentionSummaryResponse | null>(null);
   const requestSeqRef = useRef(0);
 
@@ -183,6 +252,9 @@ export function DashboardPage() {
       if (!desc?.hasAnalyticsSdk) {
         setOverview(null);
         setAdSummary(null);
+        setAcquisitionCost(null);
+        setComparison({ overview: null, ad: null });
+        setComparisonCost(null);
         setLastRefreshedAt(Date.now());
         return;
       }
@@ -196,10 +268,39 @@ export function DashboardPage() {
         const adSummaryPromise = fetch(
           `/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         ).then((r) => r.json() as Promise<AdSummaryLiteResponse>);
+        const costPromise = fetch(
+          `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${buildDateRangeQuery(nextWindow)}`,
+        ).then((r) => r.json() as Promise<AcquisitionCostResponse>);
+        const compareQueryStr = buildShiftedWindowQuery(nextWindow, -86_400_000);
+        const compareOverviewPromise = fetch(
+          `/api/realtime/overview?game=${encodeURIComponent(nextGameKey)}&${compareQueryStr}`,
+        ).then((r) => r.json() as Promise<OverviewResponse>);
+        const compareAdSummaryPromise = fetch(
+          `/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${compareQueryStr}`,
+        ).then((r) => r.json() as Promise<AdSummaryLiteResponse>);
+        const compareCostPromise = fetch(
+          `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${buildDateRangeQuery(nextWindow, -86_400_000)}`,
+        ).then((r) => r.json() as Promise<AcquisitionCostResponse>);
         const retentionSummaryPromise = fetch(
           `/api/realtime/retention-cohort?game=${encodeURIComponent(nextGameKey)}&max_age=7`,
         ).then((r) => r.json() as Promise<RetentionSummaryResponse>);
-        const [ovRes, adRes, retentionRes] = await Promise.all([overviewPromise, adSummaryPromise, retentionSummaryPromise]);
+        const [
+          ovRes,
+          adRes,
+          costRes,
+          compareOvRes,
+          compareAdRes,
+          compareCostRes,
+          retentionRes,
+        ] = await Promise.all([
+          overviewPromise,
+          adSummaryPromise,
+          costPromise,
+          compareOverviewPromise,
+          compareAdSummaryPromise,
+          compareCostPromise,
+          retentionSummaryPromise,
+        ]);
         // 防止竞态：仅最新一次请求结果生效
         if (seq !== requestSeqRef.current) return;
         if (!ovRes.ok) {
@@ -207,6 +308,12 @@ export function DashboardPage() {
         }
         setOverview(ovRes);
         setAdSummary(adRes);
+        setAcquisitionCost(costRes);
+        setComparison({
+          overview: compareOvRes.ok ? compareOvRes : null,
+          ad: compareAdRes.ok ? compareAdRes : null,
+        });
+        setComparisonCost(compareCostRes);
         setRetentionSummary(retentionRes.ok ? retentionRes : null);
         setLastRefreshedAt(Date.now());
       } catch (error) {
@@ -301,6 +408,20 @@ export function DashboardPage() {
   }
 
   const overviewKpi = overview?.kpi;
+  const previousKpi = comparison.overview?.kpi;
+  const currentAd = adSummary?.summary;
+  const previousAd = comparison.ad?.summary;
+  const currentSpend = acquisitionCost?.ok ? acquisitionCost.total_spend_cny : undefined;
+  const previousSpend = comparisonCost?.ok ? comparisonCost.total_spend_cny : undefined;
+  const acquisitionSource = acquisitionCost?.ok ? '腾讯广告实时' : `腾讯广告拉取失败：${acquisitionCost?.error || acquisitionCost?.code || '接口未返回'}`;
+  const currentCpi =
+    currentSpend !== undefined && overviewKpi?.new_users_today
+      ? currentSpend / overviewKpi.new_users_today
+      : null;
+  const previousCpi =
+    previousSpend !== undefined && previousKpi?.new_users_today
+      ? previousSpend / previousKpi.new_users_today
+      : null;
   const summaryD1 = retentionPoint(retentionSummary?.overall, 1);
   const summaryD7 = retentionPoint(retentionSummary?.overall, 7);
   const retentionInsight = buildDeviceRetentionInsight(retentionSummary);
@@ -331,7 +452,7 @@ export function DashboardPage() {
             <Tooltip title="当前时间窗口内有 session_start 事件的去重用户数。窗口=今日时即为今日 DAU；选历史日时即为该日 DAU；多日窗口为窗口内活跃合计。">
               <Statistic title="窗口活跃" value={overviewKpi?.dau ?? 0} suffix="人" />
             </Tooltip>
-            <Text type="secondary">session_start 去重</Text>
+            <KpiDeltaText delta={deltaText(overviewKpi?.dau, previousKpi?.dau, { digits: 1 })} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
@@ -343,7 +464,7 @@ export function DashboardPage() {
                 suffix="人"
               />
             </Tooltip>
-            <Text type="secondary">所有事件去重</Text>
+            <KpiDeltaText delta={deltaText(overviewKpi?.active_users_1h, previousKpi?.active_users_1h, { digits: 1 })} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
@@ -351,19 +472,7 @@ export function DashboardPage() {
             <Tooltip title="在全表中首次 session_start 于当前时间窗口内的去重用户数。">
               <Statistic title="窗口内新增" value={overviewKpi?.new_users_today ?? 0} suffix="人" />
             </Tooltip>
-            <Text type="secondary">首次 session_start</Text>
-          </Card>
-        </Col>
-        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
-          <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="窗口内广告曝光数 × 配置 eCPM 的估算收益（元），仅供参考；以微信流量主结算为准。">
-              <Statistic
-                title="预估收益"
-                value={(adSummary?.summary?.total_revenue_estimated_cny ?? 0).toFixed(2)}
-                suffix="元"
-              />
-            </Tooltip>
-            <Text type="secondary">估算值，非真实结算</Text>
+            <KpiDeltaText delta={deltaText(overviewKpi?.new_users_today, previousKpi?.new_users_today, { digits: 1 })} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
@@ -383,6 +492,7 @@ export function DashboardPage() {
                 overviewKpi?.retention_d1_cohort,
               )}
             </Text>
+            <KpiDeltaText delta={rateDeltaText(overviewKpi?.retention_d1_rate, previousKpi?.retention_d1_rate)} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
@@ -402,6 +512,7 @@ export function DashboardPage() {
                 overviewKpi?.retention_d7_cohort,
               )}
             </Text>
+            <KpiDeltaText delta={rateDeltaText(overviewKpi?.retention_d7_rate, previousKpi?.retention_d7_rate)} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
@@ -415,6 +526,43 @@ export function DashboardPage() {
               }
             />
             <Text type="secondary">{overview?.query?.from?.slice(0, 10) || '-'}</Text>
+          </Card>
+        </Col>
+        <Col span={24}>
+          <Card
+            title="投放与商业化波动（同时间段 vs 昨日）"
+            extra={<Text type="secondary">投放消耗优先走腾讯广告实时接口；接口未生效时回退到已补录经营数据。</Text>}
+          >
+            <Row gutter={[16, 16]}>
+              <Col xs={12} md={4}>
+                <Statistic title="投放消耗" value={currentSpend ?? '-'} suffix={currentSpend === undefined ? undefined : '元'} precision={2} />
+                <KpiDeltaText delta={deltaText(currentSpend, previousSpend, { digits: 1, unavailableText: acquisitionSource })} />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="投放 CPI" value={currentCpi ?? '-'} suffix={currentCpi === null ? undefined : '元'} precision={4} />
+                <KpiDeltaText delta={deltaText(currentCpi, previousCpi, { digits: 1, reverseGood: true, unavailableText: acquisitionSource })} />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="广告渗透" value={currentAd?.ad_penetration_rate ?? 0} suffix="%" precision={1} />
+                <KpiDeltaText delta={deltaText(currentAd?.ad_penetration_rate, previousAd?.ad_penetration_rate, { digits: 1 })} />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="人均广告展示" value={currentAd?.ad_show_per_uu ?? 0} suffix="次" precision={2} />
+                <KpiDeltaText delta={deltaText(currentAd?.ad_show_per_uu, previousAd?.ad_show_per_uu, { digits: 1 })} />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="填充率" value={currentAd?.fill_rate ?? 0} suffix="%" precision={1} />
+                <KpiDeltaText delta={deltaText(currentAd?.fill_rate, previousAd?.fill_rate, { digits: 1 })} />
+              </Col>
+              <Col xs={12} md={4}>
+                <Statistic title="广告收益" value={currentAd?.total_revenue_estimated_cny ?? 0} suffix="元" precision={2} />
+                <KpiDeltaText
+                  delta={deltaText(currentAd?.total_revenue_estimated_cny, previousAd?.total_revenue_estimated_cny, {
+                    digits: 1,
+                  })}
+                />
+              </Col>
+            </Row>
           </Card>
         </Col>
         <Col span={24}>

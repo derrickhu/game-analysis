@@ -1,0 +1,12 @@
+---
+description: Restart local demo services after backend or route changes
+alwaysApply: true
+---
+
+# Restart Demo Services
+
+- 如果改动了后端路由、服务端逻辑、配置读取、调度任务或前端依赖的新接口，必须主动重启本地 demo 服务。
+- 本项目本地 demo 服务为两个进程：`npm run api` 和 `npm run dev`。
+- 重启前先检查并停止占用 `8787` 与 `5173` 的旧进程，再重新启动这两个命令。
+- 重启后必须用接口或页面请求验证新逻辑已经生效；不能只告诉用户“需要重启”。
+- 如果实时接口拉取失败，页面必须显示失败状态或失败原因，不要用 `0` 伪装成有效数据。

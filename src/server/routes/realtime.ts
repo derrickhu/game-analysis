@@ -13,11 +13,13 @@ import {
   listRecentIngestRuns,
   type AdMinuteRow,
 } from '../analytics-db';
+import { listBusinessDailyInputs } from '../ltv-db';
 import { cleanExpiredEvents } from '../jobs/clean-expired-events';
 import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
 import { ingestTencentAdsBusinessInputs } from '../jobs/ingest-tencent-ads';
 import { ingestWechatPublisherBusinessInputs } from '../jobs/ingest-wechat-publisher';
+import { getConfig } from '../config';
 import {
   getAdUserMetrics,
   listAdErrorTopN,
@@ -63,6 +65,7 @@ import {
   saveBusinessDailyInput,
 } from '../metrics/roi';
 import { analyzeRoiWithDeepSeek } from '../metrics/roi-ai';
+import { getTencentAdsDailyReport } from '../tencent-ads';
 import {
   BUCKET_SIZE_MS,
   BUCKET_SIZE_MINUTES,
@@ -142,6 +145,12 @@ interface BusinessRoiAiBody {
   game?: string;
   baseline_days?: number;
   maturity_day?: number;
+}
+
+interface AcquisitionCostQuery {
+  game?: string;
+  from_date?: string;
+  to_date?: string;
 }
 
 interface LevelPassRateBody {
@@ -230,7 +239,7 @@ type AdRevenueHourlySeriesItem = AdRevenueSeriesItem;
 
 interface AdRevenueResponse {
   ok: true;
-  estimated: true;
+  estimated: boolean;
   notice: string;
   query: { game_key: string; from: string; to: string; window_minutes: number };
   summary: AdRevenueSummary;
@@ -383,7 +392,7 @@ function foldDailySeries(
 }
 
 function buildBreakdown(gameKey: string, rows: AdMinuteRow[]): AdRevenueBreakdown[] {
-  const map = new Map<string, AdRevenueBreakdown>();
+  const map = new Map<string, AdRevenueBreakdown & { weighted_ecpm_numerator: number }>();
   for (const row of rows) {
     const key = `${row.ad_type}|${row.scene}`;
     const item = map.get(key) || {
@@ -395,8 +404,8 @@ function buildBreakdown(gameKey: string, rows: AdMinuteRow[]): AdRevenueBreakdow
       ad_complete_cnt: 0,
       ad_error_cnt: 0,
       ad_revenue_estimated_cny: 0,
-      // (ad_type, scene) 命中的 eCPM 是固定值，所以同一行所有 row 应当一致；这里用任意一行查表都行
-      ecpm_cny: getEstimatedEcpm(gameKey, row.ad_type, row.scene),
+      ecpm_cny: row.ecpm_used || getEstimatedEcpm(gameKey, row.ad_type, row.scene),
+      weighted_ecpm_numerator: 0,
     };
     item.ad_request_cnt += row.ad_request_cnt;
     item.ad_show_cnt += row.ad_show_cnt;
@@ -404,13 +413,81 @@ function buildBreakdown(gameKey: string, rows: AdMinuteRow[]): AdRevenueBreakdow
     item.ad_complete_cnt += row.ad_complete_cnt;
     item.ad_error_cnt += row.ad_error_cnt;
     item.ad_revenue_estimated_cny += row.ad_revenue_estimated_cny;
+    item.weighted_ecpm_numerator += row.ecpm_used * row.ad_show_cnt;
+    item.ecpm_cny =
+      item.ad_show_cnt > 0
+        ? Math.round((item.weighted_ecpm_numerator / item.ad_show_cnt) * 100) / 100
+        : item.ecpm_cny;
     map.set(key, item);
   }
-  return Array.from(map.values()).sort((a, b) => b.ad_revenue_estimated_cny - a.ad_revenue_estimated_cny);
+  return Array.from(map.values())
+    .map(({ weighted_ecpm_numerator, ...row }) => ({
+      ...row,
+      ad_revenue_estimated_cny: Math.round(row.ad_revenue_estimated_cny * 100) / 100,
+    }))
+    .sort((a, b) => b.ad_revenue_estimated_cny - a.ad_revenue_estimated_cny);
+}
+
+async function getRealEcpmContext(gameKey: string, fromTs: number, toTs: number): Promise<{
+  ecpmByDate: Map<string, number>;
+  blendedEcpm: number | null;
+  source: 'window_real_ecpm' | 'recent_real_ecpm' | 'estimated_ecpm';
+}> {
+  const fromDate = toLocalDateKey(fromTs);
+  const toDate = toLocalDateKey(toTs);
+  const lookbackStart = toLocalDateKey(fromTs - 14 * 86_400_000);
+  const inputs = await listBusinessDailyInputs(gameKey, lookbackStart, toDate);
+  const ecpmByDate = new Map<string, number>();
+  let windowRevenue = 0;
+  let windowImpressions = 0;
+  let recentRevenue = 0;
+  let recentImpressions = 0;
+  for (const input of inputs) {
+    const revenue = Number(input.wechat_ad_revenue_cny || 0);
+    const impressions = Number(input.wechat_ad_impressions || 0);
+    if (revenue <= 0 || impressions <= 0) continue;
+    const ecpm = (revenue / impressions) * 1000;
+    recentRevenue += revenue;
+    recentImpressions += impressions;
+    if (input.date_key >= fromDate && input.date_key <= toDate) {
+      ecpmByDate.set(input.date_key, ecpm);
+      windowRevenue += revenue;
+      windowImpressions += impressions;
+    }
+  }
+  const windowBlended = windowImpressions > 0 ? (windowRevenue / windowImpressions) * 1000 : null;
+  const recentBlended = recentImpressions > 0 ? (recentRevenue / recentImpressions) * 1000 : null;
+  return {
+    ecpmByDate,
+    blendedEcpm: windowBlended ?? recentBlended,
+    source: windowBlended !== null ? 'window_real_ecpm' : recentBlended !== null ? 'recent_real_ecpm' : 'estimated_ecpm',
+  };
+}
+
+function applyRealEcpmRevenue(rows: AdMinuteRow[], ecpmContext: {
+  ecpmByDate: Map<string, number>;
+  blendedEcpm: number | null;
+  source: 'window_real_ecpm' | 'recent_real_ecpm' | 'estimated_ecpm';
+}): { rows: AdMinuteRow[]; source: 'window_real_ecpm' | 'recent_real_ecpm' | 'estimated_ecpm' } {
+  if (ecpmContext.ecpmByDate.size === 0 && ecpmContext.blendedEcpm === null) {
+    return { rows, source: 'estimated_ecpm' };
+  }
+  return {
+    source: ecpmContext.source,
+    rows: rows.map((row) => {
+      const dateKey = toLocalDateKey(bucketToTs(row.minute_bucket));
+      const ecpm = ecpmContext.ecpmByDate.get(dateKey) ?? ecpmContext.blendedEcpm ?? row.ecpm_used;
+      return {
+        ...row,
+        ecpm_used: Math.round(ecpm * 100) / 100,
+        ad_revenue_estimated_cny: Math.round((row.ad_show_cnt / 1000) * ecpm * 100) / 100,
+      };
+    }),
+  };
 }
 
 export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void> {
-  // 广告实时收益（估算值，金额来自 ad_show_cnt × ECPM 配置表）
+  // 广告实时收益：优先使用微信流量主真实 eCPM，缺失时回退配置 eCPM。
   app.get('/api/realtime/ad-revenue', async (request) => {
     const query = (request.query || {}) as AdRevenueQuery;
     const gameKey = query.game || 'hotpot';
@@ -423,7 +500,10 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const fromMinute = tsToBucket(fromTs);
     const toMinute = tsToBucket(toTs);
 
-    const rows = await listAdMinute(gameKey, fromMinute, toMinute);
+    const rawRows = await listAdMinute(gameKey, fromMinute, toMinute);
+    const ecpmContext = await getRealEcpmContext(gameKey, fromTs, toTs);
+    const revenueRows = applyRealEcpmRevenue(rawRows, ecpmContext);
+    const rows = revenueRows.rows;
     const series = buildContinuousSeries(rows, fromMinute, toMinute);
     const breakdown = buildBreakdown(gameKey, rows);
     // 一次 SQL 同时折 5 分钟桶 + 1 小时桶用户集合，避免分别扫两遍
@@ -467,8 +547,13 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
 
     const response: AdRevenueResponse = {
       ok: true,
-      estimated: true,
-      notice: '所有金额均为基于预估 eCPM 的估算值（按 (game.adType.scene)→(game.adType)→兜底 多级查表），并非真实结算收入；以微信流量主结算数据为准。',
+      estimated: revenueRows.source === 'estimated_ecpm',
+      notice:
+        revenueRows.source === 'window_real_ecpm'
+          ? '广告收益使用当前窗口微信流量主真实收入/曝光计算的真实 eCPM，并按游戏内 ad_show 分摊到实时窗口。'
+          : revenueRows.source === 'recent_real_ecpm'
+            ? '当前窗口尚未结算，广告收益使用最近 14 天微信流量主真实加权 eCPM 预测，并按游戏内 ad_show 分摊；不会回退到配置 eCPM。'
+          : '当前窗口没有微信流量主真实收入/曝光，广告收益暂按配置 eCPM 估算；以自动拉取的微信流量主数据为准。',
       query: { game_key: gameKey, from: fromMinute, to: toMinute, window_minutes: windowMinutes },
       summary: {
         game_key: gameKey,
@@ -770,6 +855,45 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
       ...result,
     };
+  });
+
+  // 投放侧实时消耗：直接查腾讯广告 Marketing API，不写库；大盘页用于当天 CPI 快速判断。
+  app.get('/api/realtime/acquisition-cost', async (request) => {
+    const query = (request.query || {}) as AcquisitionCostQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const today = toLocalDateKey(Date.now());
+    const fromDate = String(query.from_date || today).trim();
+    const toDate = String(query.to_date || fromDate).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'from_date/to_date 必须是 YYYY-MM-DD' };
+    }
+    const mapping = getConfig().tencentAds.gameMappings.find((item) => item.gameKey === gameKey);
+    if (!mapping) {
+      return { ok: false, code: 'TENCENT_ADS_NOT_CONFIGURED', error: `腾讯广告未配置 game=${gameKey}` };
+    }
+    try {
+      const report = await getTencentAdsDailyReport({ mapping, fromDate, toDate });
+      const totalSpendCny = Math.round(
+        report.rows.reduce((sum, row) => sum + Number(row.cost || 0) / 100, 0) * 100,
+      ) / 100;
+      return {
+        ok: true,
+        query: { game_key: gameKey, from_date: fromDate, to_date: toDate },
+        source: 'tencent_ads_daily_reports',
+        total_spend_cny: totalSpendCny,
+        rows: report.total,
+        updated_at: Date.now(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'TENCENT_ADS_COST_FAILED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   // ROI 投放决策：选择目标日期，用目标日前成熟样本做基线，输出是否放量/观察/降预算。
