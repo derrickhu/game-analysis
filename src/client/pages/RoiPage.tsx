@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Col,
   DatePicker,
   Form,
@@ -36,6 +37,9 @@ interface RoiRow {
   wechat_clicks: number;
   wechat_ad_revenue_cny: number;
   wechat_ad_impressions: number;
+  acquisition_impressions: number;
+  acquisition_activations: number;
+  acquisition_source: string;
   note: string;
   game_new_users: number;
   estimated_ad_revenue_cny: number;
@@ -99,6 +103,26 @@ interface RoiDecisionResponse {
   baseline_from_date?: string;
   baseline_to_date?: string;
   diagnostics?: { issue_label: string };
+  commercial_decision?: {
+    headline: string;
+    decision: 'scale' | 'hold' | 'reduce' | 'pause' | 'optimize_game' | 'wait_data';
+    primary_problem: 'buying_cost' | 'monetization' | 'retention' | 'data_maturity' | 'tracking';
+    confidence: 'high' | 'medium' | 'low';
+    core_metrics: {
+      total_spend_cny: number;
+      total_new_users: number;
+      avg_cpi_cny: number | null;
+      projected_d30_ltv_cny: number | null;
+      projected_d30_roas: number | null;
+      d0_roas: number | null;
+      d1_retention: number | null;
+      d7_retention: number | null;
+      sample_days: number;
+      d30_roas_basis: 'mature' | 'early' | 'insufficient';
+    };
+    key_reasons: string[];
+    actions: string[];
+  };
   budget_recommendation?: {
     reference_spend_cny: number;
     latest_recorded_spend_cny: number;
@@ -126,6 +150,16 @@ interface RoiDecisionResponse {
     early_d30_roi: number | null;
     d1_retention: number | null;
     d7_retention: number | null;
+    monetization_flow: {
+      active_user_days: number;
+      ad_user_days: number;
+      ad_penetration_rate: number | null;
+      ad_show_cnt: number;
+      ad_show_per_ad_user: number | null;
+      ad_show_per_active_user: number | null;
+      fill_rate: number | null;
+      actual_ecpm_cny: number | null;
+    };
     key_findings: string[];
     optimization_suggestions: string[];
   };
@@ -169,6 +203,17 @@ interface RoiAiAnalysisResponse {
   code?: string;
 }
 
+interface MonetizationResponse {
+  ok: boolean;
+  ad_penetration_rate?: number;
+  ad_show_cnt?: number;
+  ad_show_per_uu?: number;
+  fill_rate?: number;
+  active_user_days?: number;
+  error?: string;
+  code?: string;
+}
+
 function MetricTitle({ label, help }: { label: string; help: string }) {
   return (
     <Space size={4}>
@@ -190,6 +235,11 @@ function money(value: number | null | undefined, digits = 2): string {
 function percent(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function percentValue(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '-';
+  return `${value.toFixed(1)}%`;
 }
 
 function renderMissing(label: string) {
@@ -223,6 +273,47 @@ function verdictAlertType(
   if (level === 'loss') return 'error';
   if (level === 'risky') return 'warning';
   return 'info';
+}
+
+function decisionType(decision?: RoiDecisionResponse['commercial_decision']): 'success' | 'info' | 'warning' | 'error' {
+  if (!decision) return 'info';
+  if (decision.decision === 'scale') return 'success';
+  if (decision.decision === 'reduce' || decision.decision === 'hold' || decision.decision === 'wait_data') return 'warning';
+  if (decision.decision === 'pause' || decision.decision === 'optimize_game') return 'error';
+  return 'info';
+}
+
+type CommercialPrimaryProblem = NonNullable<RoiDecisionResponse['commercial_decision']>['primary_problem'];
+
+function problemLabel(problem?: CommercialPrimaryProblem): string {
+  const labels: Record<CommercialPrimaryProblem, string> = {
+    buying_cost: '买量成本',
+    monetization: '广告变现',
+    retention: '留存质量',
+    data_maturity: '数据成熟度',
+    tracking: '数据口径',
+  };
+  return problem ? labels[problem] : '-';
+}
+
+function d30RoasBasisLabel(value?: 'mature' | 'early' | 'insufficient'): string {
+  if (value === 'mature') return '成熟样本';
+  if (value === 'early') return 'D3+ 早期样本';
+  return '未成熟';
+}
+
+function MetricCard({ title, value, hint }: { title: string; value: string; hint?: string }) {
+  return (
+    <Card size="small">
+      <Space orientation="vertical" size={2}>
+        <Text type="secondary">{title}</Text>
+        <Text strong style={{ fontSize: 20 }}>
+          {value}
+        </Text>
+        {hint ? <Text type="secondary">{hint}</Text> : null}
+      </Space>
+    </Card>
+  );
 }
 
 function eachDateInRange(from: Dayjs, to: Dayjs): string[] {
@@ -305,9 +396,20 @@ async function fetchRoiAiAnalysis(gameKey: string, baselineDays: number, maturit
   return (await res.json()) as RoiAiAnalysisResponse;
 }
 
+async function fetchMonetizationData(gameKey: string, range: [Dayjs, Dayjs]): Promise<MonetizationResponse> {
+  const [from, to] = range;
+  const queryStr = new URLSearchParams({
+    game: gameKey,
+    from_date: from.format('YYYY-MM-DD'),
+    to_date: to.format('YYYY-MM-DD'),
+  }).toString();
+  const res = await fetch(`/api/realtime/monetization?${queryStr}`);
+  return (await res.json()) as MonetizationResponse;
+}
+
 /**
- * 通用 ROI 录入页面。
- * 人工录入投放与微信真实结算数据，新增用户/LTV/估算收入由系统自动关联。
+ * 通用 ROI 页面。
+ * 腾讯广告消耗与微信流量主收入/曝光由后端自动补录，人工入口只作为异常修正和对账兜底。
  */
 export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}) {
   const {
@@ -320,6 +422,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
   const [rangeForm] = Form.useForm<RoiRangeFormValues>();
   const [data, setData] = useState<RoiResponse | null>(null);
   const [decision, setDecision] = useState<RoiDecisionResponse | null>(null);
+  const [monetization, setMonetization] = useState<MonetizationResponse | null>(null);
   const [baselineDays, setBaselineDays] = useState(7);
   const [maturityDay, setMaturityDay] = useState<3 | 7>(7);
   const [aiAnalysis, setAiAnalysis] = useState<RoiAiAnalysisResponse | null>(null);
@@ -329,6 +432,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
   const [aiLoading, setAiLoading] = useState(false);
   const requestSeqRef = useRef(0);
   const draftInitializedGameRef = useRef<string | null>(null);
+  const aiRequestKeyRef = useRef<string | null>(null);
 
   const loadAll = useCallback(
     async (nextGameKey: string, range?: [Dayjs, Dayjs]) => {
@@ -342,10 +446,15 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
       setLoading(true);
       try {
         const activeRange = range || displayRange || defaultDisplayRange();
-        const json = await fetchRoiData(nextGameKey, activeRange);
+        const [json, monetizationJson] = await Promise.all([
+          fetchRoiData(nextGameKey, activeRange),
+          fetchMonetizationData(nextGameKey, activeRange),
+        ]);
         if (seq !== requestSeqRef.current) return null;
         if (!json.ok) message.error(`获取 ROI 数据失败: ${json.error || json.code}`);
+        if (!monetizationJson.ok) message.warning(`获取商业化流量数据失败: ${monetizationJson.error || monetizationJson.code}`);
         setData(json);
+        setMonetization(monetizationJson);
         setLastRefreshedAt(Date.now());
         return json;
       } catch (error) {
@@ -439,6 +548,14 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
     }
   };
 
+  useEffect(() => {
+    if (!decision?.target_date || aiAnalysis?.ok || aiLoading) return;
+    const key = `${gameKey}-${decision.target_date}-${baselineDays}-${maturityDay}`;
+    if (aiRequestKeyRef.current === key) return;
+    aiRequestKeyRef.current = key;
+    void onAiAnalyze();
+  }, [aiAnalysis?.ok, aiLoading, baselineDays, decision?.target_date, gameKey, maturityDay]);
+
   const updateDraftRow = (dateKey: string, patch: Partial<RoiDraftRow>) => {
     setDraftRows((rows) => rows.map((row) => (row.date_key === dateKey ? { ...row, ...patch } : row)));
   };
@@ -505,17 +622,28 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
 
   const rangeLabel = data?.query ? `${data.query.from_date} ~ ${data.query.to_date}` : '-';
   const summary = data?.summary;
+  const commercialDecision = decision?.commercial_decision;
+  const coreMetrics = commercialDecision?.core_metrics;
+  const monetizationFlow = decision?.commercial_summary?.monetization_flow;
+  const adPenetration = monetizationFlow?.ad_penetration_rate ?? (monetization?.ad_penetration_rate !== undefined ? monetization.ad_penetration_rate / 100 : null);
+  const adShowPerUser = monetizationFlow?.ad_show_per_ad_user ?? monetization?.ad_show_per_uu ?? null;
+  const actualEcpm = monetizationFlow?.actual_ecpm_cny ?? summary?.actual_ecpm_cny ?? null;
+  const projectedD30Roi = coreMetrics?.projected_d30_roas ?? decision?.commercial_summary?.early_d30_roi ?? decision?.baseline?.predicted_d30_roi ?? null;
+  const projectedD30Ltv = coreMetrics?.projected_d30_ltv_cny ?? decision?.commercial_summary?.early_d30_ltv_cny ?? decision?.baseline?.weighted_d30_ltv_cny ?? null;
+  const d30Basis = coreMetrics?.d30_roas_basis ?? (decision?.baseline?.predicted_d30_roi !== null && decision?.baseline?.predicted_d30_roi !== undefined ? 'mature' : projectedD30Roi !== null ? 'early' : 'insufficient');
+  const headline = commercialDecision?.headline || decision?.conclusion || decision?.commercial_summary?.verdict_label || '正在生成商业化结论';
+  const aiAvailable = aiAnalysis?.ok && aiAnalysis.analysis;
 
   const columns: ColumnsType<RoiRow> = useMemo(
     () => [
       { title: '日期', dataIndex: 'date_key', fixed: 'left', width: 110 },
       {
-        title: <MetricTitle label="投放花费" help="你手工录入的真实投放消耗，单位元。用于计算 CPC、CPI、ROI。" />,
+        title: <MetricTitle label="腾讯广告消耗 cost" help="腾讯广告 Marketing API 返回的 cost，接口单位为分，系统已换算为元。用于计算 CPI、ROI。" />,
         render: (_, r) => money(r.spend_cny, 2),
-        width: 110,
+        width: 140,
       },
       {
-        title: <MetricTitle label="微信真实收入" help="你手工录入的微信流量主后台真实广告收入，单位元。ROI 和真实盈亏以这个字段为准。" />,
+        title: <MetricTitle label="流量主真实收入" help="微信流量主 publisher/stat 返回的 income，接口单位为分，系统已换算为元。ROI 和真实盈亏以这个字段为准。" />,
         render: (_, r) => money(r.wechat_ad_revenue_cny, 2),
         width: 130,
       },
@@ -530,12 +658,22 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
         width: 100,
       },
       {
-        title: <MetricTitle label="微信点击" help="你手工录入的微信广告点击次数。用于计算 CPC 和点击转新增率。" />,
+        title: <MetricTitle label="投放点击 click" help="腾讯广告 Marketing API 的 click。当前账户接口未返回该字段时会保留已有值；CPI 不依赖点击。" />,
         dataIndex: 'wechat_clicks',
         width: 110,
       },
       {
-        title: <MetricTitle label="CPC" help="投放花费 / 微信点击次数。表示一次点击的成本。" />,
+        title: <MetricTitle label="投放曝光 impression" help="腾讯广告 Marketing API 的 impression。当前账户接口未返回该字段时显示为 0/保留已有值，不参与真实 eCPM。" />,
+        dataIndex: 'acquisition_impressions',
+        width: 140,
+      },
+      {
+        title: <MetricTitle label="投放激活" help="腾讯广告返回的转化/激活量，由自动拉数写入；不同账户回传口径可能不同，仅做投放侧参考。" />,
+        dataIndex: 'acquisition_activations',
+        width: 110,
+      },
+      {
+        title: <MetricTitle label="CPC" help="投放花费 / 腾讯广告点击。当前腾讯接口未返回 click 时该指标不可用于决策。" />,
         render: (_, r) => money(r.cpc_cny, 4),
         width: 90,
       },
@@ -550,17 +688,17 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
         width: 110,
       },
       {
-        title: <MetricTitle label="点击转新增" help="游戏新增用户 / 微信点击次数。用于判断点击后加载、进入游戏、首次打点的转化质量。" />,
+        title: <MetricTitle label="点击转新增" help="游戏新增用户 / 腾讯广告点击。当前腾讯接口未返回 click 时不作为核心判断。" />,
         render: (_, r) => (r.click_to_new_user_rate === null ? renderMissing(missingReason(r)) : percent(r.click_to_new_user_rate)),
         width: 120,
       },
       {
-        title: <MetricTitle label="微信真实曝光（可选）" help="只用于计算真实 eCPM，不参与 ROI。填全部广告位曝光会得到激励+插屏的混合 eCPM；拿不到就填 0。" />,
+        title: <MetricTitle label="流量主真实曝光" help="微信流量主 publisher/stat 返回的 exposure_count，用于计算真实 eCPM 和 LTV 真实收入口径。" />,
         dataIndex: 'wechat_ad_impressions',
-        width: 150,
+        width: 130,
       },
       {
-        title: <MetricTitle label="真实 eCPM（可选）" help="微信真实收入 / 微信真实曝光 × 1000。曝光填 0 时不展示，不影响 ROI 和盈亏判断。" />,
+        title: <MetricTitle label="真实 eCPM" help="流量主真实收入 / 流量主真实曝光 × 1000。用于覆盖估算 eCPM，进入 LTV 回算。" />,
         render: (_, r) => (r.actual_ecpm_cny === null ? renderMissing('未填曝光') : money(r.actual_ecpm_cny, 2)),
         width: 130,
       },
@@ -597,12 +735,94 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert
-        type="info"
-        showIcon
-        message={`ROI / 经营录入 · 当前游戏：${descriptor?.displayName ?? gameKey} · 统计范围：${rangeLabel}`}
-        description="ROI 只依赖投放花费、微信真实收入和游戏新增；曝光只用于算真实 eCPM。微信后台如果只能给激励+插屏总曝光，就填总曝光得到混合 eCPM；如果暂时拿不到曝光，填 0 也不影响 ROI。"
-      />
+      <Card>
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type={decisionType(commercialDecision)}
+            showIcon
+            message={headline}
+            description={
+              decision
+                ? `置信度：${confidenceLabel(commercialDecision?.confidence ?? decision.confidence)}；核心问题：${problemLabel(commercialDecision?.primary_problem)}；判断样本：${coreMetrics?.sample_days ?? decision.commercial_summary?.early_sample_days ?? 0} 天（${d30RoasBasisLabel(d30Basis)}）；建议预算：${money(decision.budget_recommendation?.recommended_min_cny)}-${money(decision.budget_recommendation?.recommended_max_cny)} 元；止损 CPI：${money(decision.budget_recommendation?.hard_stop_cpi_cny, 4)} 元。`
+                : `当前游戏：${descriptor?.displayName ?? gameKey}；系统会基于腾讯广告消耗、微信流量主收入/曝光、游戏新增和 LTV 自动判断。`
+            }
+          />
+          <Row gutter={[16, 16]}>
+            <Col xs={12} md={5}>
+              <MetricCard title="周期总消耗" value={`${money(coreMetrics?.total_spend_cny ?? summary?.total_spend_cny)} 元`} hint="腾讯广告 cost" />
+            </Col>
+            <Col xs={12} md={5}>
+              <MetricCard title="周期新增用户" value={`${coreMetrics?.total_new_users ?? summary?.total_game_new_users ?? 0}`} hint="游戏 first_seen" />
+            </Col>
+            <Col xs={12} md={5}>
+              <MetricCard title="平均 CPI" value={`${money(coreMetrics?.avg_cpi_cny ?? summary?.avg_cpi_cny, 4)} 元`} hint="消耗 / 新增，不依赖 click" />
+            </Col>
+            <Col xs={12} md={5}>
+              <MetricCard
+                title="预测 D30 ROI"
+                value={percent(projectedD30Roi)}
+                hint={`${d30RoasBasisLabel(d30Basis)}；LTV ${money(projectedD30Ltv, 4)} 元`}
+              />
+            </Col>
+            <Col xs={12} md={4}>
+              <MetricCard title="周期 D0 ROI" value={percent(coreMetrics?.d0_roas ?? summary?.d0_roi)} hint="真实收入 / 消耗" />
+            </Col>
+          </Row>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} md={8}>
+              <MetricCard title="广告渗透" value={percent(adPenetration)} hint="同流量分析 user_daily 口径" />
+            </Col>
+            <Col xs={24} md={8}>
+              <MetricCard title="人均广告展示" value={`${money(adShowPerUser, 2)} 次`} hint="看广告用户人均展示" />
+            </Col>
+            <Col xs={24} md={8}>
+              <MetricCard title="真实 eCPM" value={`${money(actualEcpm, 2)} 元`} hint={`微信流量主收入 / 曝光；填充率 ${percentValue(monetization?.fill_rate)}`} />
+            </Col>
+          </Row>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} md={12}>
+              <Card size="small" title="关键原因">
+                <Space orientation="vertical">
+                  {(commercialDecision?.key_reasons || ['暂无足够数据形成稳定结论']).slice(0, 3).map((reason) => (
+                    <Text key={reason}>{reason}</Text>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+            <Col xs={24} md={12}>
+              <Card size="small" title="下一步动作">
+                <Space orientation="vertical">
+                  {(commercialDecision?.actions || ['先保持小预算观察，等待更多成熟 LTV 样本。']).slice(0, 3).map((action) => (
+                    <Text key={action}>{action}</Text>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+          </Row>
+          <Card size="small" title="AI 经营建议">
+            {aiAvailable ? (
+              <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit', maxHeight: 160, overflow: 'auto' }}>
+                {aiAnalysis.analysis}
+              </pre>
+            ) : (
+              <Space>
+                <Text type="secondary">规则分析已可用，AI 建议暂未生成或暂不可用。</Text>
+                <Button size="small" loading={aiLoading} onClick={() => void onAiAnalyze()}>
+                  生成 AI 建议
+                </Button>
+              </Space>
+            )}
+          </Card>
+        </Space>
+      </Card>
+
+      <Collapse
+        items={[
+          {
+            key: 'rule-details',
+            label: '规则分析详情',
+            children: (
+              <>
 
       <Card title="明日投放策略">
         <Row gutter={[16, 8]} align="bottom">
@@ -842,8 +1062,22 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
           )}
         </Space>
       </Card>
+              </>
+            ),
+          },
+        ]}
+      />
 
-      <Card title="批量真实数据录入">
+      <Collapse
+        items={[
+          {
+            key: 'manual-fix',
+            label: '异常修正，不建议日常使用',
+            children: (
+              <Card
+                title="自动数据校验与异常修正"
+                extra={<Text type="secondary">正常情况下无需手动录入，系统会每日自动回拉腾讯广告和微信流量主数据。</Text>}
+              >
         <Form form={rangeForm} layout="vertical" onFinish={onGenerateRows}>
           <Row gutter={[16, 8]}>
             <Col xs={24} md={8}>
@@ -874,7 +1108,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
           columns={[
             { title: '日期', dataIndex: 'date_key', fixed: 'left', width: 110 },
             {
-              title: '投放花费（元）',
+              title: '腾讯广告消耗（元）',
               width: 150,
               render: (_, row: RoiDraftRow) => (
                 <InputNumber
@@ -887,7 +1121,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
               ),
             },
             {
-              title: '微信点击次数',
+              title: '投放点击（可选）',
               width: 150,
               render: (_, row: RoiDraftRow) => (
                 <InputNumber
@@ -900,7 +1134,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
               ),
             },
             {
-              title: '微信真实收入（元）',
+              title: '流量主真实收入（元）',
               width: 170,
               render: (_, row: RoiDraftRow) => (
                 <InputNumber
@@ -913,7 +1147,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
               ),
             },
             {
-              title: '微信真实曝光（可选）',
+              title: '流量主真实曝光',
               width: 150,
               render: (_, row: RoiDraftRow) => (
                 <InputNumber
@@ -938,8 +1172,19 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
             },
           ]}
         />
-      </Card>
+              </Card>
+            ),
+          },
+        ]}
+      />
 
+      <Collapse
+        items={[
+          {
+            key: 'roi-details',
+            label: 'ROI 明细与对账数据',
+            children: (
+              <>
       <Row gutter={[16, 16]}>
         <Col xs={12} md={4}>
           <Card>
@@ -948,7 +1193,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
         </Col>
         <Col xs={12} md={4}>
           <Card>
-            <Statistic title="微信真实收入" value={summary?.total_wechat_revenue_cny ?? 0} precision={2} />
+            <Statistic title="流量主真实收入" value={summary?.total_wechat_revenue_cny ?? 0} precision={2} />
           </Card>
         </Col>
         <Col xs={12} md={4}>
@@ -988,6 +1233,11 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
           pagination={{ pageSize: 10 }}
         />
       </Card>
+              </>
+            ),
+          },
+        ]}
+      />
     </Space>
   );
 }

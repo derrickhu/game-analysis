@@ -6,6 +6,8 @@ import { ingestCloudbaseSnapshots } from './cloudbase-ingest';
 import { ANALYTICS_GAMES, getEnabledAnalyticsGames } from './config/analytics-games';
 import { ingestEventsForGame } from './jobs/ingest-events';
 import { cleanExpiredEvents } from './jobs/clean-expired-events';
+import { ingestTencentAdsBusinessInputs } from './jobs/ingest-tencent-ads';
+import { ingestWechatPublisherBusinessInputs } from './jobs/ingest-wechat-publisher';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 import { recomputeRetentionCohorts } from './metrics/retention';
@@ -169,12 +171,67 @@ export function startScheduler(): void {
     void runLevelPassRateRecompute('startup');
   }, 8_000);
 
+  // 7) 腾讯广告买量日报：每天 9:10 拉昨天及最近 7 天，自动补录投放花费/点击/曝光。
+  // 腾讯日报通常 8 点后完整，保留 1 小时缓冲；回拉 7 天用于修正平台延迟归因。
+  const tencentAdsCron = process.env.TENCENT_ADS_INGEST_CRON || '10 9 * * *';
+  const runTencentAdsIngest = async (trigger: 'cron' | 'startup') => {
+    try {
+      const result = await ingestTencentAdsBusinessInputs();
+      const summary = result.games
+        .map((game) =>
+          game.error
+            ? `${game.game_key}:${game.account_id}:error=${game.error}`
+            : `${game.game_key}:${game.account_id}:fetched=${game.fetched_rows},saved=${game.saved_rows}`,
+        )
+        .join('; ');
+      console.log(
+        `[scheduler] tencent_ads(${trigger}) range=${result.from_date}~${result.to_date} ok=${result.ok} ${summary}`,
+      );
+    } catch (error) {
+      console.error(`[scheduler] 腾讯广告自动补录失败 (${trigger}):`, error);
+    }
+  };
+  cron.schedule(tencentAdsCron, () => {
+    void runTencentAdsIngest('cron');
+  });
+  setTimeout(() => {
+    void runTencentAdsIngest('startup');
+  }, 12_000);
+
+  // 8) 微信流量主日报：每天 10:10 拉最近 7 天真实收入/曝光，覆盖商业化 LTV 真实 eCPM。
+  // 收入侧数据经常晚于投放侧，启动回拉可让本地开发和部署后立即对账。
+  const wechatPublisherCron = process.env.WECHAT_PUBLISHER_INGEST_CRON || '10 10 * * *';
+  const runWechatPublisherIngest = async (trigger: 'cron' | 'startup') => {
+    try {
+      const result = await ingestWechatPublisherBusinessInputs();
+      const summary = result.games
+        .map((game) =>
+          game.error
+            ? `${game.game_key}:${game.app_id}:error=${game.error}`
+            : `${game.game_key}:${game.app_id}:fetched=${game.fetched_rows},raw=${game.saved_raw_rows},business=${game.saved_business_rows}`,
+        )
+        .join('; ');
+      console.log(
+        `[scheduler] wechat_publisher(${trigger}) range=${result.from_date}~${result.to_date} ok=${result.ok} ${summary}`,
+      );
+    } catch (error) {
+      console.error(`[scheduler] 微信流量主自动补录失败 (${trigger}):`, error);
+    }
+  };
+  cron.schedule(wechatPublisherCron, () => {
+    void runWechatPublisherIngest('cron');
+  });
+  setTimeout(() => {
+    void runWechatPublisherIngest('startup');
+  }, 15_000);
+
   const enabledKeys = getEnabledAnalyticsGames().map((g) => g.gameKey);
   console.log(
     `[scheduler] started: snapshots(games=${GAME_CONFIGS.length}), ` +
       `events(enabled=${enabledKeys.length}/${ANALYTICS_GAMES.length} [${enabledKeys.join(',')}], cron=${eventsCron}), ` +
       `cleanup(cron=${cleanCron}, local=${retentionDaysLocal}d, cloud=${retentionDaysCloud}d), ` +
       `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d), ` +
-      `ltv_recompute(cron=${ltvCron}), level_pass_rate(cron=${levelPassRateCron})`,
+      `ltv_recompute(cron=${ltvCron}), level_pass_rate(cron=${levelPassRateCron}), ` +
+      `tencent_ads(cron=${tencentAdsCron}), wechat_publisher(cron=${wechatPublisherCron})`,
   );
 }

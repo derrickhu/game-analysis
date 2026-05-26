@@ -51,6 +51,9 @@ export interface BusinessDailyInputRow {
   wechat_clicks: number;
   wechat_ad_revenue_cny: number;
   wechat_ad_impressions: number;
+  acquisition_impressions: number;
+  acquisition_activations: number;
+  acquisition_source: string;
   note: string;
   created_at: number;
   updated_at: number;
@@ -63,7 +66,53 @@ export interface BusinessDailyInputDraft {
   wechat_clicks: number;
   wechat_ad_revenue_cny: number;
   wechat_ad_impressions: number;
+  acquisition_impressions?: number;
+  acquisition_activations?: number;
+  acquisition_source?: string;
   note?: string;
+}
+
+export interface WechatPublisherAdDailyRow {
+  game_key: string;
+  date_key: string;
+  slot_id: string;
+  ad_slot: string;
+  req_succ_count: number;
+  exposure_count: number;
+  exposure_rate: number;
+  click_count: number;
+  click_rate: number;
+  income_cny: number;
+  ecpm_cny: number;
+  raw_json: string;
+  updated_at: number;
+}
+
+export interface TencentAdsDailyReportRawRow {
+  game_key: string;
+  account_id: string;
+  report_level: string;
+  date_key: string;
+  adgroup_id: string;
+  adgroup_name: string;
+  cost_cny: number;
+  impression: number | null;
+  click: number | null;
+  activation: number | null;
+  missing_fields_json: string;
+  raw_json: string;
+  updated_at: number;
+}
+
+async function addMysqlColumnIfMissing(pool: mysql.Pool, tableName: string, columnName: string, ddl: string): Promise<void> {
+  try {
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${ddl}`);
+  } catch (error) {
+    const err = error as { code?: string };
+    if (err.code !== 'ER_DUP_FIELDNAME') {
+      throw error;
+    }
+  }
 }
 
 async function migrateMysql(pool: mysql.Pool): Promise<void> {
@@ -125,10 +174,56 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       wechat_clicks INT NOT NULL DEFAULT 0,
       wechat_ad_revenue_cny DOUBLE NOT NULL DEFAULT 0,
       wechat_ad_impressions INT NOT NULL DEFAULT 0,
+      acquisition_impressions BIGINT NOT NULL DEFAULT 0,
+      acquisition_activations BIGINT NOT NULL DEFAULT 0,
+      acquisition_source VARCHAR(64) NOT NULL DEFAULT '',
       note TEXT NOT NULL,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       UNIQUE KEY uniq_game_date (game_key, date_key),
+      INDEX idx_game_date (game_key, date_key)
+    )
+  `);
+  await addMysqlColumnIfMissing(pool, 'business_daily_inputs', 'acquisition_impressions', "BIGINT NOT NULL DEFAULT 0 AFTER wechat_ad_impressions");
+  await addMysqlColumnIfMissing(pool, 'business_daily_inputs', 'acquisition_activations', "BIGINT NOT NULL DEFAULT 0 AFTER acquisition_impressions");
+  await addMysqlColumnIfMissing(pool, 'business_daily_inputs', 'acquisition_source', "VARCHAR(64) NOT NULL DEFAULT '' AFTER acquisition_activations");
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wechat_publisher_ad_daily (
+      game_key VARCHAR(32) NOT NULL,
+      date_key VARCHAR(10) NOT NULL,
+      slot_id VARCHAR(64) NOT NULL,
+      ad_slot VARCHAR(128) NOT NULL,
+      req_succ_count BIGINT NOT NULL DEFAULT 0,
+      exposure_count BIGINT NOT NULL DEFAULT 0,
+      exposure_rate DOUBLE NOT NULL DEFAULT 0,
+      click_count BIGINT NOT NULL DEFAULT 0,
+      click_rate DOUBLE NOT NULL DEFAULT 0,
+      income_cny DOUBLE NOT NULL DEFAULT 0,
+      ecpm_cny DOUBLE NOT NULL DEFAULT 0,
+      raw_json JSON NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, date_key, slot_id),
+      INDEX idx_game_date (game_key, date_key)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tencent_ads_daily_reports_raw (
+      game_key VARCHAR(32) NOT NULL,
+      account_id VARCHAR(32) NOT NULL,
+      report_level VARCHAR(64) NOT NULL,
+      date_key VARCHAR(10) NOT NULL,
+      adgroup_id VARCHAR(64) NOT NULL,
+      adgroup_name VARCHAR(255) NOT NULL,
+      cost_cny DOUBLE NOT NULL DEFAULT 0,
+      impression BIGINT NULL,
+      click BIGINT NULL,
+      activation BIGINT NULL,
+      missing_fields_json JSON NOT NULL,
+      raw_json JSON NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, account_id, report_level, date_key, adgroup_id),
       INDEX idx_game_date (game_key, date_key)
     )
   `);
@@ -292,13 +387,17 @@ export async function upsertBusinessDailyInput(input: BusinessDailyInputDraft): 
   await pool.query(
     `INSERT INTO business_daily_inputs (
        game_key, date_key, spend_cny, wechat_clicks, wechat_ad_revenue_cny,
-       wechat_ad_impressions, note, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       wechat_ad_impressions, acquisition_impressions, acquisition_activations,
+       acquisition_source, note, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        spend_cny = VALUES(spend_cny),
        wechat_clicks = VALUES(wechat_clicks),
        wechat_ad_revenue_cny = VALUES(wechat_ad_revenue_cny),
        wechat_ad_impressions = VALUES(wechat_ad_impressions),
+       acquisition_impressions = VALUES(acquisition_impressions),
+       acquisition_activations = VALUES(acquisition_activations),
+       acquisition_source = VALUES(acquisition_source),
        note = VALUES(note),
        updated_at = VALUES(updated_at)`,
     [
@@ -308,6 +407,9 @@ export async function upsertBusinessDailyInput(input: BusinessDailyInputDraft): 
       input.wechat_clicks,
       input.wechat_ad_revenue_cny,
       input.wechat_ad_impressions,
+      Math.max(0, Math.trunc(Number(input.acquisition_impressions) || 0)),
+      Math.max(0, Math.trunc(Number(input.acquisition_activations) || 0)),
+      input.acquisition_source || '',
       input.note || '',
       now,
       now,
@@ -344,4 +446,112 @@ export async function listBusinessDailyInputs(
     [gameKey, fromDate, toDate],
   );
   return rows as BusinessDailyInputRow[];
+}
+
+export async function replaceWechatPublisherAdDailyRows(
+  gameKey: string,
+  fromDate: string,
+  toDate: string,
+  rows: WechatPublisherAdDailyRow[],
+): Promise<number> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `DELETE FROM wechat_publisher_ad_daily
+        WHERE game_key = ? AND date_key BETWEEN ? AND ?`,
+      [gameKey, fromDate, toDate],
+    );
+    if (rows.length > 0) {
+      const cols = [
+        'game_key',
+        'date_key',
+        'slot_id',
+        'ad_slot',
+        'req_succ_count',
+        'exposure_count',
+        'exposure_rate',
+        'click_count',
+        'click_rate',
+        'income_cny',
+        'ecpm_cny',
+        'raw_json',
+        'updated_at',
+      ];
+      const placeholders = `(${cols.map(() => '?').join(',')})`;
+      const values: unknown[] = [];
+      for (const row of rows) {
+        for (const col of cols) values.push((row as unknown as Record<string, unknown>)[col]);
+      }
+      await conn.query(
+        `INSERT INTO wechat_publisher_ad_daily (${cols.join(',')})
+         VALUES ${rows.map(() => placeholders).join(',')}`,
+        values,
+      );
+    }
+    await conn.commit();
+    return rows.length;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function replaceTencentAdsDailyReportRawRows(
+  gameKey: string,
+  accountId: string,
+  reportLevel: string,
+  fromDate: string,
+  toDate: string,
+  rows: TencentAdsDailyReportRawRow[],
+): Promise<number> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `DELETE FROM tencent_ads_daily_reports_raw
+        WHERE game_key = ? AND account_id = ? AND report_level = ? AND date_key BETWEEN ? AND ?`,
+      [gameKey, accountId, reportLevel, fromDate, toDate],
+    );
+    if (rows.length > 0) {
+      const cols = [
+        'game_key',
+        'account_id',
+        'report_level',
+        'date_key',
+        'adgroup_id',
+        'adgroup_name',
+        'cost_cny',
+        'impression',
+        'click',
+        'activation',
+        'missing_fields_json',
+        'raw_json',
+        'updated_at',
+      ];
+      const placeholders = `(${cols.map(() => '?').join(',')})`;
+      const values: unknown[] = [];
+      for (const row of rows) {
+        for (const col of cols) values.push((row as unknown as Record<string, unknown>)[col]);
+      }
+      await conn.query(
+        `INSERT INTO tencent_ads_daily_reports_raw (${cols.join(',')})
+         VALUES ${rows.map(() => placeholders).join(',')}`,
+        values,
+      );
+    }
+    await conn.commit();
+    return rows.length;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
 }

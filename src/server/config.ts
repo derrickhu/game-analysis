@@ -2,6 +2,8 @@ import 'dotenv/config';
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getTencentAdsConfig, type TencentAdsConfig } from './config/tencent-ads';
+import { getWechatPublisherConfig, type WechatPublisherConfig } from './config/wechat-publisher';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -20,6 +22,8 @@ export interface AppConfig {
     database: string;
   };
   schedulerEnabled: boolean;
+  tencentAds: TencentAdsConfig;
+  wechatPublisher: WechatPublisherConfig;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -73,5 +77,7 @@ export function getConfig(): AppConfig {
       database: readRequiredString('MYSQL_DATABASE'),
     },
     schedulerEnabled: process.env.GA_SCHEDULER_ENABLED === 'true',
+    tencentAds: getTencentAdsConfig(),
+    wechatPublisher: getWechatPublisherConfig(),
   };
 }

@@ -16,6 +16,8 @@ import {
 import { cleanExpiredEvents } from '../jobs/clean-expired-events';
 import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
+import { ingestTencentAdsBusinessInputs } from '../jobs/ingest-tencent-ads';
+import { ingestWechatPublisherBusinessInputs } from '../jobs/ingest-wechat-publisher';
 import {
   getAdUserMetrics,
   listAdErrorTopN,
@@ -123,6 +125,9 @@ interface BusinessInputBody {
   wechat_clicks?: number;
   wechat_ad_revenue_cny?: number;
   wechat_ad_impressions?: number;
+  acquisition_impressions?: number;
+  acquisition_activations?: number;
+  acquisition_source?: string;
   note?: string;
 }
 
@@ -826,6 +831,9 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       wechat_clicks: Math.max(0, Math.trunc(Number(body.wechat_clicks) || 0)),
       wechat_ad_revenue_cny: Math.max(0, Number(body.wechat_ad_revenue_cny) || 0),
       wechat_ad_impressions: Math.max(0, Math.trunc(Number(body.wechat_ad_impressions) || 0)),
+      acquisition_impressions: Math.max(0, Math.trunc(Number(body.acquisition_impressions) || 0)),
+      acquisition_activations: Math.max(0, Math.trunc(Number(body.acquisition_activations) || 0)),
+      acquisition_source: body.acquisition_source || '',
       note: body.note || '',
     });
     return { ok: true, row };
@@ -843,6 +851,45 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     }
     const deleted = await removeBusinessDailyInput(gameKey, dateKey);
     return { ok: true, deleted };
+  });
+
+  app.post('/api/realtime/tencent-ads/ingest-business-inputs', async (request) => {
+    const body = (request.body || {}) as { game?: string; from_date?: string; to_date?: string };
+    const gameKey = body.game?.trim();
+    if (gameKey && !findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    if (body.from_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.from_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'from_date 必须是 YYYY-MM-DD' };
+    }
+    if (body.to_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.to_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'to_date 必须是 YYYY-MM-DD' };
+    }
+    const result = await ingestTencentAdsBusinessInputs({
+      gameKey,
+      fromDate: body.from_date,
+      toDate: body.to_date,
+    });
+    return result;
+  });
+
+  app.post('/api/realtime/wechat-publisher/ingest-business-inputs', async (request) => {
+    const body = (request.body || {}) as { game?: string; from_date?: string; to_date?: string };
+    const gameKey = body.game?.trim();
+    if (gameKey && !findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    if (body.from_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.from_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'from_date 必须是 YYYY-MM-DD' };
+    }
+    if (body.to_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.to_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'to_date 必须是 YYYY-MM-DD' };
+    }
+    return ingestWechatPublisherBusinessInputs({
+      gameKey,
+      fromDate: body.from_date,
+      toDate: body.to_date,
+    });
   });
 
   // 广告错误明细 Top N：按 (scene, ad_type, err_code, err_msg) 聚合，

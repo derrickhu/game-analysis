@@ -1,0 +1,227 @@
+import { getConfig } from '../config';
+import type { TencentAdsGameMapping } from '../config/tencent-ads';
+import {
+  listBusinessDailyInputs,
+  replaceTencentAdsDailyReportRawRows,
+  upsertBusinessDailyInput,
+  type BusinessDailyInputRow,
+  type TencentAdsDailyReportRawRow,
+} from '../ltv-db';
+import { getTencentAdsDailyReport, type TencentAdsDailyReportRow } from '../tencent-ads';
+import { toShanghaiDateKey } from '../time';
+
+export interface TencentAdsIngestGameSummary {
+  game_key: string;
+  account_id: string;
+  from_date: string;
+  to_date: string;
+  fetched_rows: number;
+  saved_rows: number;
+  skipped: boolean;
+  error?: string;
+}
+
+export interface TencentAdsIngestSummary {
+  ok: boolean;
+  from_date: string;
+  to_date: string;
+  games: TencentAdsIngestGameSummary[];
+}
+
+interface AggregatedTencentAdsDaily {
+  dateKey: string;
+  spendCny: number;
+  clicks: number;
+  impressions: number;
+  activations: number;
+  hasClicks: boolean;
+  hasImpressions: boolean;
+  hasActivations: boolean;
+}
+
+function addDays(dateKey: string, days: number): string {
+  const date = new Date(`${dateKey}T00:00:00+08:00`);
+  date.setDate(date.getDate() + days);
+  return toShanghaiDateKey(date.getTime());
+}
+
+function yesterday(): string {
+  return toShanghaiDateKey(Date.now() - 86_400_000);
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function aggregateDailyRows(rows: TencentAdsDailyReportRow[]): AggregatedTencentAdsDaily[] {
+  const byDate = new Map<string, AggregatedTencentAdsDaily>();
+  for (const row of rows) {
+    const dateKey = row.date;
+    if (!dateKey) continue;
+    const current =
+      byDate.get(dateKey) || {
+        dateKey,
+        spendCny: 0,
+        clicks: 0,
+        impressions: 0,
+        activations: 0,
+        hasClicks: false,
+        hasImpressions: false,
+        hasActivations: false,
+      };
+    current.spendCny += Number(row.cost || 0) / 100;
+    if (row.click !== undefined) {
+      current.clicks += Math.trunc(Number(row.click || 0));
+      current.hasClicks = true;
+    }
+    if (row.impression !== undefined) {
+      current.impressions += Math.trunc(Number(row.impression || 0));
+      current.hasImpressions = true;
+    }
+    if (row.activation !== undefined || row.conversion !== undefined || row.download !== undefined) {
+      current.activations += Math.trunc(Number(row.activation || row.conversion || row.download || 0));
+      current.hasActivations = true;
+    }
+    byDate.set(dateKey, current);
+  }
+
+  return [...byDate.values()].map((row) => ({
+    ...row,
+    spendCny: round2(row.spendCny),
+  }));
+}
+
+function buildRawRows(mapping: TencentAdsGameMapping, rows: TencentAdsDailyReportRow[]): TencentAdsDailyReportRawRow[] {
+  const now = Date.now();
+  const reportLevel = mapping.adgroupIds.length > 0 ? 'REPORT_LEVEL_ADGROUP' : 'REPORT_LEVEL_ADVERTISER';
+  return rows
+    .filter((row) => row.date)
+    .map((row) => {
+      const missingFields = ['impression', 'click', 'activation'].filter(
+        (field) => (row as unknown as Record<string, unknown>)[field] === undefined,
+      );
+      return {
+        game_key: mapping.gameKey,
+        account_id: mapping.accountId,
+        report_level: reportLevel,
+        date_key: row.date,
+        adgroup_id: String(row.adgroup_id || 'account'),
+        adgroup_name: row.adgroup_name || '',
+        cost_cny: round2(Number(row.cost || 0) / 100),
+        impression: row.impression === undefined ? null : Math.trunc(Number(row.impression || 0)),
+        click: row.click === undefined ? null : Math.trunc(Number(row.click || 0)),
+        activation: row.activation === undefined ? null : Math.trunc(Number(row.activation || 0)),
+        missing_fields_json: JSON.stringify(missingFields),
+        raw_json: JSON.stringify(row),
+        updated_at: now,
+      };
+    });
+}
+
+function buildAutoNote(mapping: TencentAdsGameMapping, row: AggregatedTencentAdsDaily): string {
+  const target =
+    mapping.adgroupIds.length > 0
+      ? `adgroup=${mapping.adgroupIds.join(',')}`
+      : mapping.campaignIds.length > 0
+        ? `campaign=${mapping.campaignIds.join(',')}`
+        : 'account';
+  const impressions = row.hasImpressions ? String(row.impressions) : '未返回';
+  const clicks = row.hasClicks ? String(row.clicks) : '未返回';
+  const activations = row.hasActivations ? String(row.activations) : '未返回';
+  return `腾讯广告自动补录 ${mapping.accountId}/${target}：曝光 ${impressions}，点击 ${clicks}，激活 ${activations}`;
+}
+
+function mergeNote(existing: BusinessDailyInputRow | undefined, autoNote: string): string {
+  const existingNote = existing?.note?.trim() || '';
+  const manualNote = existingNote
+    .split('\n')
+    .filter((line) => !line.startsWith('腾讯广告自动补录 '))
+    .join('\n')
+    .trim();
+  return manualNote ? `${manualNote}\n${autoNote}` : autoNote;
+}
+
+async function ingestMapping(mapping: TencentAdsGameMapping, fromDate: string, toDate: string): Promise<TencentAdsIngestGameSummary> {
+  try {
+    const report = await getTencentAdsDailyReport({ mapping, fromDate, toDate });
+    await replaceTencentAdsDailyReportRawRows(
+      mapping.gameKey,
+      mapping.accountId,
+      mapping.adgroupIds.length > 0 ? 'REPORT_LEVEL_ADGROUP' : 'REPORT_LEVEL_ADVERTISER',
+      fromDate,
+      toDate,
+      buildRawRows(mapping, report.rows),
+    );
+    const dailyRows = aggregateDailyRows(report.rows);
+    const existingRows = await listBusinessDailyInputs(mapping.gameKey, fromDate, toDate);
+    const existingByDate = new Map(existingRows.map((row) => [row.date_key, row]));
+
+    let savedRows = 0;
+    for (const row of dailyRows) {
+      const existing = existingByDate.get(row.dateKey);
+      await upsertBusinessDailyInput({
+        game_key: mapping.gameKey,
+        date_key: row.dateKey,
+        spend_cny: row.spendCny,
+        wechat_clicks: row.hasClicks ? row.clicks : Number(existing?.wechat_clicks || 0),
+        // 微信真实收入/曝光来自流量主后台或后续收入接口，腾讯投放接口不能覆盖这两个口径。
+        wechat_ad_revenue_cny: Number(existing?.wechat_ad_revenue_cny || 0),
+        wechat_ad_impressions: Number(existing?.wechat_ad_impressions || 0),
+        acquisition_impressions: row.hasImpressions ? row.impressions : Number(existing?.acquisition_impressions || 0),
+        acquisition_activations: row.hasActivations ? row.activations : Number(existing?.acquisition_activations || 0),
+        acquisition_source: 'tencent_ads',
+        note: mergeNote(existing, buildAutoNote(mapping, row)),
+      });
+      savedRows += 1;
+    }
+
+    return {
+      game_key: mapping.gameKey,
+      account_id: mapping.accountId,
+      from_date: fromDate,
+      to_date: toDate,
+      fetched_rows: report.total,
+      saved_rows: savedRows,
+      skipped: false,
+    };
+  } catch (error) {
+    return {
+      game_key: mapping.gameKey,
+      account_id: mapping.accountId,
+      from_date: fromDate,
+      to_date: toDate,
+      fetched_rows: 0,
+      saved_rows: 0,
+      skipped: true,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function ingestTencentAdsBusinessInputs(options: {
+  fromDate?: string;
+  toDate?: string;
+  gameKey?: string;
+} = {}): Promise<TencentAdsIngestSummary> {
+  const config = getConfig().tencentAds;
+  const toDate = options.toDate || yesterday();
+  const lookbackDays = Math.max(1, Math.min(90, Number(process.env.TENCENT_ADS_INGEST_LOOKBACK_DAYS) || 90));
+  const fromDate = options.fromDate || addDays(toDate, -(lookbackDays - 1));
+
+  if (!config.enabled) {
+    return { ok: true, from_date: fromDate, to_date: toDate, games: [] };
+  }
+
+  const mappings = config.gameMappings.filter((mapping) => !options.gameKey || mapping.gameKey === options.gameKey);
+  const games: TencentAdsIngestGameSummary[] = [];
+  for (const mapping of mappings) {
+    games.push(await ingestMapping(mapping, fromDate, toDate));
+  }
+
+  return {
+    ok: games.every((game) => !game.error),
+    from_date: fromDate,
+    to_date: toDate,
+    games,
+  };
+}
