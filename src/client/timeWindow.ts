@@ -6,6 +6,7 @@
  *
  * 支持三种语义：
  * - 'today'                            ：自然日（本地时区 00:00 ~ now），默认
+ * - 'yesterday'                        ：昨天自然日（本地时区 00:00 ~ 23:59:59）
  * - number（分钟数）                   ：滑动相对时间，如 30/60/360/1440/10080/43200
  * - { kind: 'range', fromTs, toTs }    ：用户在 RangePicker 里手选的任意时间范围（毫秒时间戳）
  *
@@ -21,11 +22,12 @@ export interface CustomRangeValue {
   toTs: number;
 }
 
-export type WindowValue = 'today' | number | CustomRangeValue;
+export type WindowValue = 'today' | 'yesterday' | number | CustomRangeValue;
 
 /** 窗口下拉的快捷档位；自定义时间范围由外置 RangePicker 承担，这里不再含 'custom' 选项 */
-export const WINDOW_OPTIONS: { value: 'today' | number; label: string }[] = [
+export const WINDOW_OPTIONS: { value: 'today' | 'yesterday' | number; label: string }[] = [
   { value: 'today', label: '今天（自然日）' },
+  { value: 'yesterday', label: '昨天（自然日）' },
   { value: 30, label: '近 30 分钟' },
   { value: 60, label: '近 1 小时' },
   { value: 360, label: '近 6 小时' },
@@ -66,6 +68,12 @@ export function resolveWindow(window: WindowValue): { fromTs: number; toTs: numb
     todayStart.setHours(0, 0, 0, 0);
     return { fromTs: todayStart.getTime(), toTs: now };
   }
+  if (window === 'yesterday') {
+    const yesterdayStart = new Date(now);
+    yesterdayStart.setHours(0, 0, 0, 0);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    return { fromTs: yesterdayStart.getTime(), toTs: yesterdayStart.getTime() + 86_400_000 - 1 };
+  }
   if (typeof window === 'number') {
     return { fromTs: now - window * 60_000, toTs: now };
   }
@@ -75,6 +83,7 @@ export function resolveWindow(window: WindowValue): { fromTs: number; toTs: numb
 /**
  * 把 WindowValue 序列化成可放进 URL search 参数的字符串。
  * - 'today'           → 'today'
+ * - 'yesterday'       → 'yesterday'
  * - 数字（分钟数）    → '60' / '1440' / '10080' 等
  * - { kind:'range' }  → 'range:fromTs-toTs'（毫秒时间戳）
  *
@@ -83,6 +92,7 @@ export function resolveWindow(window: WindowValue): { fromTs: number; toTs: numb
  */
 export function windowToUrlValue(window: WindowValue): string {
   if (window === 'today') return 'today';
+  if (window === 'yesterday') return 'yesterday';
   if (typeof window === 'number') return String(window);
   return `range:${window.fromTs}-${window.toTs}`;
 }
@@ -94,6 +104,7 @@ export function windowToUrlValue(window: WindowValue): string {
 export function parseWindowFromUrl(raw: string | null | undefined): WindowValue {
   if (!raw) return DEFAULT_WINDOW;
   if (raw === 'today') return 'today';
+  if (raw === 'yesterday') return 'yesterday';
   if (raw.startsWith('range:')) {
     const m = /^range:(\d+)-(\d+)$/.exec(raw);
     if (!m) return DEFAULT_WINDOW;
@@ -116,6 +127,7 @@ export function parseWindowFromUrl(raw: string | null | undefined): WindowValue 
  * 这里统一走 from/to 路径，避免老的 window=N 分钟分支被后端 24h 上限卡死，导致 7/30 天预设无效。
  *
  * - 'today'：精确传 from=今日本地时区 00:00 + to=now
+ * - 'yesterday'：精确传 from=昨天本地时区 00:00 + to=23:59:59
  * - number：from = now - N 分钟，to = now
  * - range ：直接使用用户手选的 fromTs / toTs（已由 UI 兜底校验范围合法）
  */
@@ -128,6 +140,12 @@ export function buildWindowQuery(window: WindowValue): string {
     todayStart.setHours(0, 0, 0, 0);
     fromTs = todayStart.getTime();
     toTs = now;
+  } else if (window === 'yesterday') {
+    const yesterdayStart = new Date(now);
+    yesterdayStart.setHours(0, 0, 0, 0);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    fromTs = yesterdayStart.getTime();
+    toTs = yesterdayStart.getTime() + 86_400_000 - 1;
   } else if (typeof window === 'number') {
     fromTs = now - window * 60_000;
     toTs = now;

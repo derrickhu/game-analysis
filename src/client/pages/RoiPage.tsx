@@ -748,16 +748,19 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
             }
           />
           <Row gutter={[16, 16]}>
-            <Col xs={12} md={5}>
+            <Col xs={12} md={4}>
               <MetricCard title="窗口总消耗" value={`${money(summary?.total_spend_cny)} 元`} hint={`统计窗口：${rangeLabel}`} />
             </Col>
-            <Col xs={12} md={5}>
+            <Col xs={12} md={4}>
+              <MetricCard title="窗口总收入" value={`${money(summary?.total_wechat_revenue_cny)} 元`} hint="微信流量主真实收入" />
+            </Col>
+            <Col xs={12} md={4}>
               <MetricCard title="窗口新增用户" value={`${summary?.total_game_new_users ?? 0}`} hint="游戏 first_seen" />
             </Col>
-            <Col xs={12} md={5}>
+            <Col xs={12} md={4}>
               <MetricCard title="窗口平均 CPI" value={`${money(summary?.avg_cpi_cny, 4)} 元`} hint="窗口消耗 / 窗口新增，不依赖 click" />
             </Col>
-            <Col xs={12} md={5}>
+            <Col xs={12} md={4}>
               <MetricCard
                 title="预测 D30 ROI"
                 value={percent(projectedD30Roi)}
