@@ -207,6 +207,7 @@ async function ingestMapping(mapping: TencentAdsGameMapping, fromDate: string, t
         fromDate,
         toDate,
         rows,
+        [type],
       );
     } catch (error) {
       summary.errors.push(`targeting:${type}:${error instanceof Error ? error.message : String(error)}`);
@@ -272,7 +273,7 @@ export async function ingestTencentAdsInsights(options: {
 } = {}): Promise<TencentAdsInsightsIngestSummary> {
   const config = getConfig().tencentAds;
   const toDate = options.toDate || yesterday();
-  const lookbackDays = Math.max(1, Math.min(90, Number(process.env.TENCENT_ADS_INSIGHTS_LOOKBACK_DAYS) || 14));
+  const lookbackDays = Math.max(1, Math.min(90, Number(process.env.TENCENT_ADS_INSIGHTS_LOOKBACK_DAYS) || 7));
   const fromDate = options.fromDate || addDays(toDate, -(lookbackDays - 1));
 
   if (!config.enabled) {

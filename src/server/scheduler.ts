@@ -199,7 +199,7 @@ export function startScheduler(): void {
     void runTencentAdsIngest('startup');
   }, 12_000);
 
-  // 8) 腾讯广告投放洞察：每天 9:40 拉定向标签、创意素材和画像洞察，错峰于基础日报。
+  // 8) 腾讯广告投放洞察：每天 9:40 拉定向标签和创意素材，错峰于基础日报。默认只回拉最近 7 天；历史 30/90 天用手动 backfill。
   const tencentAdsInsightsCron = process.env.TENCENT_ADS_INSIGHTS_INGEST_CRON || '40 9 * * *';
   const runTencentAdsInsightsIngest = async (trigger: 'cron' | 'startup') => {
     try {

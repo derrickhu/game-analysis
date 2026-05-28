@@ -225,7 +225,7 @@ export async function ingestTencentAdsBusinessInputs(options: {
 } = {}): Promise<TencentAdsIngestSummary> {
   const config = getConfig().tencentAds;
   const toDate = options.toDate || yesterday();
-  const lookbackDays = Math.max(1, Math.min(90, Number(process.env.TENCENT_ADS_INGEST_LOOKBACK_DAYS) || 90));
+  const lookbackDays = Math.max(1, Math.min(90, Number(process.env.TENCENT_ADS_INGEST_LOOKBACK_DAYS) || 7));
   const fromDate = options.fromDate || addDays(toDate, -(lookbackDays - 1));
 
   if (!config.enabled) {

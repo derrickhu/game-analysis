@@ -709,16 +709,19 @@ export async function replaceTencentAdsTargetingTagReportRawRows(
   fromDate: string,
   toDate: string,
   rows: TencentAdsTargetingTagReportRawRow[],
+  dimensionTypes?: string[],
 ): Promise<number> {
+  const dimensions = dimensionTypes && dimensionTypes.length > 0 ? dimensionTypes : [...new Set(rows.map((row) => row.dimension_type))];
+  if (dimensions.length === 0) return 0;
   return replaceRowsInTransaction<TencentAdsTargetingTagReportRawRow>({
     table: 'tencent_ads_targeting_tag_reports_raw',
     deleteSql: `DELETE FROM tencent_ads_targeting_tag_reports_raw
-      WHERE game_key = ? AND account_id = ? AND report_level = ? AND dimension_type IN (${[...new Set(rows.map((row) => row.dimension_type))].map(() => '?').join(',') || '?'}) AND date_key BETWEEN ? AND ?`,
+      WHERE game_key = ? AND account_id = ? AND report_level = ? AND dimension_type IN (${dimensions.map(() => '?').join(',')}) AND date_key BETWEEN ? AND ?`,
     deleteParams: [
       gameKey,
       accountId,
       reportLevel,
-      ...([...new Set(rows.map((row) => row.dimension_type))].length > 0 ? [...new Set(rows.map((row) => row.dimension_type))] : ['__NO_DIMENSION__']),
+      ...dimensions,
       fromDate,
       toDate,
     ],
