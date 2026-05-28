@@ -8,12 +8,8 @@ LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 cd "$ROOT_DIR"
 
-if [[ -f "$ROOT_DIR/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$ROOT_DIR/.env"
-  set +a
-fi
+# 不在 shell 中 source .env：其中的 JSON/Token 含引号，shell source 会把 JSON 引号吞掉，
+# 导致 TENCENT_ADS_GAME_MAPPINGS_JSON 变成非法 JSON。后端入口已通过 dotenv/config 自行读取 .env。
 
 # 锁定时区到 Asia/Shanghai：toLocalDateKey 与 first_seen_date 都依赖服务器本地时区，
 # 容器/CI 默认 UTC 会让广东时间晚上 8 点后的事件被切到第二天，导致 CPI/ROI 与运营录入对不齐。

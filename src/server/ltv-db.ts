@@ -104,6 +104,54 @@ export interface TencentAdsDailyReportRawRow {
   updated_at: number;
 }
 
+export interface TencentAdsTargetingTagReportRawRow {
+  game_key: string;
+  account_id: string;
+  report_level: string;
+  date_key: string;
+  dimension_type: string;
+  dimension_value: string;
+  cost_cny: number;
+  impression: number | null;
+  click: number | null;
+  activation: number | null;
+  missing_fields_json: string;
+  raw_json: string;
+  updated_at: number;
+}
+
+export interface TencentAdsCreativeReportRawRow {
+  game_key: string;
+  account_id: string;
+  report_level: string;
+  date_key: string;
+  adgroup_id: string;
+  entity_type: string;
+  entity_id: string;
+  entity_name: string;
+  site_set: string;
+  cost_cny: number;
+  impression: number | null;
+  click: number | null;
+  activation: number | null;
+  missing_fields_json: string;
+  raw_json: string;
+  updated_at: number;
+}
+
+export interface TencentAdsAudienceInsightRawRow {
+  game_key: string;
+  account_id: string;
+  audience_id: string;
+  dimension_type: string;
+  dimension_value: string;
+  match_rate: number | null;
+  percentage: number | null;
+  tgi: number | null;
+  raw_json: string;
+  updated_at: number;
+}
+
 async function addMysqlColumnIfMissing(pool: mysql.Pool, tableName: string, columnName: string, ddl: string): Promise<void> {
   try {
     await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${ddl}`);
@@ -225,6 +273,69 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       updated_at BIGINT NOT NULL,
       PRIMARY KEY (game_key, account_id, report_level, date_key, adgroup_id),
       INDEX idx_game_date (game_key, date_key)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tencent_ads_targeting_tag_reports_raw (
+      game_key VARCHAR(32) NOT NULL,
+      account_id VARCHAR(32) NOT NULL,
+      report_level VARCHAR(64) NOT NULL,
+      date_key VARCHAR(10) NOT NULL,
+      dimension_type VARCHAR(32) NOT NULL,
+      dimension_value VARCHAR(128) NOT NULL,
+      cost_cny DOUBLE NOT NULL DEFAULT 0,
+      impression BIGINT NULL,
+      click BIGINT NULL,
+      activation BIGINT NULL,
+      missing_fields_json JSON NOT NULL,
+      raw_json JSON NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, account_id, report_level, date_key, dimension_type, dimension_value),
+      INDEX idx_game_date (game_key, date_key),
+      INDEX idx_game_dimension (game_key, dimension_type, dimension_value)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tencent_ads_creative_reports_raw (
+      game_key VARCHAR(32) NOT NULL,
+      account_id VARCHAR(32) NOT NULL,
+      report_level VARCHAR(64) NOT NULL,
+      date_key VARCHAR(10) NOT NULL,
+      adgroup_id VARCHAR(64) NOT NULL,
+      entity_type VARCHAR(64) NOT NULL,
+      entity_id VARCHAR(128) NOT NULL,
+      entity_name VARCHAR(255) NOT NULL,
+      site_set VARCHAR(64) NOT NULL DEFAULT '',
+      cost_cny DOUBLE NOT NULL DEFAULT 0,
+      impression BIGINT NULL,
+      click BIGINT NULL,
+      activation BIGINT NULL,
+      missing_fields_json JSON NOT NULL,
+      raw_json JSON NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, account_id, report_level, date_key, adgroup_id, entity_type, entity_id, site_set),
+      INDEX idx_game_date (game_key, date_key),
+      INDEX idx_game_entity (game_key, report_level, entity_type, entity_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tencent_ads_audience_insights_raw (
+      game_key VARCHAR(32) NOT NULL,
+      account_id VARCHAR(32) NOT NULL,
+      audience_id VARCHAR(64) NOT NULL,
+      dimension_type VARCHAR(64) NOT NULL,
+      dimension_value VARCHAR(255) NOT NULL,
+      match_rate DOUBLE NULL,
+      percentage DOUBLE NULL,
+      tgi DOUBLE NULL,
+      raw_json JSON NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, account_id, audience_id, dimension_type, dimension_value),
+      INDEX idx_game_audience (game_key, audience_id),
+      INDEX idx_game_dimension (game_key, dimension_type, dimension_value)
     )
   `);
 }
@@ -554,4 +665,190 @@ export async function replaceTencentAdsDailyReportRawRows(
   } finally {
     conn.release();
   }
+}
+
+async function replaceRowsInTransaction<T extends object>(input: {
+  table: string;
+  deleteSql: string;
+  deleteParams: unknown[];
+  rows: T[];
+  cols: string[];
+}): Promise<number> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(input.deleteSql, input.deleteParams);
+    if (input.rows.length > 0) {
+      const placeholders = `(${input.cols.map(() => '?').join(',')})`;
+      const values: unknown[] = [];
+      for (const row of input.rows) {
+        const record = row as Record<string, unknown>;
+        for (const col of input.cols) values.push(record[col]);
+      }
+      await conn.query(
+        `INSERT INTO ${input.table} (${input.cols.join(',')}) VALUES ${input.rows.map(() => placeholders).join(',')}`,
+        values,
+      );
+    }
+    await conn.commit();
+    return input.rows.length;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function replaceTencentAdsTargetingTagReportRawRows(
+  gameKey: string,
+  accountId: string,
+  reportLevel: string,
+  fromDate: string,
+  toDate: string,
+  rows: TencentAdsTargetingTagReportRawRow[],
+): Promise<number> {
+  return replaceRowsInTransaction<TencentAdsTargetingTagReportRawRow>({
+    table: 'tencent_ads_targeting_tag_reports_raw',
+    deleteSql: `DELETE FROM tencent_ads_targeting_tag_reports_raw
+      WHERE game_key = ? AND account_id = ? AND report_level = ? AND dimension_type IN (${[...new Set(rows.map((row) => row.dimension_type))].map(() => '?').join(',') || '?'}) AND date_key BETWEEN ? AND ?`,
+    deleteParams: [
+      gameKey,
+      accountId,
+      reportLevel,
+      ...([...new Set(rows.map((row) => row.dimension_type))].length > 0 ? [...new Set(rows.map((row) => row.dimension_type))] : ['__NO_DIMENSION__']),
+      fromDate,
+      toDate,
+    ],
+    rows,
+    cols: [
+      'game_key',
+      'account_id',
+      'report_level',
+      'date_key',
+      'dimension_type',
+      'dimension_value',
+      'cost_cny',
+      'impression',
+      'click',
+      'activation',
+      'missing_fields_json',
+      'raw_json',
+      'updated_at',
+    ],
+  });
+}
+
+export async function replaceTencentAdsCreativeReportRawRows(
+  gameKey: string,
+  accountId: string,
+  reportLevel: string,
+  fromDate: string,
+  toDate: string,
+  rows: TencentAdsCreativeReportRawRow[],
+): Promise<number> {
+  return replaceRowsInTransaction<TencentAdsCreativeReportRawRow>({
+    table: 'tencent_ads_creative_reports_raw',
+    deleteSql: `DELETE FROM tencent_ads_creative_reports_raw
+      WHERE game_key = ? AND account_id = ? AND report_level = ? AND date_key BETWEEN ? AND ?`,
+    deleteParams: [gameKey, accountId, reportLevel, fromDate, toDate],
+    rows,
+    cols: [
+      'game_key',
+      'account_id',
+      'report_level',
+      'date_key',
+      'adgroup_id',
+      'entity_type',
+      'entity_id',
+      'entity_name',
+      'site_set',
+      'cost_cny',
+      'impression',
+      'click',
+      'activation',
+      'missing_fields_json',
+      'raw_json',
+      'updated_at',
+    ],
+  });
+}
+
+export async function replaceTencentAdsAudienceInsightRawRows(
+  gameKey: string,
+  accountId: string,
+  rows: TencentAdsAudienceInsightRawRow[],
+): Promise<number> {
+  const audienceIds = [...new Set(rows.map((row) => row.audience_id))];
+  const dimensionTypes = [...new Set(rows.map((row) => row.dimension_type))];
+  if (audienceIds.length === 0 || dimensionTypes.length === 0) return 0;
+  return replaceRowsInTransaction<TencentAdsAudienceInsightRawRow>({
+    table: 'tencent_ads_audience_insights_raw',
+    deleteSql: `DELETE FROM tencent_ads_audience_insights_raw
+      WHERE game_key = ? AND account_id = ?
+        AND audience_id IN (${audienceIds.map(() => '?').join(',')})
+        AND dimension_type IN (${dimensionTypes.map(() => '?').join(',')})`,
+    deleteParams: [gameKey, accountId, ...audienceIds, ...dimensionTypes],
+    rows,
+    cols: [
+      'game_key',
+      'account_id',
+      'audience_id',
+      'dimension_type',
+      'dimension_value',
+      'match_rate',
+      'percentage',
+      'tgi',
+      'raw_json',
+      'updated_at',
+    ],
+  });
+}
+
+export async function listTencentAdsTargetingTagReportRawRows(
+  gameKey: string,
+  fromDate: string,
+  toDate: string,
+): Promise<TencentAdsTargetingTagReportRawRow[]> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `SELECT * FROM tencent_ads_targeting_tag_reports_raw
+      WHERE game_key = ? AND date_key BETWEEN ? AND ?
+      ORDER BY date_key DESC, dimension_type ASC, cost_cny DESC`,
+    [gameKey, fromDate, toDate],
+  );
+  return rows as TencentAdsTargetingTagReportRawRow[];
+}
+
+export async function listTencentAdsCreativeReportRawRows(
+  gameKey: string,
+  fromDate: string,
+  toDate: string,
+): Promise<TencentAdsCreativeReportRawRow[]> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `SELECT * FROM tencent_ads_creative_reports_raw
+      WHERE game_key = ? AND date_key BETWEEN ? AND ?
+      ORDER BY date_key DESC, cost_cny DESC`,
+    [gameKey, fromDate, toDate],
+  );
+  return rows as TencentAdsCreativeReportRawRow[];
+}
+
+export async function listTencentAdsAudienceInsightRawRows(
+  gameKey: string,
+): Promise<TencentAdsAudienceInsightRawRow[]> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `SELECT * FROM tencent_ads_audience_insights_raw
+      WHERE game_key = ?
+      ORDER BY audience_id ASC, dimension_type ASC, percentage DESC`,
+    [gameKey],
+  );
+  return rows as TencentAdsAudienceInsightRawRow[];
 }

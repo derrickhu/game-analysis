@@ -18,6 +18,7 @@ import { cleanExpiredEvents } from '../jobs/clean-expired-events';
 import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
 import { ingestTencentAdsBusinessInputs } from '../jobs/ingest-tencent-ads';
+import { ingestTencentAdsInsights } from '../jobs/ingest-tencent-ads-insights';
 import { ingestWechatPublisherBusinessInputs } from '../jobs/ingest-wechat-publisher';
 import { getConfig } from '../config';
 import {
@@ -64,6 +65,7 @@ import {
   removeBusinessDailyInput,
   saveBusinessDailyInput,
 } from '../metrics/roi';
+import { getAcquisitionIntelligenceOverview } from '../metrics/acquisition-intelligence';
 import { analyzeRoiWithDeepSeek } from '../metrics/roi-ai';
 import { getTencentAdsDailyReport } from '../tencent-ads';
 import {
@@ -857,6 +859,27 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     };
   });
 
+  // 投放洞察：读取腾讯广告定向标签、创意素材、画像洞察原始表，并与现有 cohort/LTV 做日期级关联。
+  app.get('/api/realtime/acquisition-intelligence', async (request) => {
+    const query = (request.query || {}) as LtvQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const fromDate = String(query.from_date || toLocalDateKey(fromTs)).trim();
+    const toDate = String(query.to_date || toLocalDateKey(toTs)).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'from_date/to_date 必须是 YYYY-MM-DD' };
+    }
+    const result = await getAcquisitionIntelligenceOverview(gameKey, fromDate, toDate);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
+      ...result,
+    };
+  });
+
   // 投放侧实时消耗：直接查腾讯广告 Marketing API，不写库；大盘页用于当天 CPI 快速判断。
   app.get('/api/realtime/acquisition-cost', async (request) => {
     const query = (request.query || {}) as AcquisitionCostQuery;
@@ -995,6 +1018,25 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       toDate: body.to_date,
     });
     return result;
+  });
+
+  app.post('/api/realtime/tencent-ads/ingest-insights', async (request) => {
+    const body = (request.body || {}) as { game?: string; from_date?: string; to_date?: string };
+    const gameKey = body.game?.trim();
+    if (gameKey && !findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    if (body.from_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.from_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'from_date 必须是 YYYY-MM-DD' };
+    }
+    if (body.to_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.to_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'to_date 必须是 YYYY-MM-DD' };
+    }
+    return ingestTencentAdsInsights({
+      gameKey,
+      fromDate: body.from_date,
+      toDate: body.to_date,
+    });
   });
 
   app.post('/api/realtime/wechat-publisher/ingest-business-inputs', async (request) => {

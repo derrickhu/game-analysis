@@ -53,6 +53,16 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function readReportMetric(row: Record<string, unknown>, fields: string[]): number | null {
+  for (const field of fields) {
+    const raw = row[field];
+    if (raw === undefined || raw === null) continue;
+    const value = Number(raw);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
 function aggregateDailyRows(rows: TencentAdsDailyReportRow[]): AggregatedTencentAdsDaily[] {
   const byDate = new Map<string, AggregatedTencentAdsDaily>();
   for (const row of rows) {
@@ -69,17 +79,21 @@ function aggregateDailyRows(rows: TencentAdsDailyReportRow[]): AggregatedTencent
         hasImpressions: false,
         hasActivations: false,
       };
+    const record = row as Record<string, unknown>;
     current.spendCny += Number(row.cost || 0) / 100;
-    if (row.click !== undefined) {
-      current.clicks += Math.trunc(Number(row.click || 0));
+    const clicks = readReportMetric(record, ['valid_click_count', 'click']);
+    if (clicks !== null) {
+      current.clicks += Math.trunc(clicks);
       current.hasClicks = true;
     }
-    if (row.impression !== undefined) {
-      current.impressions += Math.trunc(Number(row.impression || 0));
+    const impressions = readReportMetric(record, ['view_count', 'impression']);
+    if (impressions !== null) {
+      current.impressions += Math.trunc(impressions);
       current.hasImpressions = true;
     }
-    if (row.activation !== undefined || row.conversion !== undefined || row.download !== undefined) {
-      current.activations += Math.trunc(Number(row.activation || row.conversion || row.download || 0));
+    const activations = readReportMetric(record, ['activated_count', 'activation', 'conversion_count', 'conversion', 'download_count', 'download', 'install_count']);
+    if (activations !== null) {
+      current.activations += Math.trunc(activations);
       current.hasActivations = true;
     }
     byDate.set(dateKey, current);
@@ -97,9 +111,15 @@ function buildRawRows(mapping: TencentAdsGameMapping, rows: TencentAdsDailyRepor
   return rows
     .filter((row) => row.date)
     .map((row) => {
-      const missingFields = ['impression', 'click', 'activation'].filter(
-        (field) => (row as unknown as Record<string, unknown>)[field] === undefined,
-      );
+      const record = row as unknown as Record<string, unknown>;
+      const impression = readReportMetric(record, ['view_count', 'impression']);
+      const click = readReportMetric(record, ['valid_click_count', 'click']);
+      const activation = readReportMetric(record, ['activated_count', 'activation', 'conversion_count', 'conversion', 'download_count', 'download', 'install_count']);
+      const missingFields = [
+        ...(impression === null ? ['impression'] : []),
+        ...(click === null ? ['click'] : []),
+        ...(activation === null ? ['activation'] : []),
+      ];
       return {
         game_key: mapping.gameKey,
         account_id: mapping.accountId,
@@ -108,9 +128,9 @@ function buildRawRows(mapping: TencentAdsGameMapping, rows: TencentAdsDailyRepor
         adgroup_id: String(row.adgroup_id || 'account'),
         adgroup_name: row.adgroup_name || '',
         cost_cny: round2(Number(row.cost || 0) / 100),
-        impression: row.impression === undefined ? null : Math.trunc(Number(row.impression || 0)),
-        click: row.click === undefined ? null : Math.trunc(Number(row.click || 0)),
-        activation: row.activation === undefined ? null : Math.trunc(Number(row.activation || 0)),
+        impression: impression === null ? null : Math.trunc(impression),
+        click: click === null ? null : Math.trunc(click),
+        activation: activation === null ? null : Math.trunc(activation),
         missing_fields_json: JSON.stringify(missingFields),
         raw_json: JSON.stringify(row),
         updated_at: now,

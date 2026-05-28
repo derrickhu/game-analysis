@@ -7,6 +7,7 @@ import { ANALYTICS_GAMES, getEnabledAnalyticsGames } from './config/analytics-ga
 import { ingestEventsForGame } from './jobs/ingest-events';
 import { cleanExpiredEvents } from './jobs/clean-expired-events';
 import { ingestTencentAdsBusinessInputs } from './jobs/ingest-tencent-ads';
+import { ingestTencentAdsInsights } from './jobs/ingest-tencent-ads-insights';
 import { ingestWechatPublisherBusinessInputs } from './jobs/ingest-wechat-publisher';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
@@ -198,7 +199,33 @@ export function startScheduler(): void {
     void runTencentAdsIngest('startup');
   }, 12_000);
 
-  // 8) 微信流量主日报：每天 10:10 拉最近 7 天真实收入/曝光，覆盖商业化 LTV 真实 eCPM。
+  // 8) 腾讯广告投放洞察：每天 9:40 拉定向标签、创意素材和画像洞察，错峰于基础日报。
+  const tencentAdsInsightsCron = process.env.TENCENT_ADS_INSIGHTS_INGEST_CRON || '40 9 * * *';
+  const runTencentAdsInsightsIngest = async (trigger: 'cron' | 'startup') => {
+    try {
+      const result = await ingestTencentAdsInsights();
+      const summary = result.games
+        .map((game) =>
+          game.errors.length > 0
+            ? `${game.game_key}:${game.account_id}:errors=${game.errors.length}`
+            : `${game.game_key}:${game.account_id}:targeting=${game.targeting_rows},creative=${game.creative_rows},audience=${game.audience_rows}`,
+        )
+        .join('; ');
+      console.log(
+        `[scheduler] tencent_ads_insights(${trigger}) range=${result.from_date}~${result.to_date} ok=${result.ok} ${summary}`,
+      );
+    } catch (error) {
+      console.error(`[scheduler] 腾讯广告洞察拉取失败 (${trigger}):`, error);
+    }
+  };
+  cron.schedule(tencentAdsInsightsCron, () => {
+    void runTencentAdsInsightsIngest('cron');
+  });
+  setTimeout(() => {
+    void runTencentAdsInsightsIngest('startup');
+  }, 18_000);
+
+  // 9) 微信流量主日报：每天 10:10 拉最近 7 天真实收入/曝光，覆盖商业化 LTV 真实 eCPM。
   // 收入侧数据经常晚于投放侧，启动回拉可让本地开发和部署后立即对账。
   const wechatPublisherCron = process.env.WECHAT_PUBLISHER_INGEST_CRON || '10 10 * * *';
   const runWechatPublisherIngest = async (trigger: 'cron' | 'startup') => {
@@ -232,6 +259,7 @@ export function startScheduler(): void {
       `cleanup(cron=${cleanCron}, local=${retentionDaysLocal}d, cloud=${retentionDaysCloud}d), ` +
       `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d), ` +
       `ltv_recompute(cron=${ltvCron}), level_pass_rate(cron=${levelPassRateCron}), ` +
-      `tencent_ads(cron=${tencentAdsCron}), wechat_publisher(cron=${wechatPublisherCron})`,
+      `tencent_ads(cron=${tencentAdsCron}), tencent_ads_insights(cron=${tencentAdsInsightsCron}), ` +
+      `wechat_publisher(cron=${wechatPublisherCron})`,
   );
 }

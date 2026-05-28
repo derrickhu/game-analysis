@@ -214,6 +214,55 @@ interface MonetizationResponse {
   code?: string;
 }
 
+interface AcquisitionMetricRow {
+  key: string;
+  label: string;
+  group: string;
+  spend_cny: number;
+  impression: number;
+  click: number;
+  activation: number;
+  ctr: number | null;
+  cpc_cny: number | null;
+  cpm_cny: number | null;
+  cpa_cny: number | null;
+  linked_d30_ltv_cny: number | null;
+  linked_d30_roas: number | null;
+  sample_days: number;
+  diagnosis: string;
+}
+
+interface AcquisitionOpportunity {
+  type: 'scale' | 'optimize' | 'stop_loss' | 'creative_fatigue' | 'data_gap';
+  title: string;
+  detail: string;
+  priority: 'high' | 'medium' | 'low';
+}
+
+interface AcquisitionIntelligenceResponse {
+  ok: boolean;
+  summary?: {
+    total_spend_cny: number;
+    total_impression: number;
+    total_click: number;
+    total_activation: number;
+    avg_ctr: number | null;
+    avg_cpc_cny: number | null;
+    avg_cpm_cny: number | null;
+    avg_cpa_cny: number | null;
+    projected_d30_ltv_cny: number | null;
+    projected_d30_roas: number | null;
+    targeting_segments: number;
+    creative_entities: number;
+  };
+  targeting_rankings?: AcquisitionMetricRow[];
+  creative_rankings?: AcquisitionMetricRow[];
+  opportunities?: AcquisitionOpportunity[];
+  data_notes?: string[];
+  error?: string;
+  code?: string;
+}
+
 function MetricTitle({ label, help }: { label: string; help: string }) {
   return (
     <Space size={4}>
@@ -300,6 +349,12 @@ function d30RoasBasisLabel(value?: 'mature' | 'early' | 'insufficient'): string 
   if (value === 'mature') return '成熟样本';
   if (value === 'early') return 'D3+ 早期样本';
   return '未成熟';
+}
+
+function opportunityPriorityLabel(value?: AcquisitionOpportunity['priority']): string {
+  if (value === 'high') return '高优先级';
+  if (value === 'medium') return '中优先级';
+  return '低优先级';
 }
 
 function MetricCard({ title, value, hint }: { title: string; value: string; hint?: string }) {
@@ -407,6 +462,20 @@ async function fetchMonetizationData(gameKey: string, range: [Dayjs, Dayjs]): Pr
   return (await res.json()) as MonetizationResponse;
 }
 
+async function fetchAcquisitionIntelligence(
+  gameKey: string,
+  range: [Dayjs, Dayjs],
+): Promise<AcquisitionIntelligenceResponse> {
+  const [from, to] = range;
+  const queryStr = new URLSearchParams({
+    game: gameKey,
+    from_date: from.format('YYYY-MM-DD'),
+    to_date: to.format('YYYY-MM-DD'),
+  }).toString();
+  const res = await fetch(`/api/realtime/acquisition-intelligence?${queryStr}`);
+  return (await res.json()) as AcquisitionIntelligenceResponse;
+}
+
 /**
  * 通用 ROI 页面。
  * 腾讯广告消耗与微信流量主收入/曝光由后端自动补录，人工入口只作为异常修正和对账兜底。
@@ -423,6 +492,7 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
   const [data, setData] = useState<RoiResponse | null>(null);
   const [decision, setDecision] = useState<RoiDecisionResponse | null>(null);
   const [monetization, setMonetization] = useState<MonetizationResponse | null>(null);
+  const [acquisition, setAcquisition] = useState<AcquisitionIntelligenceResponse | null>(null);
   const [baselineDays, setBaselineDays] = useState(7);
   const [maturityDay, setMaturityDay] = useState<3 | 7>(7);
   const [aiAnalysis, setAiAnalysis] = useState<RoiAiAnalysisResponse | null>(null);
@@ -439,6 +509,8 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
       const desc = getGameDescriptor(nextGameKey);
       if (!desc?.hasAnalyticsSdk) {
         setData(null);
+        setMonetization(null);
+        setAcquisition(null);
         setLastRefreshedAt(Date.now());
         return null;
       }
@@ -446,15 +518,18 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
       setLoading(true);
       try {
         const activeRange = range || displayRange || defaultDisplayRange();
-        const [json, monetizationJson] = await Promise.all([
+        const [json, monetizationJson, acquisitionJson] = await Promise.all([
           fetchRoiData(nextGameKey, activeRange),
           fetchMonetizationData(nextGameKey, activeRange),
+          fetchAcquisitionIntelligence(nextGameKey, activeRange),
         ]);
         if (seq !== requestSeqRef.current) return null;
         if (!json.ok) message.error(`获取 ROI 数据失败: ${json.error || json.code}`);
         if (!monetizationJson.ok) message.warning(`获取商业化流量数据失败: ${monetizationJson.error || monetizationJson.code}`);
+        if (!acquisitionJson.ok) message.warning(`获取投放洞察失败: ${acquisitionJson.error || acquisitionJson.code}`);
         setData(json);
         setMonetization(monetizationJson);
+        setAcquisition(acquisitionJson);
         setLastRefreshedAt(Date.now());
         return json;
       } catch (error) {
@@ -633,6 +708,26 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
   const d30Basis = coreMetrics?.d30_roas_basis ?? (decision?.baseline?.predicted_d30_roi !== null && decision?.baseline?.predicted_d30_roi !== undefined ? 'mature' : projectedD30Roi !== null ? 'early' : 'insufficient');
   const headline = commercialDecision?.headline || decision?.conclusion || decision?.commercial_summary?.verdict_label || '正在生成商业化结论';
   const aiAvailable = aiAnalysis?.ok && aiAnalysis.analysis;
+  const acquisitionSummary = acquisition?.summary;
+  const acquisitionOpportunities = acquisition?.opportunities || [];
+  const topTargeting = acquisition?.targeting_rankings || [];
+  const genderTargeting = topTargeting.filter((row) => row.group === 'GENDER');
+  const ageTargeting = topTargeting.filter((row) => row.group === 'AGE');
+  const regionTargeting = topTargeting.filter((row) => row.group === 'REGION');
+  const topCreative = acquisition?.creative_rankings || [];
+
+  const targetingColumns: ColumnsType<AcquisitionMetricRow> = useMemo(
+    () => [
+      { title: '标签', dataIndex: 'label', width: 120 },
+      { title: '消耗', render: (_, row) => money(row.spend_cny), width: 90 },
+      { title: '曝光', dataIndex: 'impression', width: 90 },
+      { title: '点击', dataIndex: 'click', width: 80 },
+      { title: 'CTR', render: (_, row) => percent(row.ctr), width: 80 },
+      { title: 'CPC', render: (_, row) => money(row.cpc_cny, 4), width: 80 },
+      { title: 'D30 LTV', render: (_, row) => money(row.linked_d30_ltv_cny, 4), width: 90 },
+    ],
+    [],
+  );
 
   const columns: ColumnsType<RoiRow> = useMemo(
     () => [
@@ -816,6 +911,127 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
               </Space>
             )}
           </Card>
+        </Space>
+      </Card>
+
+      <Card title="腾讯广告投放洞察" extra={<Text type="secondary">人群画像为平台聚合数据，非逐玩家明细</Text>}>
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+          <Row gutter={[16, 16]}>
+            <Col xs={12} md={4}>
+              <MetricCard title="分层消耗" value={`${money(acquisitionSummary?.total_spend_cny)} 元`} hint="来自腾讯广告洞察原始表" />
+            </Col>
+            <Col xs={12} md={4}>
+              <MetricCard title="分层曝光" value={`${acquisitionSummary?.total_impression ?? 0}`} hint="定向/创意聚合" />
+            </Col>
+            <Col xs={12} md={4}>
+              <MetricCard title="分层 CTR" value={percent(acquisitionSummary?.avg_ctr)} hint="点击 / 曝光" />
+            </Col>
+            <Col xs={12} md={4}>
+              <MetricCard title="分层 CPC" value={`${money(acquisitionSummary?.avg_cpc_cny, 4)} 元`} hint="消耗 / 点击" />
+            </Col>
+            <Col xs={12} md={4}>
+              <MetricCard title="预测回收" value={percent(acquisitionSummary?.projected_d30_roas)} hint={`同日 LTV ${money(acquisitionSummary?.projected_d30_ltv_cny, 4)} 元`} />
+            </Col>
+            <Col xs={12} md={4}>
+              <MetricCard title="分层数量" value={`${(acquisitionSummary?.targeting_segments ?? 0) + (acquisitionSummary?.creative_entities ?? 0)}`} hint="性别/年龄/地域 + 创意实体" />
+            </Col>
+          </Row>
+
+          <Row gutter={[16, 16]}>
+            <Col xs={24} md={12}>
+              <Card size="small" title="机会清单">
+                <Space orientation="vertical" style={{ width: '100%' }}>
+                  {(acquisitionOpportunities.length > 0 ? acquisitionOpportunities : [{ type: 'data_gap', priority: 'low', title: '暂无投放洞察结论', detail: '等待腾讯广告洞察任务拉取定向标签或创意素材数据。' } as AcquisitionOpportunity]).map((item) => (
+                    <Alert
+                      key={`${item.type}-${item.title}`}
+                      type={item.priority === 'high' ? 'warning' : 'info'}
+                      showIcon
+                      message={`${opportunityPriorityLabel(item.priority)}：${item.title}`}
+                      description={item.detail}
+                    />
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+            <Col xs={24} md={12}>
+              <Card size="small" title="口径说明">
+                <Space orientation="vertical">
+                  {(acquisition?.data_notes || ['当前还没有投放洞察数据；基础 ROI 不受影响。']).map((note) => (
+                    <Text key={note} type="secondary">{note}</Text>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={12}>
+              <Card size="small" title="性别定向分布" extra={<Text type="secondary">按消耗排序</Text>}>
+                <Table<AcquisitionMetricRow>
+                  rowKey="key"
+                  size="small"
+                  dataSource={genderTargeting.slice(0, 6)}
+                  pagination={false}
+                  scroll={{ x: 640 }}
+                  columns={targetingColumns}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card size="small" title="年龄定向分布" extra={<Text type="secondary">腾讯广告年龄段：≤18 / 19-24 / 25-29 / 30-39 / 40-49 / ≥50</Text>}>
+                <Table<AcquisitionMetricRow>
+                  rowKey="key"
+                  size="small"
+                  dataSource={ageTargeting.slice(0, 8)}
+                  pagination={false}
+                  scroll={{ x: 640 }}
+                  columns={targetingColumns}
+                />
+              </Card>
+            </Col>
+          </Row>
+
+          <Row gutter={[16, 16]}>
+            <Col xs={24}>
+              <Card size="small" title="地域定向分布" extra={<Text type="secondary">省份 Top，适合看流量集中地和低价区域</Text>}>
+                <Table<AcquisitionMetricRow>
+                  rowKey="key"
+                  size="small"
+                  dataSource={regionTargeting.slice(0, 15)}
+                  pagination={false}
+                  scroll={{ x: 760 }}
+                  columns={[
+                    ...targetingColumns,
+                    { title: '诊断', dataIndex: 'diagnosis', width: 220 },
+                  ]}
+                />
+              </Card>
+            </Col>
+          </Row>
+
+          <Row gutter={[16, 16]}>
+            <Col xs={24}>
+              <Card size="small" title="创意 / 素材排行">
+                <Table<AcquisitionMetricRow>
+                  rowKey="key"
+                  size="small"
+                  dataSource={topCreative.slice(0, 10)}
+                  pagination={false}
+                  scroll={{ x: 900 }}
+                  columns={[
+                    { title: '类型', dataIndex: 'group', width: 100 },
+                    { title: 'ID/名称', dataIndex: 'label', width: 150 },
+                    { title: '消耗', render: (_, row) => money(row.spend_cny), width: 90 },
+                    { title: 'CTR', render: (_, row) => percent(row.ctr), width: 90 },
+                    { title: 'CPC', render: (_, row) => money(row.cpc_cny, 4), width: 90 },
+                    { title: '预测 ROAS', render: (_, row) => percent(row.linked_d30_roas), width: 110 },
+                    { title: '诊断', dataIndex: 'diagnosis', width: 220 },
+                  ]}
+                />
+              </Card>
+            </Col>
+          </Row>
+
         </Space>
       </Card>
 

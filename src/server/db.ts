@@ -38,6 +38,11 @@ export async function closeStorage(): Promise<void> {
   }
 }
 
+function mysqlConnectTimeoutMs(): number {
+  const value = Number(process.env.MYSQL_CONNECT_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 5_000;
+}
+
 async function getPool(): Promise<mysql.Pool> {
   if (mysqlPool) return mysqlPool;
   const config = getConfig();
@@ -51,6 +56,7 @@ async function getPool(): Promise<mysql.Pool> {
     password: config.mysql.password,
     waitForConnections: true,
     connectionLimit: 1,
+    connectTimeout: mysqlConnectTimeoutMs(),
   });
   await serverPool.query(`CREATE DATABASE IF NOT EXISTS \`${config.mysql.database}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await serverPool.end();
@@ -64,6 +70,7 @@ async function getPool(): Promise<mysql.Pool> {
     waitForConnections: true,
     connectionLimit: 5,
     namedPlaceholders: true,
+    connectTimeout: mysqlConnectTimeoutMs(),
   });
   await migrateMysql(mysqlPool);
   return mysqlPool;
