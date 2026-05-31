@@ -14,7 +14,6 @@ import {
   message,
 } from 'antd';
 import ReactECharts from 'echarts-for-react';
-import { useNavigate } from 'react-router-dom';
 
 import { getGameDescriptor } from '../../shared/games';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -85,18 +84,21 @@ interface AcquisitionCostResponse {
   code?: string;
 }
 
-interface RetentionSummaryResponse {
+interface BusinessRoiLiteRow {
+  date_key: string;
+  spend_cny: number;
+  game_new_users: number;
+  cpi_cny: number | null;
+  d3_ltv_cny: number | null;
+  d3_roi: number | null;
+  d7_ltv_cny: number | null;
+  d7_roi: number | null;
+  data_status_label: string;
+}
+
+interface BusinessRoiLiteResponse {
   ok: boolean;
-  cohort_date?: string;
-  overall?: {
-    cohort_size: number;
-    points: Array<{ age_day: number; retained_users: number | null; retention_rate: number | null; is_complete_day: boolean }>;
-  };
-  devices?: Array<{
-    device_type: string;
-    cohort_size: number;
-    points: Array<{ age_day: number; retained_users: number | null; retention_rate: number | null; is_complete_day: boolean }>;
-  }>;
+  rows?: BusinessRoiLiteRow[];
   code?: string;
   error?: string;
 }
@@ -104,31 +106,6 @@ interface RetentionSummaryResponse {
 function formatRetentionRate(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
   return (value * 100).toFixed(1);
-}
-
-function retentionPoint(
-  segment: { points: Array<{ age_day: number; retention_rate: number | null }> } | undefined,
-  ageDay: number,
-): number | null {
-  return segment?.points.find((point) => point.age_day === ageDay)?.retention_rate ?? null;
-}
-
-function buildDeviceRetentionInsight(data: RetentionSummaryResponse | null): string {
-  const candidates = (data?.devices || [])
-    .map((device) => ({
-      deviceType: device.device_type,
-      cohortSize: device.cohort_size,
-      d7: retentionPoint(device, 7),
-    }))
-    .filter((item) => item.cohortSize >= 30 && item.d7 !== null)
-    .sort((a, b) => Number(b.d7) - Number(a.d7));
-  if (candidates.length === 0) return '设备样本不足，暂不判断平台差异';
-  const best = candidates[0];
-  const worst = candidates[candidates.length - 1];
-  if (!worst || best.deviceType === worst.deviceType) {
-    return `${best.deviceType} D7 留存 ${(Number(best.d7) * 100).toFixed(1)}%，当前样本最稳`;
-  }
-  return `${best.deviceType} D7 ${(Number(best.d7) * 100).toFixed(1)}%，高于 ${worst.deviceType} ${(Number(worst.d7) * 100).toFixed(1)}%`;
 }
 
 function formatRetentionFraction(
@@ -152,6 +129,12 @@ function dateKey(ts: number): string {
   const date = new Date(ts);
   const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function addDaysDateKey(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return dateKey(date.getTime());
 }
 
 function buildDateRangeQuery(window: WindowValue, shiftMs = 0): string {
@@ -216,6 +199,11 @@ function bucketShort(bucket: string): string {
   return `${pad(utcDate.getMonth() + 1)}-${pad(utcDate.getDate())} ${pad(utcDate.getHours())}:${pad(utcDate.getMinutes())}`;
 }
 
+function yuan(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined) return '-';
+  return `${value.toFixed(digits)} 元`;
+}
+
 /**
  * 大盘运营页面 = 通用 KPI + 活跃/新增趋势 + 广告变现 + 分享传播。
  *
@@ -223,7 +211,6 @@ function bucketShort(bucket: string): string {
  * 在 /business/gameplay 单独承载。这样所有游戏的大盘视图视觉对齐、产品决策口径一致。
  */
 export function DashboardPage() {
-  const navigate = useNavigate();
   const {
     gameKey,
     windowSel,
@@ -243,7 +230,7 @@ export function DashboardPage() {
     ad: null,
   });
   const [comparisonCost, setComparisonCost] = useState<AcquisitionCostResponse | null>(null);
-  const [retentionSummary, setRetentionSummary] = useState<RetentionSummaryResponse | null>(null);
+  const [businessRoi, setBusinessRoi] = useState<BusinessRoiLiteResponse | null>(null);
   const requestSeqRef = useRef(0);
 
   const loadAll = useCallback(
@@ -255,6 +242,7 @@ export function DashboardPage() {
         setAcquisitionCost(null);
         setComparison({ overview: null, ad: null });
         setComparisonCost(null);
+        setBusinessRoi(null);
         setLastRefreshedAt(Date.now());
         return;
       }
@@ -281,9 +269,12 @@ export function DashboardPage() {
         const compareCostPromise = fetch(
           `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${buildDateRangeQuery(nextWindow, -86_400_000)}`,
         ).then((r) => r.json() as Promise<AcquisitionCostResponse>);
-        const retentionSummaryPromise = fetch(
-          `/api/realtime/retention-cohort?game=${encodeURIComponent(nextGameKey)}&max_age=7`,
-        ).then((r) => r.json() as Promise<RetentionSummaryResponse>);
+        // D3 ROI 只展示已经完整出数的 cohort：cohort 日 + 3 天必须已经结束。
+        const roiToDate = addDaysDateKey(dateKey(Date.now()), -4);
+        const roiFromDate = addDaysDateKey(roiToDate, -30);
+        const businessRoiPromise = fetch(
+          `/api/realtime/business-inputs?game=${encodeURIComponent(nextGameKey)}&from_date=${encodeURIComponent(roiFromDate)}&to_date=${encodeURIComponent(roiToDate)}`,
+        ).then((r) => r.json() as Promise<BusinessRoiLiteResponse>);
         const [
           ovRes,
           adRes,
@@ -291,7 +282,7 @@ export function DashboardPage() {
           compareOvRes,
           compareAdRes,
           compareCostRes,
-          retentionRes,
+          businessRoiRes,
         ] = await Promise.all([
           overviewPromise,
           adSummaryPromise,
@@ -299,7 +290,7 @@ export function DashboardPage() {
           compareOverviewPromise,
           compareAdSummaryPromise,
           compareCostPromise,
-          retentionSummaryPromise,
+          businessRoiPromise,
         ]);
         // 防止竞态：仅最新一次请求结果生效
         if (seq !== requestSeqRef.current) return;
@@ -314,7 +305,7 @@ export function DashboardPage() {
           ad: compareAdRes.ok ? compareAdRes : null,
         });
         setComparisonCost(compareCostRes);
-        setRetentionSummary(retentionRes.ok ? retentionRes : null);
+        setBusinessRoi(businessRoiRes.ok ? businessRoiRes : null);
         setLastRefreshedAt(Date.now());
       } catch (error) {
         if (seq !== requestSeqRef.current) return;
@@ -379,6 +370,21 @@ export function DashboardPage() {
     };
   }, [overview?.series]);
 
+  const recentD3RoiRows = useMemo(
+    () => (businessRoi?.rows || [])
+      .filter((row) => row.d3_ltv_cny !== null)
+      .sort((a, b) => a.date_key.localeCompare(b.date_key))
+      .slice(-3),
+    [businessRoi?.rows],
+  );
+  const recentD7RoiRows = useMemo(
+    () => (businessRoi?.rows || [])
+      .filter((row) => row.d7_ltv_cny !== null)
+      .sort((a, b) => a.date_key.localeCompare(b.date_key))
+      .slice(-3),
+    [businessRoi?.rows],
+  );
+
   // 未接入 SDK 的游戏：拦截整页（不要让用户看到一堆 0 误以为"线上没人玩"）
   if (!isIntegrated) {
     return (
@@ -422,9 +428,6 @@ export function DashboardPage() {
     previousSpend !== undefined && previousKpi?.new_users_today
       ? previousSpend / previousKpi.new_users_today
       : null;
-  const summaryD1 = retentionPoint(retentionSummary?.overall, 1);
-  const summaryD7 = retentionPoint(retentionSummary?.overall, 7);
-  const retentionInsight = buildDeviceRetentionInsight(retentionSummary);
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
@@ -563,41 +566,65 @@ export function DashboardPage() {
                 />
               </Col>
             </Row>
-          </Card>
-        </Col>
-        <Col span={24}>
-          <Card
-            title="留存摘要（cohort 非实时）"
-            extra={
-              <Button
-                type="link"
-                onClick={() => navigate({ pathname: '/business/retention', search: `?game=${encodeURIComponent(gameKey)}` })}
-              >
-                查看留存分析
-              </Button>
-            }
-          >
-            <Row gutter={[16, 16]} align="middle">
-              <Col xs={12} md={4}>
-                <Statistic title="Cohort 日期" value={retentionSummary?.cohort_date || '-'} />
-              </Col>
-              <Col xs={12} md={4}>
-                <Statistic title="Cohort 人数" value={retentionSummary?.overall?.cohort_size ?? 0} suffix="人" />
-              </Col>
-              <Col xs={12} md={4}>
-                <Statistic title="D1 新增次留" value={summaryD1 !== null ? summaryD1 * 100 : 0} suffix="%" precision={1} />
-              </Col>
-              <Col xs={12} md={4}>
-                <Statistic title="D7 留存" value={summaryD7 !== null ? summaryD7 * 100 : 0} suffix="%" precision={1} />
-              </Col>
-              <Col xs={24} md={8}>
-                <Space orientation="vertical" size={0}>
-                  <Text>{retentionInsight}</Text>
-                  <Text type="secondary">
-                    取最近 D7 已成熟的 cohort；完整 D0-D30 曲线和设备筛选请进入留存分析页。
-                  </Text>
-                </Space>
-              </Col>
+            <div style={{ marginTop: 16, marginBottom: 8 }}>
+              <Text strong>最近 3 个已出数投放日 D3 ROI</Text>
+              <Text type="secondary" style={{ marginLeft: 8 }}>未成熟日期不展示</Text>
+            </div>
+            <Row gutter={[12, 12]}>
+              {recentD3RoiRows.length > 0 ? recentD3RoiRows.map((row) => (
+                <Col xs={24} md={8} key={row.date_key}>
+                  <Card size="small">
+                    <Tooltip title="D3 ROI = 该日期新增 cohort 的 D3 累计 LTV / 当日 CPI；只使用已完整结束的 D3 数据。">
+                      <Statistic
+                        title={`${row.date_key.slice(5)} D3 ROI`}
+                        value={row.d3_roi === null ? (row.spend_cny > 0 ? '-' : '未投放') : row.d3_roi * 100}
+                        suffix={row.d3_roi === null ? undefined : '%'}
+                        precision={1}
+                      />
+                    </Tooltip>
+                    <Space orientation="vertical" size={0}>
+                      <Text type="secondary">消耗 {yuan(row.spend_cny)}，新增 {row.game_new_users} 人</Text>
+                      <Text type="secondary">
+                        D3 LTV {yuan(row.d3_ltv_cny, 4)}，CPI {yuan(row.cpi_cny, 4)}
+                      </Text>
+                    </Space>
+                  </Card>
+                </Col>
+              )) : (
+                <Col span={24}>
+                  <Text type="secondary">暂无可展示的已出数 D3 数据：需要有新增 cohort，并等待 D3 数据成熟。</Text>
+                </Col>
+              )}
+            </Row>
+            <div style={{ marginTop: 16, marginBottom: 8 }}>
+              <Text strong>最近 3 个已出数日期 D7 ROI</Text>
+              <Text type="secondary" style={{ marginLeft: 8 }}>未成熟日期不展示</Text>
+            </div>
+            <Row gutter={[12, 12]}>
+              {recentD7RoiRows.length > 0 ? recentD7RoiRows.map((row) => (
+                <Col xs={24} md={8} key={row.date_key}>
+                  <Card size="small">
+                    <Tooltip title="D7 ROI = 该日期新增 cohort 的 D7 累计 LTV / 当日 CPI；只使用已完整结束的 D7 数据。">
+                      <Statistic
+                        title={`${row.date_key.slice(5)} D7 ROI`}
+                        value={row.d7_roi === null ? (row.spend_cny > 0 ? '-' : '未投放') : row.d7_roi * 100}
+                        suffix={row.d7_roi === null ? undefined : '%'}
+                        precision={1}
+                      />
+                    </Tooltip>
+                    <Space orientation="vertical" size={0}>
+                      <Text type="secondary">消耗 {yuan(row.spend_cny)}，新增 {row.game_new_users} 人</Text>
+                      <Text type="secondary">
+                        D7 LTV {yuan(row.d7_ltv_cny, 4)}，CPI {yuan(row.cpi_cny, 4)}
+                      </Text>
+                    </Space>
+                  </Card>
+                </Col>
+              )) : (
+                <Col span={24}>
+                  <Text type="secondary">暂无可展示的已出数 D7 数据：需要有新增 cohort，并等待 D7 数据成熟。</Text>
+                </Col>
+              )}
             </Row>
           </Card>
         </Col>

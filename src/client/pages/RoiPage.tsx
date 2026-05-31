@@ -5,9 +5,6 @@ import {
   Card,
   Collapse,
   Col,
-  DatePicker,
-  Form,
-  Input,
   InputNumber,
   Popconfirm,
   Row,
@@ -27,7 +24,6 @@ import { getGameDescriptor } from '../../shared/games';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 
 const { Text } = Typography;
-const { RangePicker } = DatePicker;
 
 interface RoiRow {
   id: number;
@@ -50,6 +46,10 @@ interface RoiRow {
   actual_ecpm_cny: number | null;
   d0_margin_cny: number;
   d0_roi: number | null;
+  d3_ltv_cny: number | null;
+  d3_roi: number | null;
+  d7_ltv_cny: number | null;
+  d7_roi: number | null;
   d30_projected_ltv_cny: number | null;
   d30_projected_roi: number | null;
   d30_projected_margin_cny: number | null;
@@ -76,19 +76,6 @@ interface RoiResponse {
   };
   error?: string;
   code?: string;
-}
-
-interface RoiRangeFormValues {
-  date_range: [Dayjs, Dayjs];
-}
-
-interface RoiDraftRow {
-  date_key: string;
-  spend_cny: number;
-  wechat_clicks: number;
-  wechat_ad_revenue_cny: number;
-  wechat_ad_impressions: number;
-  note?: string;
 }
 
 interface RoiDecisionResponse {
@@ -371,44 +358,9 @@ function MetricCard({ title, value, hint }: { title: string; value: string; hint
   );
 }
 
-function eachDateInRange(from: Dayjs, to: Dayjs): string[] {
-  const dates: string[] = [];
-  let cursor = from.startOf('day');
-  const end = to.startOf('day');
-  while (cursor.isBefore(end) || cursor.isSame(end)) {
-    dates.push(cursor.format('YYYY-MM-DD'));
-    cursor = cursor.add(1, 'day');
-  }
-  return dates;
-}
-
-function buildDraftRows(from: Dayjs, to: Dayjs, existingRows: RoiRow[] = []): RoiDraftRow[] {
-  const existingByDate = new Map(existingRows.map((row) => [row.date_key, row]));
-  return eachDateInRange(from, to).map((dateKey) => {
-    const existing = existingByDate.get(dateKey);
-    return {
-      date_key: dateKey,
-      spend_cny: existing?.spend_cny ?? 0,
-      wechat_clicks: existing?.wechat_clicks ?? 0,
-      wechat_ad_revenue_cny: existing?.wechat_ad_revenue_cny ?? 0,
-      wechat_ad_impressions: existing?.wechat_ad_impressions ?? 0,
-      note: existing?.note ?? '',
-    };
-  });
-}
-
-function defaultInputRange(): [Dayjs, Dayjs] {
-  const yesterday = dayjs().subtract(1, 'day');
-  return [yesterday.subtract(6, 'day'), yesterday];
-}
-
 function defaultDisplayRange(): [Dayjs, Dayjs] {
   const yesterday = dayjs().subtract(1, 'day');
   return [yesterday.subtract(29, 'day'), yesterday];
-}
-
-function disableTodayAndFuture(current: Dayjs): boolean {
-  return current.startOf('day').isSame(dayjs().startOf('day')) || current.isAfter(dayjs(), 'day');
 }
 
 async function fetchRoiData(gameKey: string, range: [Dayjs, Dayjs]): Promise<RoiResponse> {
@@ -488,7 +440,6 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
     setLastRefreshedAt,
   } = useAnalyticsFilter();
   const descriptor = getGameDescriptor(gameKey);
-  const [rangeForm] = Form.useForm<RoiRangeFormValues>();
   const [data, setData] = useState<RoiResponse | null>(null);
   const [decision, setDecision] = useState<RoiDecisionResponse | null>(null);
   const [monetization, setMonetization] = useState<MonetizationResponse | null>(null);
@@ -496,12 +447,9 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
   const [baselineDays, setBaselineDays] = useState(7);
   const [maturityDay, setMaturityDay] = useState<3 | 7>(7);
   const [aiAnalysis, setAiAnalysis] = useState<RoiAiAnalysisResponse | null>(null);
-  const [draftRows, setDraftRows] = useState<RoiDraftRow[]>([]);
-  const [saving, setSaving] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const requestSeqRef = useRef(0);
-  const draftInitializedGameRef = useRef<string | null>(null);
   const aiRequestKeyRef = useRef<string | null>(null);
 
   const loadAll = useCallback(
@@ -546,41 +494,6 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
   useEffect(() => {
     void loadAll(gameKey);
   }, [gameKey, displayRange, refreshToken, loadAll]);
-
-  const regenerateDraftRows = useCallback(
-    async (range: [Dayjs, Dayjs], syncDisplay = true) => {
-      const [from, to] = range;
-      const days = to.startOf('day').diff(from.startOf('day'), 'day') + 1;
-      if (days > 31) {
-        message.warning('一次最多生成 31 天，避免误操作覆盖太多数据');
-        return;
-      }
-      try {
-        setLoading(true);
-        const nextData = await fetchRoiData(gameKey, range);
-        if (!nextData.ok) {
-          message.error(`获取已录入数据失败: ${nextData.error || nextData.code}`);
-          return;
-        }
-        if (syncDisplay) setData(nextData);
-        setDraftRows(buildDraftRows(from, to, nextData.rows || []));
-        setLastRefreshedAt(Date.now());
-      } catch (error) {
-        message.error(`生成多行失败: ${String(error)}`);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [gameKey, setLastRefreshedAt, setLoading],
-  );
-
-  useEffect(() => {
-    if (draftInitializedGameRef.current === gameKey) return;
-    const defaultRange = defaultInputRange();
-    rangeForm.setFieldsValue({ date_range: defaultRange });
-    draftInitializedGameRef.current = gameKey;
-    void regenerateDraftRows(defaultRange, false);
-  }, [gameKey, rangeForm, regenerateDraftRows]);
 
   const loadDecision = useCallback(
     async (nextBaselineDays = baselineDays, nextMaturityDay = maturityDay) => {
@@ -630,56 +543,6 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
     aiRequestKeyRef.current = key;
     void onAiAnalyze();
   }, [aiAnalysis?.ok, aiLoading, baselineDays, decision?.target_date, gameKey, maturityDay]);
-
-  const updateDraftRow = (dateKey: string, patch: Partial<RoiDraftRow>) => {
-    setDraftRows((rows) => rows.map((row) => (row.date_key === dateKey ? { ...row, ...patch } : row)));
-  };
-
-  const onGenerateRows = async (values: RoiRangeFormValues) => {
-    await regenerateDraftRows(values.date_range);
-  };
-
-  const onUseLast7Days = async () => {
-    const range = defaultInputRange();
-    rangeForm.setFieldsValue({ date_range: range });
-    await regenerateDraftRows(range);
-  };
-
-  const onBatchSubmit = async () => {
-    const rowsToSave = draftRows.filter(
-      (row) =>
-        row.spend_cny > 0 ||
-        row.wechat_clicks > 0 ||
-        row.wechat_ad_revenue_cny > 0 ||
-        row.wechat_ad_impressions > 0 ||
-        Boolean(row.note?.trim()),
-    );
-    if (rowsToSave.length === 0) {
-      message.warning('没有需要保存的数据行');
-      return;
-    }
-    setSaving(true);
-    try {
-      for (const row of rowsToSave) {
-        const res = await fetch('/api/realtime/business-inputs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ game: gameKey, ...row }),
-        });
-        const json = await res.json();
-        if (!json.ok) {
-          message.error(`${row.date_key} 保存失败: ${json.error || json.code}`);
-          return;
-        }
-      }
-      message.success(`已保存 ${rowsToSave.length} 天经营数据`);
-      await loadAll(gameKey);
-    } catch (error) {
-      message.error(`保存异常: ${String(error)}`);
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const onDelete = async (dateKey: string) => {
     const res = await fetch(
@@ -1035,369 +898,9 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
         </Space>
       </Card>
 
-      <Collapse
-        items={[
-          {
-            key: 'rule-details',
-            label: '规则分析详情',
-            children: (
-              <>
-
-      <Card title="明日投放策略">
-        <Row gutter={[16, 8]} align="bottom">
-          <Col xs={12} md={4}>
-            <Text type="secondary">基线天数</Text>
-            <InputNumber
-              min={3}
-              max={30}
-              value={baselineDays}
-              style={{ width: '100%', marginTop: 8 }}
-              onChange={(value) => setBaselineDays(Number(value) || 7)}
-            />
-          </Col>
-          <Col xs={12} md={4}>
-            <Text type="secondary">成熟口径</Text>
-            <Select
-              value={maturityDay}
-              style={{ width: '100%', marginTop: 8 }}
-              options={[
-                { value: 3, label: 'D3 早期判断' },
-                { value: 7, label: 'D7 稳健判断' },
-              ]}
-              onChange={(value) => setMaturityDay(value as 3 | 7)}
-            />
-          </Col>
-          <Col xs={24} md={5}>
-            <Button
-              type="primary"
-              loading={decisionLoading}
-              onClick={() => void loadDecision(baselineDays, maturityDay)}
-            >
-              刷新明日策略
-            </Button>
-          </Col>
-          <Col xs={24} md={6}>
-            <Button loading={aiLoading} onClick={() => void onAiAnalyze()}>
-              DeepSeek 分析盈利与操作
-            </Button>
-          </Col>
-        </Row>
-
-        <Space orientation="vertical" size="middle" style={{ width: '100%', marginTop: 16 }}>
-          <Alert
-            showIcon
-            type={decisionAlertType(decision?.action_label)}
-            message={decision?.conclusion || '选择目标日后生成投放建议'}
-            description={
-              decision
-                ? `今天做决策，给明天投放策略；置信度：${confidenceLabel(decision.confidence)}；归因：${decision.diagnostics?.issue_label || '-'}；基线：${decision.baseline_from_date} ~ ${decision.baseline_to_date}，成熟口径 D${decision.maturity_day}。`
-                : '系统会用截至昨天的成熟样本做基线，排除无打点、样本过小、转化异常和 LTV 未成熟的日期，再给出明天是否加投/观察/降预算。'
-            }
-          />
-
-          {decision && (
-            <>
-              <Alert
-                showIcon
-                type={verdictAlertType(decision.commercial_summary?.verdict_level)}
-                message={`系统商业化诊断：${decision.commercial_summary?.verdict_label || '暂无结论'}`}
-                description={
-                  decision.commercial_summary
-                    ? `D0 ROI ${percent(decision.commercial_summary.d0_roi)}，D0 盈亏 ${money(decision.commercial_summary.d0_margin_cny)} 元；平均 CPI ${money(decision.commercial_summary.avg_cpi_cny, 4)} 元；早期预测 D30 ROI ${percent(decision.commercial_summary.early_d30_roi)}（${decision.commercial_summary.early_sample_days} 天 D3+ 样本）；D1 新增次留 ${percent(decision.commercial_summary.d1_retention)}。`
-                    : '系统会用真实投放、真实收入、CPI、早期 LTV 和留存给出兜底判断，不依赖 DeepSeek。'
-                }
-              />
-              <Row gutter={[16, 16]}>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="D0 ROI" value={(decision.commercial_summary?.d0_roi ?? 0) * 100} suffix="%" precision={1} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="D0 真实盈亏" value={decision.commercial_summary?.d0_margin_cny ?? 0} precision={2} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="平均 CPI" value={decision.commercial_summary?.avg_cpi_cny ?? 0} precision={4} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="早期 D30 ROI" value={(decision.commercial_summary?.early_d30_roi ?? 0) * 100} suffix="%" precision={1} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="D1 新增次留" value={(decision.commercial_summary?.d1_retention ?? 0) * 100} suffix="%" precision={1} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="早期样本天数" value={decision.commercial_summary?.early_sample_days ?? 0} />
-                  </Card>
-                </Col>
-              </Row>
-              <Alert
-                showIcon
-                type="warning"
-                message={`明日建议预算：${money(decision.budget_recommendation?.recommended_min_cny)} - ${money(decision.budget_recommendation?.recommended_max_cny)} 元`}
-                description={
-                  decision.budget_recommendation
-                    ? `参考最近投放 ${money(decision.budget_recommendation.latest_recorded_spend_cny)} 元，成熟基线日均 ${money(decision.budget_recommendation.baseline_avg_spend_cny)} 元。预期 D30 收入 ${money(decision.budget_recommendation.expected_d30_revenue_cny)} 元，预期 D30 利润 ${money(decision.budget_recommendation.expected_d30_profit_cny)} 元。目标 CPI 不高于 ${money(decision.budget_recommendation.target_cpi_cny, 4)} 元；硬止损 CPI ${money(decision.budget_recommendation.hard_stop_cpi_cny, 4)} 元。`
-                    : '暂无预算建议。'
-                }
-              />
-              {aiAnalysis && (
-                <Card
-                  size="small"
-                  title={`DeepSeek AI 分析${aiAnalysis.model ? ` · ${aiAnalysis.model}` : ''}`}
-                >
-                  {aiAnalysis.ok ? (
-                    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-                      <Text type="secondary">
-                        输入数据：{aiAnalysis.input_summary?.from_date} ~ {aiAnalysis.input_summary?.to_date}；
-                        ROI 行数 {aiAnalysis.input_summary?.roi_rows ?? 0}；
-                        LTV cohort {aiAnalysis.input_summary?.ltv_cohorts ?? 0}
-                      </Text>
-                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit' }}>
-                        {aiAnalysis.analysis}
-                      </pre>
-                    </Space>
-                  ) : (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      message="AI 分析暂不可用"
-                      description={aiAnalysis.error || '请确认后端已配置 DEEPSEEK_API_KEY。'}
-                    />
-                  )}
-                </Card>
-              )}
-              <Row gutter={[16, 16]}>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="建议最低预算" value={decision.budget_recommendation?.recommended_min_cny ?? 0} precision={2} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="建议最高预算" value={decision.budget_recommendation?.recommended_max_cny ?? 0} precision={2} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="预期 D30 利润" value={decision.budget_recommendation?.expected_d30_profit_cny ?? 0} precision={2} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="目标 CPI" value={decision.budget_recommendation?.target_cpi_cny ?? 0} precision={4} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="止损 CPI" value={decision.budget_recommendation?.hard_stop_cpi_cny ?? 0} precision={4} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="预期 D30 收入" value={decision.budget_recommendation?.expected_d30_revenue_cny ?? 0} precision={2} />
-                  </Card>
-                </Col>
-              </Row>
-
-              <Row gutter={[16, 16]}>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="基线有效天数" value={decision.baseline?.valid_sample_days ?? 0} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="排除异常天数" value={decision.baseline?.excluded_sample_days ?? 0} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="基线 CPI" value={decision.baseline?.avg_cpi_cny ?? 0} precision={4} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="基线 D30 LTV" value={decision.baseline?.weighted_d30_ltv_cny ?? 0} precision={4} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="基线预测 ROI" value={(decision.baseline?.predicted_d30_roi ?? 0) * 100} suffix="%" precision={1} />
-                  </Card>
-                </Col>
-                <Col xs={12} md={4}>
-                  <Card size="small">
-                    <Statistic title="人均预测毛利" value={decision.baseline?.predicted_margin_per_user_cny ?? 0} precision={4} />
-                  </Card>
-                </Col>
-              </Row>
-
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12}>
-                  <Card size="small" title="关键依据">
-                    <Space orientation="vertical">
-                      {(decision.commercial_summary?.key_findings || decision.reasons || []).map((reason) => (
-                        <Text key={reason}>{reason}</Text>
-                      ))}
-                    </Space>
-                  </Card>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Card size="small" title="优化建议">
-                    <Space orientation="vertical">
-                      {(decision.commercial_summary?.optimization_suggestions || decision.next_steps || []).map((step) => (
-                        <Text key={step}>{step}</Text>
-                      ))}
-                    </Space>
-                  </Card>
-                </Col>
-              </Row>
-
-              <Table
-                rowKey="date_key"
-                size="small"
-                pagination={false}
-                dataSource={decision.samples || []}
-                columns={[
-                  { title: '基线日期', dataIndex: 'date_key', width: 110 },
-                  { title: '是否纳入', render: (_, row) => (row.included ? '纳入' : '排除'), width: 90 },
-                  { title: '原因', dataIndex: 'reason' },
-                  { title: '新增', dataIndex: 'game_new_users', width: 90 },
-                  { title: 'CPI', render: (_, row) => money(row.cpi_cny, 4), width: 90 },
-                  { title: 'D30 LTV', render: (_, row) => money(row.d30_projected_ltv_cny, 4), width: 100 },
-                  { title: 'D30 ROI', render: (_, row) => percent(row.d30_projected_roi), width: 100 },
-                ]}
-              />
-            </>
-          )}
-        </Space>
-      </Card>
-              </>
-            ),
-          },
-        ]}
-      />
 
       <Collapse
-        items={[
-          {
-            key: 'manual-fix',
-            label: '异常修正，不建议日常使用',
-            children: (
-              <Card
-                title="自动数据校验与异常修正"
-                extra={<Text type="secondary">正常情况下无需手动录入，系统会每日自动回拉腾讯广告和微信流量主数据。</Text>}
-              >
-        <Form form={rangeForm} layout="vertical" onFinish={onGenerateRows}>
-          <Row gutter={[16, 8]}>
-            <Col xs={24} md={8}>
-              <Form.Item label="日期范围" name="date_range" rules={[{ required: true, message: '请选择日期范围' }]}>
-                <RangePicker style={{ width: '100%' }} allowClear={false} disabledDate={disableTodayAndFuture} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={16}>
-              <Form.Item label=" " colon={false}>
-                <Space>
-                  <Button onClick={onUseLast7Days}>最近 7 天</Button>
-                  <Button htmlType="submit">生成多行</Button>
-                  <Button type="primary" loading={saving} onClick={onBatchSubmit}>
-                    批量保存
-                  </Button>
-                  <Text type="secondary">已生成 {draftRows.length} 行，自动刷新不会覆盖未保存内容。</Text>
-                </Space>
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
-        <Table
-          rowKey="date_key"
-          dataSource={draftRows}
-          size="small"
-          pagination={false}
-          scroll={{ x: 900 }}
-          columns={[
-            { title: '日期', dataIndex: 'date_key', fixed: 'left', width: 110 },
-            {
-              title: '腾讯广告消耗（元）',
-              width: 150,
-              render: (_, row: RoiDraftRow) => (
-                <InputNumber
-                  min={0}
-                  precision={2}
-                  value={row.spend_cny}
-                  style={{ width: '100%' }}
-                  onChange={(value) => updateDraftRow(row.date_key, { spend_cny: Number(value) || 0 })}
-                />
-              ),
-            },
-            {
-              title: '投放点击（可选）',
-              width: 150,
-              render: (_, row: RoiDraftRow) => (
-                <InputNumber
-                  min={0}
-                  precision={0}
-                  value={row.wechat_clicks}
-                  style={{ width: '100%' }}
-                  onChange={(value) => updateDraftRow(row.date_key, { wechat_clicks: Number(value) || 0 })}
-                />
-              ),
-            },
-            {
-              title: '流量主真实收入（元）',
-              width: 170,
-              render: (_, row: RoiDraftRow) => (
-                <InputNumber
-                  min={0}
-                  precision={2}
-                  value={row.wechat_ad_revenue_cny}
-                  style={{ width: '100%' }}
-                  onChange={(value) => updateDraftRow(row.date_key, { wechat_ad_revenue_cny: Number(value) || 0 })}
-                />
-              ),
-            },
-            {
-              title: '流量主真实曝光',
-              width: 150,
-              render: (_, row: RoiDraftRow) => (
-                <InputNumber
-                  min={0}
-                  precision={0}
-                  value={row.wechat_ad_impressions}
-                  style={{ width: '100%' }}
-                  onChange={(value) => updateDraftRow(row.date_key, { wechat_ad_impressions: Number(value) || 0 })}
-                />
-              ),
-            },
-            {
-              title: '备注',
-              width: 220,
-              render: (_, row: RoiDraftRow) => (
-                <Input
-                  value={row.note}
-                  placeholder="可选"
-                  onChange={(event) => updateDraftRow(row.date_key, { note: event.target.value })}
-                />
-              ),
-            },
-          ]}
-        />
-              </Card>
-            ),
-          },
-        ]}
-      />
-
-      <Collapse
+        defaultActiveKey={['roi-details']}
         items={[
           {
             key: 'roi-details',

@@ -28,6 +28,10 @@ export interface BusinessRoiRow {
   actual_ecpm_cny: number | null;
   d0_margin_cny: number;
   d0_roi: number | null;
+  d3_ltv_cny: number | null;
+  d3_roi: number | null;
+  d7_ltv_cny: number | null;
+  d7_roi: number | null;
   d30_projected_ltv_cny: number | null;
   d30_projected_roi: number | null;
   d30_projected_margin_cny: number | null;
@@ -221,6 +225,15 @@ function buildLtvProjectionMap(rows: CohortLtvDailyRow[]): Map<string, number | 
     else if (d7 !== undefined) out.set(date, round4(d7 * 1.9));
     else if (d3 !== undefined) out.set(date, round4(d3 * 3.2));
     else out.set(date, null);
+  }
+  return out;
+}
+
+function buildLtvAgeMap(rows: CohortLtvDailyRow[], ageDay: number): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  for (const row of rows) {
+    if (Number(row.age_day) !== ageDay || Number(row.is_complete_day) !== 1) continue;
+    out.set(row.cohort_date, round4(Number(row.ltv_cny || 0)));
   }
   return out;
 }
@@ -560,6 +573,8 @@ export async function getBusinessRoiOverview(
   ]);
   const userDailyByDate = sumUserDailyByDate(userDailyRows);
   const ltvProjectionByDate = buildLtvProjectionMap(ltvRows);
+  const d3LtvByDate = buildLtvAgeMap(ltvRows, 3);
+  const d7LtvByDate = buildLtvAgeMap(ltvRows, 7);
 
   const rows: BusinessRoiRow[] = inputs.map((input) => {
     const daily = userDailyByDate.get(input.date_key) || { newUsers: 0, estimatedRevenue: 0 };
@@ -570,6 +585,8 @@ export async function getBusinessRoiOverview(
     const gameNewUsers = Number(daily.newUsers || 0);
     const estimatedRevenue = round2(Number(daily.estimatedRevenue || 0));
     const cpi = ratio(spend, gameNewUsers);
+    const d3Ltv = d3LtvByDate.get(input.date_key) ?? null;
+    const d7Ltv = d7LtvByDate.get(input.date_key) ?? null;
     const d30Ltv = ltvProjectionByDate.get(input.date_key) ?? null;
     return {
       id: Number(input.id),
@@ -589,6 +606,10 @@ export async function getBusinessRoiOverview(
       actual_ecpm_cny: impressions > 0 ? round2((revenue / impressions) * 1000) : null,
       d0_margin_cny: round2(revenue - spend),
       d0_roi: ratio(revenue, spend),
+      d3_ltv_cny: d3Ltv,
+      d3_roi: d3Ltv !== null && cpi !== null && cpi > 0 ? round4(d3Ltv / cpi) : null,
+      d7_ltv_cny: d7Ltv,
+      d7_roi: d7Ltv !== null && cpi !== null && cpi > 0 ? round4(d7Ltv / cpi) : null,
       d30_projected_ltv_cny: d30Ltv,
       d30_projected_roi: d30Ltv !== null && cpi !== null && cpi > 0 ? round4(d30Ltv / cpi) : null,
       d30_projected_margin_cny: d30Ltv !== null && cpi !== null ? round4(d30Ltv - cpi) : null,
