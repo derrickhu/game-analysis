@@ -99,6 +99,14 @@ export const ALL_GAMES: GameDescriptor[] = [
     gameplayPanels: ['level_progress', 'caizhu_gameplay'],
     monetization: { ads: true, iap: false, ecpmProfile: 'caizhu' },
   },
+  {
+    gameKey: 'xiaochu',
+    displayName: '灵宠消消塔',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    gameplayPanels: ['level_progress', 'match_progress'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'xiaochu' },
+  },
 ];
 
 export function getGameDescriptor(gameKey: string): GameDescriptor | undefined {

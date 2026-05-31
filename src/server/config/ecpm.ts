@@ -37,6 +37,16 @@ const ECPM_TABLE: Record<string, number> = {
   'caizhu.interstitial': 9,
   'caizhu._default': 15,
 
+  // xiaochu
+  'xiaochu.reward.staminaRecovery': 24,
+  'xiaochu.reward.signDouble': 24,
+  'xiaochu.reward.dailyTaskBonus': 24,
+  'xiaochu.reward.newbieFirstClearDouble': 26,
+  'xiaochu.reward.settleDouble': 26,
+  'xiaochu.reward.revive': 28,
+  'xiaochu.reward': 25,
+  'xiaochu._default': 15,
+
   // 全局兜底
   '_default.reward': 25,
   '_default.interstitial': 10,
