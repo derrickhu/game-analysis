@@ -139,6 +139,9 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     // === CatalogScene 图鉴 ===
     // 进入图鉴时触发的插屏广告，微信原生频控（默认 1 次/分钟 + 新用户保护期），无需业务节流
     catalog_open: '图鉴页插屏',
+    // === HomeScene 首页福利入口 ===
+    // 首页关卡里程碑礼包，用户看激励视频累计进度后领取礼包奖励。
+    home_milestone_gift_ad: '首页里程碑礼包 - 领取进度广告',
     // === FruitSliceEndlessScene 果切无尽（独立挑战玩法） ===
     // 客户端 UI 标题对照见 src/scenes/FruitSliceEndlessScene.ts
     fruit_slice_revive: '果切无尽 - 局内复活',
