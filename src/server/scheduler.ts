@@ -10,6 +10,7 @@ import { ingestTencentAdsBusinessInputs } from './jobs/ingest-tencent-ads';
 import { ingestTencentAdsInsights } from './jobs/ingest-tencent-ads-insights';
 import { ingestWechatPublisherBusinessInputs } from './jobs/ingest-wechat-publisher';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
+import { ingestHotpotSnapshots } from './jobs/ingest-hotpot-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 import { recomputeRetentionCohorts } from './metrics/retention';
 import { recomputeLevelPassRates } from './metrics/level-pass-rate';
@@ -99,24 +100,28 @@ export function startScheduler(): void {
   //    通过 PLAYER_SNAPSHOT_CRON 环境变量可覆盖（如 '0 4 * * *'）
   const playerSnapshotCron = process.env.PLAYER_SNAPSHOT_CRON || '0 4 * * *';
   const snapshotRetentionDays = Math.max(7, Number(process.env.PLAYER_SNAPSHOT_RETENTION_DAYS) || 30);
-  cron.schedule(playerSnapshotCron, async () => {
+  const runPlayerSnapshotIngest = async (gameKey: 'huahua' | 'hotpot') => {
     try {
-      console.log('[scheduler] 开始拉取 huahua 玩家档案快照');
-      const result = await ingestHuahuaSnapshots({
-        triggerSource: 'cron',
-        retentionDays: snapshotRetentionDays,
-      });
+      console.log(`[scheduler] 开始拉取 ${gameKey} 玩家档案快照`);
+      const result = gameKey === 'hotpot'
+        ? await ingestHotpotSnapshots({ triggerSource: 'cron', retentionDays: snapshotRetentionDays })
+        : await ingestHuahuaSnapshots({ triggerSource: 'cron', retentionDays: snapshotRetentionDays });
       if (result.ok) {
         console.log(
-          `[scheduler] 玩家快照 huahua: date=${result.snapshot_date} fetched=${result.fetched} ` +
+          `[scheduler] 玩家快照 ${gameKey}: date=${result.snapshot_date} fetched=${result.fetched} ` +
             `inserted=${result.inserted} pruned=${result.pruned_old_rows} duration=${result.duration_ms}ms`,
         );
       } else {
-        console.error(`[scheduler] 玩家快照 huahua 拉取失败: ${result.error}`);
+        console.error(`[scheduler] 玩家快照 ${gameKey} 拉取失败: ${result.error}`);
       }
     } catch (error) {
-      console.error('[scheduler] 玩家快照 huahua 拉取异常:', error);
+      console.error(`[scheduler] 玩家快照 ${gameKey} 拉取异常:`, error);
     }
+  };
+
+  cron.schedule(playerSnapshotCron, async () => {
+    await runPlayerSnapshotIngest('huahua');
+    await runPlayerSnapshotIngest('hotpot');
   });
 
   // 5) 通用 LTV / user_daily 回算：每 15 分钟把所有已接入 SDK 的游戏批量重算一次

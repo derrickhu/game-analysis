@@ -62,6 +62,26 @@ export interface PlayerSnapshotRow {
   active_customer_count: number;
 }
 
+/** 别捞水果（hotpot）每日玩家快照扁平行 */
+export interface HotpotPlayerSnapshotRow {
+  user_id: string;
+  snapshot_date: string;
+  snapshot_ts: number;
+  platform: string;
+  last_active_at: number;
+  coins: number;
+  coins_total_earned: number;
+  coins_total_spent: number;
+  bowl_badge_level: number;
+  bowl_play_level_index: number;
+  fruit_slice_best_score: number;
+  fruit_slice_total_runs: number;
+  gacha_total_pulls: number;
+  bowl_tool_total: number;
+  milk_tea_shop_level: number;
+  milk_tea_total_clears: number;
+}
+
 export interface PlayerSnapshotRun {
   id: number;
   game_key: string;
@@ -113,6 +133,31 @@ export async function initSnapshotStorage(): Promise<void> {
       PRIMARY KEY (user_id, snapshot_date),
       INDEX idx_date (snapshot_date),
       INDEX idx_date_level (snapshot_date, level)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  );
+
+  // 别捞水果（hotpot）玩家快照：字段对齐客户端 PersistService 的 JSON 存档键
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS ${snapshotTable('hotpot')} (
+      user_id                  VARCHAR(128) NOT NULL,
+      snapshot_date            VARCHAR(10)  NOT NULL,
+      snapshot_ts              BIGINT       NOT NULL,
+      platform                 VARCHAR(32)  NOT NULL DEFAULT '',
+      last_active_at           BIGINT       NOT NULL DEFAULT 0,
+      coins                    BIGINT       NOT NULL DEFAULT 0,
+      coins_total_earned       BIGINT       NOT NULL DEFAULT 0,
+      coins_total_spent        BIGINT       NOT NULL DEFAULT 0,
+      bowl_badge_level         INT          NOT NULL DEFAULT 0,
+      bowl_play_level_index    INT          NOT NULL DEFAULT 0,
+      fruit_slice_best_score   INT          NOT NULL DEFAULT 0,
+      fruit_slice_total_runs   INT          NOT NULL DEFAULT 0,
+      gacha_total_pulls        INT          NOT NULL DEFAULT 0,
+      bowl_tool_total          INT          NOT NULL DEFAULT 0,
+      milk_tea_shop_level      INT          NOT NULL DEFAULT 0,
+      milk_tea_total_clears    INT          NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, snapshot_date),
+      INDEX idx_date (snapshot_date),
+      INDEX idx_date_coins (snapshot_date, coins)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   );
 
@@ -187,6 +232,51 @@ export async function upsertPlayerSnapshots(
     // mysql2 affectedRows：每条 insert+1 / 每条 update +2，这里只关心成功条数，按 slice.length 统计
     total += slice.length;
     void res;
+  }
+  return total;
+}
+
+/** hotpot 专用批量 upsert */
+export async function upsertHotpotPlayerSnapshots(rows: HotpotPlayerSnapshotRow[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const gameKey = 'hotpot';
+  ensureGameKey(gameKey);
+  const pool = await getMysqlPool();
+  const cols = [
+    'user_id', 'snapshot_date', 'snapshot_ts', 'platform', 'last_active_at',
+    'coins', 'coins_total_earned', 'coins_total_spent',
+    'bowl_badge_level', 'bowl_play_level_index',
+    'fruit_slice_best_score', 'fruit_slice_total_runs',
+    'gacha_total_pulls', 'bowl_tool_total',
+    'milk_tea_shop_level', 'milk_tea_total_clears',
+  ];
+  const placeholderRow = `(${cols.map(() => '?').join(',')})`;
+  const updateSet = cols
+    .filter((c) => c !== 'user_id' && c !== 'snapshot_date')
+    .map((c) => `${c}=VALUES(${c})`)
+    .join(',');
+
+  const BATCH = 200;
+  let total = 0;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const slice = rows.slice(i, i + BATCH);
+    const params: unknown[] = [];
+    for (const r of slice) {
+      params.push(
+        r.user_id, r.snapshot_date, r.snapshot_ts, r.platform, r.last_active_at,
+        r.coins, r.coins_total_earned, r.coins_total_spent,
+        r.bowl_badge_level, r.bowl_play_level_index,
+        r.fruit_slice_best_score, r.fruit_slice_total_runs,
+        r.gacha_total_pulls, r.bowl_tool_total,
+        r.milk_tea_shop_level, r.milk_tea_total_clears,
+      );
+    }
+    const sql =
+      `INSERT INTO ${snapshotTable(gameKey)} (${cols.join(',')}) VALUES ` +
+      slice.map(() => placeholderRow).join(',') +
+      ` ON DUPLICATE KEY UPDATE ${updateSet}`;
+    await pool.query(sql, params);
+    total += slice.length;
   }
   return total;
 }

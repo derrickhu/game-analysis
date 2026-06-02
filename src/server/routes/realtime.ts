@@ -38,6 +38,11 @@ import {
   listHuahuaPlayerSnapshots,
 } from '../metrics/realtime-huahua-snapshot';
 import {
+  getHotpotSnapshotOverview,
+  listHotpotPlayerSnapshots,
+} from '../metrics/realtime-hotpot-snapshot';
+import { ingestHotpotSnapshots } from '../jobs/ingest-hotpot-snapshot';
+import {
   getHotpotDailyLimitedOverview,
   getHotpotFruitSliceOverview,
 } from '../metrics/realtime-hotpot-modes';
@@ -1338,13 +1343,17 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
    * 玩家档案快照分析：默认查最新 snapshot_date 的横切面 + 最近 30 天每日趋势。
    * 与 5 分钟事件流互补：事件流看"做了什么"，快照看"现在是什么状态"。
    */
+  const SNAPSHOT_OVERVIEW_GAMES = new Set(['huahua', 'hotpot']);
+
   app.get('/api/realtime/huahua-snapshot', async (request) => {
     const query = (request.query || {}) as { game?: string; date?: string };
     const gameKey = query.game || 'huahua';
-    if (gameKey !== 'huahua') {
-      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-snapshot 当前只服务 huahua' };
+    if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot 当前支持 huahua / hotpot' };
     }
-    const result = await getHuahuaSnapshotOverview(gameKey, query.date);
+    const result = gameKey === 'hotpot'
+      ? await getHotpotSnapshotOverview(gameKey, query.date)
+      : await getHuahuaSnapshotOverview(gameKey, query.date);
     return { ok: true, ...result };
   });
 
@@ -1377,10 +1386,28 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       minLevel?: string;
       maxLevel?: string;
       minHuayuan?: string;
+      minCoins?: string;
+      maxCoins?: string;
+      minBowlLevel?: string;
     };
     const gameKey = query.game || 'huahua';
-    if (gameKey !== 'huahua') {
-      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-snapshot/players 当前只服务 huahua' };
+    if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot/players 当前支持 huahua / hotpot' };
+    }
+    if (gameKey === 'hotpot') {
+      const result = await listHotpotPlayerSnapshots(gameKey, {
+        snapshot_date: query.date,
+        sort: query.sort,
+        order: query.order === 'asc' ? 'asc' : 'desc',
+        page: query.page ? Number(query.page) : undefined,
+        page_size: query.pageSize ? Number(query.pageSize) : undefined,
+        user_id_search: query.q,
+        platform: query.platform,
+        min_coins: query.minCoins ? Number(query.minCoins) : undefined,
+        max_coins: query.maxCoins ? Number(query.maxCoins) : undefined,
+        min_bowl_level: query.minBowlLevel ? Number(query.minBowlLevel) : undefined,
+      });
+      return { ok: true, ...result };
     }
     const tutorialCompletedNum = query.tutorialCompleted !== undefined ? Number(query.tutorialCompleted) : NaN;
     const result = await listHuahuaPlayerSnapshots(gameKey, {
@@ -1407,12 +1434,14 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
   app.post('/api/realtime/snapshot-now', async (request) => {
     const body = (request.body || {}) as { game?: string; retentionDays?: number };
     const gameKey = body.game || 'huahua';
-    if (gameKey !== 'huahua') {
-      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'snapshot-now 当前只支持 huahua' };
+    if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'snapshot-now 当前支持 huahua / hotpot' };
     }
     const retentionDays =
       typeof body.retentionDays === 'number' && body.retentionDays > 0 ? body.retentionDays : undefined;
-    const result = await ingestHuahuaSnapshots({ triggerSource: 'manual', retentionDays });
+    const result = gameKey === 'hotpot'
+      ? await ingestHotpotSnapshots({ triggerSource: 'manual', retentionDays })
+      : await ingestHuahuaSnapshots({ triggerSource: 'manual', retentionDays });
     return result;
   });
 }
