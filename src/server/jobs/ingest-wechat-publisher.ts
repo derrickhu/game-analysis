@@ -2,6 +2,7 @@ import { getConfig } from '../config';
 import type { WechatPublisherGameMapping } from '../config/wechat-publisher';
 import {
   listBusinessDailyInputs,
+  recordWechatPublisherIngestRun,
   replaceWechatPublisherAdDailyRows,
   upsertBusinessDailyInput,
   type BusinessDailyInputRow,
@@ -184,14 +185,38 @@ export async function ingestWechatPublisherBusinessInputs(options: {
   fromDate?: string;
   toDate?: string;
   gameKey?: string;
+  triggerSource?: 'cron' | 'startup' | 'manual';
 } = {}): Promise<WechatPublisherIngestSummary> {
+  const startedAt = Date.now();
+  const triggerSource = options.triggerSource || 'manual';
   const config = getConfig().wechatPublisher;
   const toDate = options.toDate || yesterday();
   const lookbackDays = Math.max(1, Math.min(90, Number(process.env.WECHAT_PUBLISHER_INGEST_LOOKBACK_DAYS) || 90));
   const fromDate = options.fromDate || addDays(toDate, -(lookbackDays - 1));
+  const recordRun = async (summary: WechatPublisherIngestSummary, errorMessage = '') => {
+    try {
+      const finishedAt = Date.now();
+      await recordWechatPublisherIngestRun({
+        trigger_source: triggerSource,
+        game_key: options.gameKey,
+        from_date: summary.from_date,
+        to_date: summary.to_date,
+        ok: summary.ok,
+        games_json: JSON.stringify(summary.games),
+        error_message: errorMessage,
+        started_at: startedAt,
+        finished_at: finishedAt,
+        duration_ms: finishedAt - startedAt,
+      });
+    } catch (error) {
+      console.warn('[wechat_publisher] 记录拉取日志失败:', error);
+    }
+  };
 
   if (!config.enabled) {
-    return { ok: true, from_date: fromDate, to_date: toDate, games: [] };
+    const summary = { ok: true, from_date: fromDate, to_date: toDate, games: [] };
+    await recordRun(summary);
+    return summary;
   }
 
   const mappings = config.gameMappings.filter((mapping) => !options.gameKey || mapping.gameKey === options.gameKey);
@@ -200,10 +225,12 @@ export async function ingestWechatPublisherBusinessInputs(options: {
     games.push(await ingestMapping(mapping, fromDate, toDate));
   }
 
-  return {
+  const summary = {
     ok: games.every((game) => !game.error),
     from_date: fromDate,
     to_date: toDate,
     games,
   };
+  await recordRun(summary, games.map((game) => game.error).filter(Boolean).join('\n'));
+  return summary;
 }

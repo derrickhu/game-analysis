@@ -1055,6 +1055,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       gameKey,
       fromDate: body.from_date,
       toDate: body.to_date,
+      triggerSource: 'manual',
     });
   });
 

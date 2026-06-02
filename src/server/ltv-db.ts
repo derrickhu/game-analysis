@@ -88,6 +88,19 @@ export interface WechatPublisherAdDailyRow {
   updated_at: number;
 }
 
+export interface WechatPublisherIngestRunDraft {
+  trigger_source: string;
+  game_key?: string;
+  from_date: string;
+  to_date: string;
+  ok: boolean;
+  games_json: string;
+  error_message?: string;
+  started_at: number;
+  finished_at: number;
+  duration_ms: number;
+}
+
 export interface TencentAdsDailyReportRawRow {
   game_key: string;
   account_id: string;
@@ -253,6 +266,25 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       updated_at BIGINT NOT NULL,
       PRIMARY KEY (game_key, date_key, slot_id),
       INDEX idx_game_date (game_key, date_key)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wechat_publisher_ingest_runs (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      trigger_source VARCHAR(16) NOT NULL,
+      game_key VARCHAR(32) NOT NULL DEFAULT '',
+      from_date VARCHAR(10) NOT NULL,
+      to_date VARCHAR(10) NOT NULL,
+      ok TINYINT NOT NULL DEFAULT 0,
+      games_json JSON NOT NULL,
+      error_message TEXT NOT NULL,
+      started_at BIGINT NOT NULL,
+      finished_at BIGINT NOT NULL,
+      duration_ms BIGINT NOT NULL,
+      INDEX idx_started_at (started_at),
+      INDEX idx_range (from_date, to_date),
+      INDEX idx_game_started (game_key, started_at)
     )
   `);
 
@@ -610,6 +642,29 @@ export async function replaceWechatPublisherAdDailyRows(
   } finally {
     conn.release();
   }
+}
+
+export async function recordWechatPublisherIngestRun(input: WechatPublisherIngestRunDraft): Promise<void> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  await pool.query(
+    `INSERT INTO wechat_publisher_ingest_runs (
+       trigger_source, game_key, from_date, to_date, ok, games_json,
+       error_message, started_at, finished_at, duration_ms
+     ) VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?, ?)`,
+    [
+      input.trigger_source,
+      input.game_key || '',
+      input.from_date,
+      input.to_date,
+      input.ok ? 1 : 0,
+      input.games_json,
+      input.error_message || '',
+      input.started_at,
+      input.finished_at,
+      input.duration_ms,
+    ],
+  );
 }
 
 export async function replaceTencentAdsDailyReportRawRows(

@@ -225,12 +225,12 @@ export function startScheduler(): void {
     void runTencentAdsInsightsIngest('startup');
   }, 18_000);
 
-  // 9) 微信流量主日报：每天 10:10 拉最近 7 天真实收入/曝光，覆盖商业化 LTV 真实 eCPM。
-  // 收入侧数据经常晚于投放侧，启动回拉可让本地开发和部署后立即对账。
-  const wechatPublisherCron = process.env.WECHAT_PUBLISHER_INGEST_CRON || '10 10 * * *';
+  // 9) 微信流量主日报：当天多次回拉最近窗口真实收入/曝光，覆盖商业化 LTV 真实 eCPM。
+  // 微信侧昨日数据经常晚于上午开放，保留 16:10 / 23:10 二次补偿，避免 ROI 页连续缺收入。
+  const wechatPublisherCron = process.env.WECHAT_PUBLISHER_INGEST_CRON || '10 10,16,23 * * *';
   const runWechatPublisherIngest = async (trigger: 'cron' | 'startup') => {
     try {
-      const result = await ingestWechatPublisherBusinessInputs();
+      const result = await ingestWechatPublisherBusinessInputs({ triggerSource: trigger });
       const summary = result.games
         .map((game) =>
           game.error
