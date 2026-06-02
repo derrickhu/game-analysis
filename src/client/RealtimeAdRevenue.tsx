@@ -149,11 +149,16 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     fruit_slice_tool_eliminate: '果切无尽 - 消除道具',
     fruit_slice_tool_shuffle: '果切无尽 - 打乱道具',
     fruit_slice_checkpoint_start: '果切无尽 - 从档位开始',
-    // === DailyLimitedScene 每日限定 ===
+    // === DailyLimitedScene 每日限定（见 DailyLimitedScene.ts） ===
     daily_limited_tool_lift: '每日限定 - 暂存水果移出',
     daily_limited_tool_shuffle: '每日限定 - 洗牌道具',
     daily_limited_tool_undo: '每日限定 - 撤销上一步',
     daily_limited_unlock_buffer_slot: '每日限定 - 解锁额外暂存格',
+    daily_limited_fail_revive: '每日限定 - 失败复活（暂存上移洗牌）',
+    // === MilkTeaTrayDemoScene 奶茶店（见 MilkTeaTrayDemoScene.ts） ===
+    milk_tea_cell_unlock_ad: '奶茶店 - 看广告解锁棋盘格',
+    milk_tea_tool_use: '奶茶店 - 看广告使用道具',
+    milk_tea_fail_revive: '奶茶店 - 失败复活清盘',
   },
   // huahua 的广告位定义见 game2D_huahua/src/managers/AdManager.ts 的 AdScene 枚举
   huahua: {
@@ -242,7 +247,9 @@ function getAdErrCodeLabel(code: string): string {
 }
 
 function getSceneLabel(gameKey: string, scene: string): string {
-  return SCENE_LABELS[gameKey]?.[scene] ?? '-';
+  const key = String(scene || '').trim();
+  if (!key) return '-';
+  return SCENE_LABELS[gameKey]?.[key] ?? '-';
 }
 
 /**
