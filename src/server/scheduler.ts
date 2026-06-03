@@ -14,6 +14,7 @@ import { ingestHotpotSnapshots } from './jobs/ingest-hotpot-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 import { recomputeRetentionCohorts } from './metrics/retention';
 import { recomputeLevelPassRates } from './metrics/level-pass-rate';
+import { recomputeAttribution } from './metrics/attribution';
 
 let started = false;
 
@@ -138,10 +139,16 @@ export function startScheduler(): void {
           fromDate: userDaily.from_date,
           toDate: userDaily.to_date,
         });
-        if (userDaily.rows > 0 || cohort.rows > 0 || retention.rows > 0) {
+        const attribution = await recomputeAttribution(game.gameKey, {
+          fromDate: userDaily.from_date,
+          toDate: userDaily.to_date,
+        });
+        if (userDaily.rows > 0 || cohort.rows > 0 || retention.rows > 0 || attribution.user_daily_rows > 0) {
           console.log(
             `[scheduler] ltv(${trigger}) ${game.gameKey}: user_daily=${userDaily.rows}, ` +
-              `cohort=${cohort.rows}, retention=${retention.rows}, range=${userDaily.from_date}~${userDaily.to_date}`,
+              `cohort=${cohort.rows}, retention=${retention.rows}, ` +
+              `attribution_daily=${attribution.user_daily_rows}, postback=${attribution.postback_rows}, ` +
+              `range=${userDaily.from_date}~${userDaily.to_date}`,
           );
         }
       } catch (error) {

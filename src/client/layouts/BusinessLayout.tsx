@@ -28,6 +28,7 @@ function BusinessSubTabs() {
   const location = useLocation();
   const subKey = (() => {
     if (location.pathname.startsWith('/business/retention')) return 'retention';
+    if (location.pathname.startsWith('/business/attribution')) return 'attribution';
     if (
       location.pathname.startsWith('/business/commercial') ||
       location.pathname.startsWith('/business/ltv') ||
@@ -50,6 +51,7 @@ function BusinessSubTabs() {
         { key: 'dashboard', label: '大盘运营' },
         { key: 'retention', label: '留存分析' },
         { key: 'commercial', label: '商业化分析' },
+        { key: 'attribution', label: '广告归因' },
         { key: 'gameplay', label: '玩法分析' },
         { key: 'player-snapshot', label: '玩家档案' },
         { key: 'events', label: '原始事件' },
@@ -82,7 +84,8 @@ function BusinessHeaderControls() {
   const usesPageTimeWindow =
     location.pathname.startsWith('/business/commercial') ||
     location.pathname.startsWith('/business/ltv') ||
-    location.pathname.startsWith('/business/roi');
+    location.pathname.startsWith('/business/roi') ||
+    location.pathname.startsWith('/business/attribution');
 
   return (
     <Space wrap>

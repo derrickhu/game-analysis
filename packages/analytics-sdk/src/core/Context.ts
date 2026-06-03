@@ -1,4 +1,5 @@
 import type { DeviceInfo, PlatformName, StorageAdapter } from '../adapters/types';
+import type { EventParamValue } from './EventSchema';
 import { now, randomId } from './utils';
 
 const ANONYMOUS_ID_KEY = '__gp_analytics_anonymous_id__';
@@ -18,6 +19,7 @@ export class Context {
   readonly sessionStartTs: number;
   private userId: string;
   private sessionSeq: number;
+  private readonly commonParams: Record<string, EventParamValue>;
 
   constructor(opts: {
     gameKey: string;
@@ -38,6 +40,7 @@ export class Context {
     this.sessionId = randomId();
     this.sessionStartTs = now();
     this.sessionSeq = 0;
+    this.commonParams = {};
   }
 
   setUserId(userId: string): void {
@@ -46,6 +49,30 @@ export class Context {
 
   getUserId(): string {
     return this.userId;
+  }
+
+  setCommonParams(params: Record<string, EventParamValue>): void {
+    for (const [key, value] of Object.entries(params)) {
+      if (!key) continue;
+      if (value === undefined) continue;
+      this.commonParams[key] = value;
+    }
+  }
+
+  clearCommonParams(keys?: string[]): void {
+    if (!keys) {
+      for (const key of Object.keys(this.commonParams)) {
+        delete this.commonParams[key];
+      }
+      return;
+    }
+    for (const key of keys) {
+      delete this.commonParams[key];
+    }
+  }
+
+  getCommonParams(): Record<string, EventParamValue> {
+    return { ...this.commonParams };
   }
 
   /** 每次 track 调用时取一个递增的会话内序号 */

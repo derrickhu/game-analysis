@@ -7,6 +7,7 @@ import { Navigate, RouterProvider, createBrowserRouter } from 'react-router-dom'
 
 import { BusinessLayout } from './layouts/BusinessLayout';
 import { OpsLayout } from './layouts/OpsLayout';
+import { AttributionPage } from './pages/AttributionPage';
 import { CommercialPage } from './pages/CommercialPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { EventsPage } from './pages/EventsPage';
@@ -23,6 +24,7 @@ import './styles.css';
  *   /business/dashboard?game=&window=         大盘运营（通用：KPI + 活跃趋势 + 广告 + 分享）
  *   /business/retention?game=                 留存分析（cohort D0-D30 + 设备拆分）
  *   /business/commercial?game=&window=        商业化分析（ROI 决策 + LTV 回收 + 真实录入）
+ *   /business/attribution?game=                 广告归因（Campaign 质量 + 回传 dry-run）
  *   /business/gameplay?game=&window=          玩法分析（按 gameKey 渲染各自漏斗 panel）
  *   /business/player-snapshot?game=           玩家档案（每日全量 DB 快照，不响应时间窗口）
  *   /business/events?game=&window=            原始事件（EventsExplorer）
@@ -46,6 +48,7 @@ const router = createBrowserRouter([
       { path: 'dashboard', element: <DashboardPage /> },
       { path: 'retention', element: <RetentionPage /> },
       { path: 'commercial', element: <CommercialPage /> },
+      { path: 'attribution', element: <AttributionPage /> },
       { path: 'ltv', element: <Navigate to="/business/commercial" replace /> },
       { path: 'roi', element: <Navigate to="/business/commercial" replace /> },
       { path: 'gameplay', element: <GameplayPage /> },

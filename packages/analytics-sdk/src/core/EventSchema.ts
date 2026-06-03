@@ -65,6 +65,10 @@ export const EVENT_NAMES = {
    */
   APP_SHOW: 'app_show',
   APP_ERROR: 'app_error',
+  /** 启动 / 回流来源触点，承载 launch query、referrer 和广告点击标识 */
+  ATTRIBUTION_TOUCHPOINT: 'attribution_touchpoint',
+  /** 客户端或服务端解析出的归因结果，最终以服务端 user_attribution 为准 */
+  ATTRIBUTION_RESOLVED: 'attribution_resolved',
 
   // 分享（只代表发起分享，不代表分享成功或带来回流）
   /** 转发给好友 / 群（微信 onShareAppMessage / wx.shareAppMessage / 抖音 tt.shareAppMessage） */

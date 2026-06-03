@@ -71,6 +71,10 @@ import {
   saveBusinessDailyInput,
 } from '../metrics/roi';
 import { getAcquisitionIntelligenceOverview } from '../metrics/acquisition-intelligence';
+import {
+  getAttributionOverview,
+  recomputeAttribution,
+} from '../metrics/attribution';
 import { analyzeRoiWithDeepSeek } from '../metrics/roi-ai';
 import { getTencentAdsDailyReport } from '../tencent-ads';
 import {
@@ -794,6 +798,34 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
       ...result,
     };
+  });
+
+  // 广告归因总览：按 campaign/adgroup/creative 输出用户质量、LTV 与回传 dry-run 状态。
+  app.get('/api/realtime/attribution', async (request) => {
+    const query = (request.query || {}) as LtvQuery;
+    const gameKey = query.game || 'huahua';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const { fromTs, toTs } = parseTimeRange(query);
+    const fromDate = query.from_date || toLocalDateKey(fromTs);
+    const toDate = query.to_date || toLocalDateKey(toTs);
+    const result = await getAttributionOverview(gameKey, fromDate, toDate);
+    return { ok: true, ...result };
+  });
+
+  // 手动归因回算：先要求 LTV/user_daily 已有数据；本接口负责触点解析、用户归因、归因日表和回传 dry-run。
+  app.post('/api/realtime/recompute-attribution', async (request) => {
+    const body = (request.body || {}) as { game?: string; from_date?: string; to_date?: string };
+    const gameKey = body.game || 'huahua';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const result = await recomputeAttribution(gameKey, {
+      fromDate: body.from_date,
+      toDate: body.to_date,
+    });
+    return { ok: true, ...result };
   });
 
   // 通用 cohort 留存分析：按某个新增日期 cohort 输出 D0-D30 留存曲线，并按设备类型拆分。

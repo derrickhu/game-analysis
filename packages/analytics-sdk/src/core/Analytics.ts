@@ -208,6 +208,23 @@ class AnalyticsImpl {
     }
   }
 
+  /**
+   * 设置所有后续事件都会自动携带的公共参数。
+   *
+   * 典型用途：广告归因上下文（campaign/adgroup/creative/click_id）、
+   * A/B 实验分组、灰度渠道等。单条 track 传入的同名参数优先级更高。
+   */
+  setCommonParams(params: CommonParams): void {
+    if (!this.context) return;
+    this.context.setCommonParams(params);
+  }
+
+  /** 清除公共参数；不传 keys 时清空全部。 */
+  clearCommonParams(keys?: string[]): void {
+    if (!this.context) return;
+    this.context.clearCommonParams(keys);
+  }
+
   trackSessionStart(params: CommonParams = {}): void {
     this.track(EVENT_NAMES.SESSION_START, params);
   }
@@ -319,6 +336,10 @@ class AnalyticsImpl {
 
   private buildEnvelope(eventName: string, params: Record<string, EventParamValue>): AnalyticsEvent {
     const ctx = this.context!;
+    const mergedParams = {
+      ...ctx.getCommonParams(),
+      ...(params || {}),
+    };
     return {
       event_id: randomId(),
       event_name: eventName,
@@ -340,7 +361,7 @@ class AnalyticsImpl {
         screen_h: ctx.deviceInfo.screenHeight,
         network: ctx.deviceInfo.network || 'unknown',
       },
-      params: params || {},
+      params: mergedParams,
     };
   }
 
