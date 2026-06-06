@@ -41,6 +41,13 @@
 - 启动挂载：`/Users/huyi/dk_proj/game2D_huahua/src/main.ts`
 - 平台方法：`/Users/huyi/dk_proj/game2D_huahua/src/core/PlatformService.ts`
 
+## hot-pot（别捞水果）
+
+- 已接入路径：`/Users/huyi/dk_proj/hot-pot/src/analytics/AttributionManager.ts`
+- 启动挂载：`/Users/huyi/dk_proj/hot-pot/src/main.ts`
+- 平台方法：`/Users/huyi/dk_proj/hot-pot/src/core/PlatformService.ts`
+- `game_key`：`hotpot`，本地存储 key：`hotpot_attribution_v1`
+
 ## 水果 / 灵宠消消塔
 
 复用花花模式：
