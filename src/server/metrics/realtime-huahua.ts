@@ -12,7 +12,7 @@
  * 面板划分：
  *   1. economy   ：花愿/钻石入账出账渠道分布、净流时间序列（经济流转健康度）
  *   2. order     ：订单 spawn → deliver/expire/ditch 漏斗、按 tier 分布（订单转化）
- *   3. growth    ：星级升级分布、tutorial_step 引导漏斗（成长 + 引导）
+ *   3. growth    ：等级升级分布、tutorial_step 引导漏斗（成长 + 引导）
  *   4. engagement：日常任务/周里程碑/签到/抽奖/熟客卡 5 类事件次数（参与度）
  *
  * 实现约定：
@@ -23,6 +23,7 @@
  */
 
 import { getMysqlPool, isMysqlMode } from '../db';
+import { countNewUsersInWindow } from './realtime-overview';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
@@ -582,12 +583,30 @@ export interface HuahuaGrowthKpi {
   level_up_users: number;
   /** 窗口内最高达到的星级 */
   max_level_reached: number;
-  /** 教程完成（tutorial_completed）的去重用户数 */
+  /** 教程完成（tutorial_completed）的去重用户数（窗口内事件） */
   tutorial_completed_users: number;
-  /** 启动 SESSION_START 的去重用户数（教程漏斗分母 = 当前窗口启动用户） */
+  /** 启动 SESSION_START 的去重用户数（含回访，作参考分母） */
   session_users: number;
-  /** 教程完成率 = tutorial_completed_users / session_users */
+  /** 教程完成率 = tutorial_completed_users / session_users（含回访，易被稀释） */
   tutorial_complete_rate: number | null;
+  /** 窗口内首次 session_start 的新增用户数（cohort 分母） */
+  new_users: number;
+  /** 新用户中至少触发过 tutorial_step(done) 的人数（窗口内） */
+  new_user_tutorial_started_users: number;
+  /** 新用户中曾完成 tutorial_completed 的人数（全生命周期，用于 cohort 质量） */
+  new_user_tutorial_completed_users: number;
+  /** 新用户中曾 order_deliver 的人数 */
+  new_user_order_deliver_users: number;
+  /** 新用户中曾 ad_show 的人数 */
+  new_user_ad_show_users: number;
+  /** 新用户教程完成率 = new_user_tutorial_completed_users / new_users */
+  new_user_tutorial_complete_rate: number | null;
+  /** 新用户进入引导率 = new_user_tutorial_started_users / new_users */
+  new_user_tutorial_start_rate: number | null;
+  /** 新用户首单率 = new_user_order_deliver_users / new_users */
+  new_user_order_deliver_rate: number | null;
+  /** 新用户看广告率 = new_user_ad_show_users / new_users */
+  new_user_ad_show_rate: number | null;
   computed_at: number;
 }
 
@@ -719,17 +738,97 @@ async function countSessionUsers(gameKey: string, fromTs: number, toTs: number):
   return Number((rows as Array<{ uu: number }>)[0]?.uu || 0);
 }
 
+/** 窗口内首次 session_start 的新用户 cohort，及其引导/首单/看广告转化（优化游戏的核心分母） */
+async function computeNewUserCohortMetrics(
+  gameKey: string,
+  fromTs: number,
+  toTs: number,
+): Promise<{
+  new_users: number;
+  new_user_tutorial_started_users: number;
+  new_user_tutorial_completed_users: number;
+  new_user_order_deliver_users: number;
+  new_user_ad_show_users: number;
+}> {
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `WITH      first_sess AS (
+       SELECT ${USER_KEY_SQL} AS uk, MIN(event_ts) AS first_ts
+         FROM analytics_events
+        WHERE game_key = ? AND event_name = 'session_start'
+        GROUP BY ${USER_KEY_SQL}
+     ),
+     new_users AS (
+       SELECT uk FROM first_sess WHERE first_ts BETWEEN ? AND ?
+     ),
+     tutorial_done AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = 'tutorial_step'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.step_id')) = 'tutorial_completed'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
+     ),
+     tutorial_started AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = 'tutorial_step'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
+          AND event_ts BETWEEN ? AND ?
+     ),
+     order_deliver AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ? AND event_name = 'order_deliver'
+     ),
+     ad_show AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ? AND event_name = 'ad_show'
+     )
+     SELECT
+       COUNT(DISTINCT n.uk) AS new_users,
+       COUNT(DISTINCT CASE WHEN ts.uk IS NOT NULL THEN n.uk END) AS new_user_tutorial_started,
+       COUNT(DISTINCT CASE WHEN td.uk IS NOT NULL THEN n.uk END) AS new_user_tutorial_completed,
+       COUNT(DISTINCT CASE WHEN od.uk IS NOT NULL THEN n.uk END) AS new_user_order_deliver,
+       COUNT(DISTINCT CASE WHEN ads.uk IS NOT NULL THEN n.uk END) AS new_user_ad_show
+       FROM new_users n
+       LEFT JOIN tutorial_started ts ON n.uk = ts.uk
+       LEFT JOIN tutorial_done td ON n.uk = td.uk
+       LEFT JOIN order_deliver od ON n.uk = od.uk
+       LEFT JOIN ad_show ads ON n.uk = ads.uk`,
+    [gameKey, fromTs, toTs, gameKey, gameKey, fromTs, toTs, gameKey, gameKey],
+  );
+  const row = (rows as Array<Record<string, unknown>>)[0] || {};
+  return {
+    new_users: Number(row.new_users || 0),
+    new_user_tutorial_started_users: Number(row.new_user_tutorial_started || 0),
+    new_user_tutorial_completed_users: Number(row.new_user_tutorial_completed || 0),
+    new_user_order_deliver_users: Number(row.new_user_order_deliver || 0),
+    new_user_ad_show_users: Number(row.new_user_ad_show || 0),
+  };
+}
+
+function rate(numerator: number, denominator: number): number | null {
+  return denominator > 0 ? numerator / denominator : null;
+}
+
 export async function getHuahuaGrowthOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
 ): Promise<HuahuaGrowthResult> {
   ensureMysql();
-  const [levelDist, tutorial, sessionUsers] = await Promise.all([
+  const [levelDist, tutorial, sessionUsers, cohort, newUsers] = await Promise.all([
     computeStarLevelDistribution(gameKey, fromTs, toTs),
     computeTutorialFunnel(gameKey, fromTs, toTs),
     countSessionUsers(gameKey, fromTs, toTs),
+    computeNewUserCohortMetrics(gameKey, fromTs, toTs),
+    countNewUsersInWindow(gameKey, fromTs, toTs),
   ]);
+  // new_users 与大盘「窗口内新增」同口径；cohort 查询负责引导/首单/看广告转化分子
+  const alignedNewUsers = newUsers > 0 ? newUsers : cohort.new_users;
   return {
     kpi: {
       total_level_ups: levelDist.totalEvents,
@@ -737,8 +836,25 @@ export async function getHuahuaGrowthOverview(
       max_level_reached: levelDist.maxLevel,
       tutorial_completed_users: tutorial.completedUsers,
       session_users: sessionUsers,
-      tutorial_complete_rate:
-        sessionUsers > 0 ? tutorial.completedUsers / sessionUsers : null,
+      tutorial_complete_rate: rate(tutorial.completedUsers, sessionUsers),
+      new_users: alignedNewUsers,
+      new_user_tutorial_started_users: cohort.new_user_tutorial_started_users,
+      new_user_tutorial_completed_users: cohort.new_user_tutorial_completed_users,
+      new_user_order_deliver_users: cohort.new_user_order_deliver_users,
+      new_user_ad_show_users: cohort.new_user_ad_show_users,
+      new_user_tutorial_complete_rate: rate(
+        cohort.new_user_tutorial_completed_users,
+        alignedNewUsers,
+      ),
+      new_user_tutorial_start_rate: rate(
+        cohort.new_user_tutorial_started_users,
+        alignedNewUsers,
+      ),
+      new_user_order_deliver_rate: rate(
+        cohort.new_user_order_deliver_users,
+        alignedNewUsers,
+      ),
+      new_user_ad_show_rate: rate(cohort.new_user_ad_show_users, alignedNewUsers),
       computed_at: Date.now(),
     },
     level_distribution: levelDist.rows,

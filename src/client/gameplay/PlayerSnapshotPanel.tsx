@@ -110,7 +110,7 @@ interface SnapshotResponse {
  *
  * KPI 视角对照：
  *   - 事件流 panels：本窗口内"做了 X 次合成 / 交付 N 单"——增量
- *   - 本 panel：现在所有玩家"平均累计合成 K 次 / 平均星级 L"——存量
+ *   - 本 panel：现在所有玩家"平均累计合成 K 次 / 平均等级 L"——存量
  *
  * 数据接口：
  *   - GET  /api/realtime/huahua-snapshot   读快照 + 30 天趋势
@@ -207,7 +207,7 @@ export function PlayerSnapshotPanel() {
     );
   }, [latestRun]);
 
-  // 星级分布柱状图：x=星级、y=玩家数
+  // 等级分布柱状图：x=等级、y=玩家数
   const levelOption = useMemo(() => {
     const levels = data?.level_distribution || [];
     return {
@@ -277,7 +277,7 @@ export function PlayerSnapshotPanel() {
     return {
       tooltip: { trigger: 'axis' },
       legend: {
-        data: ['平均星级', '人均花愿', '教程完成率'],
+        data: ['平均等级', '人均花愿', '教程完成率'],
         textStyle: { color: '#374151', fontSize: 12, fontWeight: 500 },
         top: 8,
         left: 'center',
@@ -289,12 +289,12 @@ export function PlayerSnapshotPanel() {
         axisLabel: { hideOverlap: true },
       },
       yAxis: [
-        { type: 'value', name: '星级 / 完成率', position: 'left' as const, nameGap: 30 },
+        { type: 'value', name: '等级 / 完成率', position: 'left' as const, nameGap: 30 },
         { type: 'value', name: '花愿', position: 'right' as const, nameGap: 30 },
       ],
       series: [
         {
-          name: '平均星级',
+          name: '平均等级',
           type: 'line',
           smooth: true,
           itemStyle: { color: '#3b82f6' },
@@ -399,15 +399,15 @@ export function PlayerSnapshotPanel() {
               </Col>
               <Col xs={12} md={6}>
                 <Card size="small">
-                  <Tooltip title="所有玩家当前星级（currency.level）的算数平均">
-                    <Statistic title="平均星级" value={kpi.avg_level} suffix="级" />
+                  <Tooltip title="所有玩家当前等级（currency.level）的算数平均">
+                    <Statistic title="平均等级" value={kpi.avg_level} suffix="级" />
                   </Tooltip>
                 </Card>
               </Col>
               <Col xs={12} md={6}>
                 <Card size="small">
-                  <Tooltip title="任意玩家在快照中的最高星级">
-                    <Statistic title="最高星级" value={formatInt(kpi.max_level)} suffix="级" />
+                  <Tooltip title="任意玩家在快照中的最高等级">
+                    <Statistic title="最高等级" value={formatInt(kpi.max_level)} suffix="级" />
                   </Tooltip>
                 </Card>
               </Col>
@@ -521,8 +521,7 @@ export function PlayerSnapshotPanel() {
               </Col>
             </Row>
 
-            {/* 星级分布 */}
-            <Card size="small" title="星级分布（按当前 currency.level 横切面）">
+            <Card size="small" title="等级分布（按当前 currency.level 横切面）">
               <ReactECharts option={levelOption} style={{ height: 280 }} />
             </Card>
 

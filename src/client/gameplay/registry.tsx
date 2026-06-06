@@ -74,7 +74,7 @@ export const GAMEPLAY_PANEL_REGISTRY: Record<GameplayPanelId, GameplayPanelMeta>
   },
   huahua_growth: {
     id: 'huahua_growth',
-    title: '星级成长 + 新手引导',
+    title: '新手引导 + 首日 cohort',
     Component: GrowthProgressPanel,
   },
   huahua_engagement: {

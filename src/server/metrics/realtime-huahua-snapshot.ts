@@ -9,7 +9,7 @@
  *
  * 接口形态：
  *   - 默认查最新 snapshot_date 的快照（横切面：当前所有玩家的状态分布）
- *   - 同时返回最近 30 天的 daily 趋势（人均星级 / 人均花愿 / 教程完成率）
+ *   - 同时返回最近 30 天的 daily 趋势（人均等级 / 人均花愿 / 教程完成率）
  *
  * 全部走 MySQL，按 snapshot_date 聚合。索引 idx_date / idx_date_level 已建好，单次 30k 行查询毫秒级。
  */
@@ -357,7 +357,7 @@ export interface PlayerListQuery {
   platform?: string;
   /** 教程完成态精确过滤；undefined 表示不过滤 */
   tutorial_completed?: 0 | 1;
-  /** 星级范围（含两端） */
+  /** 等级范围（含两端） */
   min_level?: number;
   max_level?: number;
   /** 花愿存量下限（含） */

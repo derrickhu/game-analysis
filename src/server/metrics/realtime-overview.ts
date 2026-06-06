@@ -170,7 +170,7 @@ async function countDistinctUsers(
  * 在 [fromTs,toTs] 窗口内首次 session_start 的去重用户数。
  * 注意新增、DAU、留存都用 session_start 作为进入游戏口径，避免任意事件把分母/分子撑大。
  */
-async function countNewUsersInWindow(
+export async function countNewUsersInWindow(
   gameKey: string,
   fromTs: number,
   toTs: number,

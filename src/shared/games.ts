@@ -29,7 +29,7 @@ export type GameplayPanelId =
   | 'hotpot_daily_limited'  // 别捞水果：每日限定玩法分析
   | 'huahua_economy_flow'   // 花花经济流转健康度（花愿 / 钻石 / 体力的入账出账）
   | 'huahua_order_funnel'   // 花花订单转化漏斗（spawn → deliver / expire / ditch + 按 tier）
-  | 'huahua_growth'         // 花花星级成长 + 新手引导漏斗
+  | 'huahua_growth'         // 花花等级成长 + 新手引导漏斗
   | 'huahua_engagement'     // 花花参与度（任务/签到/抽奖/熟客/合成）
   | 'caizhu_gameplay'       // 彩珠五连：入口/经典模式/道具/教程
   | 'match_progress';       // 消除关卡进度（caizhu 待补）
@@ -81,13 +81,13 @@ export const ALL_GAMES: GameDescriptor[] = [
     hasAnalyticsSdk: true,
     // 2026-05-10 接入 @gp/analytics-sdk 通用层（session/login/ad/share/tutorial/app_error）。
     // 2026-05-10 补全 17 个业务专属事件（merge/order/decoration/dressup/star/quest/checkin/fountain/affinity/...），
-    // 玩法分析 4 个面板（经济流转 / 订单漏斗 / 成长 / 参与度）配套上线。
+    // 玩法分析顺序：首日 cohort → 订单 → 参与度 → 经济（优化游戏优先看引导漏斗）
     hasSnapshotIngest: false,
     gameplayPanels: [
-      'huahua_economy_flow',
-      'huahua_order_funnel',
       'huahua_growth',
+      'huahua_order_funnel',
       'huahua_engagement',
+      'huahua_economy_flow',
     ],
     monetization: { ads: true, iap: false, ecpmProfile: 'huahua' },
   },

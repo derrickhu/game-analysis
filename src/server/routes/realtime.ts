@@ -1332,7 +1332,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     };
   });
 
-  /** 花花成长 + 引导：星级升级分布 + tutorial_step 漏斗 */
+  /** 花花成长 + 引导：等级升级分布 + tutorial_step 漏斗 */
   app.get('/api/realtime/huahua-growth', async (request) => {
     const query = (request.query || {}) as AdRevenueQuery;
     const gameKey = query.game || 'huahua';

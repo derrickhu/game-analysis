@@ -285,7 +285,7 @@ export function PlayerSnapshotTable({ gameKey, snapshotDate, refreshNonce = 0 }:
         render: (_: unknown, r: PlayerListItem) => platformOf(r.user_id) || r.platform || '-',
       },
       {
-        title: '星级',
+        title: '等级',
         dataIndex: 'level',
         key: 'level',
         width: 80,
@@ -550,9 +550,9 @@ export function PlayerSnapshotTable({ gameKey, snapshotDate, refreshNonce = 0 }:
             onClear={() => updateFilter({ userIdSearch: '' })}
             style={{ width: 280 }}
           />
-          <Tooltip title="星级范围（含两端）">
+          <Tooltip title="等级范围（含两端）">
             <InputNumber
-              placeholder="星级 ≥"
+              placeholder="等级 ≥"
               min={0}
               value={state.minLevel ?? undefined}
               onChange={(v) => updateFilter({ minLevel: typeof v === 'number' ? v : null })}
@@ -560,7 +560,7 @@ export function PlayerSnapshotTable({ gameKey, snapshotDate, refreshNonce = 0 }:
             />
           </Tooltip>
           <InputNumber
-            placeholder="星级 ≤"
+            placeholder="等级 ≤"
             min={0}
             value={state.maxLevel ?? undefined}
             onChange={(v) => updateFilter({ maxLevel: typeof v === 'number' ? v : null })}

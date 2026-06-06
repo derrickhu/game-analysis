@@ -229,7 +229,7 @@ export function AttributionPage() {
     { title: '广告收入', dataIndex: 'ad_revenue_estimated_cny', key: 'revenue', align: 'right', render: (v) => yuan(v) },
     { title: '教程完成', dataIndex: 'tutorial_complete_users', key: 'tutorial', align: 'right' },
     { title: '首广告用户', dataIndex: 'first_ad_show_users', key: 'adUser', align: 'right' },
-    { title: '最高星级', dataIndex: 'max_star_level', key: 'star', align: 'right' },
+    { title: '最高等级', dataIndex: 'max_star_level', key: 'star', align: 'right' },
   ];
 
   const touchpointColumns: ColumnsType<Record<string, unknown>> = [

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Col, Empty, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
+import { Alert, Card, Col, Empty, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -32,9 +32,15 @@ interface GrowthKpi {
   total_level_ups: number;
   level_up_users: number;
   max_level_reached: number;
-  tutorial_completed_users: number;
-  session_users: number;
-  tutorial_complete_rate: number | null;
+  new_users: number;
+  new_user_tutorial_started_users: number;
+  new_user_tutorial_completed_users: number;
+  new_user_order_deliver_users: number;
+  new_user_ad_show_users: number;
+  new_user_tutorial_complete_rate: number | null;
+  new_user_tutorial_start_rate: number | null;
+  new_user_order_deliver_rate: number | null;
+  new_user_ad_show_rate: number | null;
   computed_at: number;
 }
 
@@ -59,14 +65,11 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * 星级成长 + 新手引导漏斗。
+ * 新手引导 + 首日 cohort 漏斗（玩法分析第一面板）。
  *
- * 关注点：
- *   - 升星节奏：哪些星级有突变？是不是某档卡了一周？
- *   - 教程完成率：=（教程完成用户）/（启动用户），用作首日留存代理指标
- *   - 教程各步耗时：哪一步玩家停留最久（可能 UI 卡住或描述不清）
- *
- * 数据源：/api/realtime/huahua-growth
+ * 优化游戏时优先看「新用户 cohort」：
+ *   - 分母 = 窗口内首次 session_start 的用户（不含老用户回访稀释）
+ *   - 教程完成 / 首单 / 看广告 = 该 cohort 生命周期内是否达成
  */
 export function GrowthProgressPanel() {
   const { gameKey, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
@@ -115,10 +118,10 @@ export function GrowthProgressPanel() {
           const lv = params[0].axisValue;
           const row = levelDist[params[0].dataIndex];
           if (!row) return lv;
-          return `${lv}<br/>到达用户：${row.user_cnt}<br/>升星事件：${row.event_cnt}`;
+          return `${lv}<br/>到达用户：${row.user_cnt}<br/>升级次数：${row.event_cnt}`;
         },
       },
-      legend: { data: ['到达用户', '升星事件'], ...CHART_LEGEND_TOP },
+      legend: { data: ['到达用户', '升级次数'], ...CHART_LEGEND_TOP },
       grid: CHART_GRID_WITH_ZOOM,
       xAxis: { type: 'category', data: xAxis, axisLabel: { hideOverlap: true } },
       yAxis: { type: 'value', name: '人数 / 次数', minInterval: 1 },
@@ -132,7 +135,7 @@ export function GrowthProgressPanel() {
           data: levelDist.map((d) => d.user_cnt),
         },
         {
-          name: '升星事件',
+          name: '升级次数',
           type: 'bar',
           barMaxWidth: 18,
           itemStyle: { color: '#94a3b8', borderRadius: [4, 4, 0, 0] },
@@ -155,7 +158,7 @@ export function GrowthProgressPanel() {
           bottom: 30,
           minSize: '15%',
           maxSize: '95%',
-          sort: 'descending',
+          sort: 'none',
           gap: 4,
           label: { show: true, position: 'inside', color: '#fff', fontWeight: 600 },
           data: tutorial.map((s) => ({
@@ -194,71 +197,75 @@ export function GrowthProgressPanel() {
 
   return (
     <Card
-      title="星级成长 + 新手引导漏斗"
-      extra={<Text type="secondary">数据源：star_level_up / tutorial_step / session_start</Text>}
+      title="新手引导 + 首日 cohort（优化优先）"
+      extra={<Text type="secondary">数据源：session_start / tutorial_step / order_deliver / ad_show</Text>}
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <Row gutter={[16, 16]}>
-          <Col xs={12} md={6}>
-            <Card size="small">
-              <Tooltip title="窗口内 star_level_up 事件总次数">
-                <Statistic title="升星总次数" value={formatInt(kpi?.total_level_ups)} suffix="次" />
+        <Alert
+          type="info"
+          showIcon
+          message="优化游戏先看这里"
+          description={
+            <>
+              核心分母是<strong>窗口内首次进游戏的新用户</strong>（不含老用户回访）。
+              优先提升「进入引导 → 完成教程 → 首单 → 看广告」；下方等级成长为长期参考。
+            </>
+          }
+        />
+
+        <Card type="inner" title="新用户 cohort（核心优化指标）" size="small">
+          <Row gutter={[16, 16]}>
+            <Col xs={12} md={8} lg={4}>
+              <Tooltip title="窗口内首次 session_start 的去重用户数，与大盘「窗口内新增」同口径">
+                <Statistic title="新用户" value={formatInt(kpi?.new_users)} suffix="人" />
               </Tooltip>
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small">
-              <Statistic title="升星用户数" value={formatInt(kpi?.level_up_users)} suffix="人" />
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small">
-              <Tooltip title="窗口内 star_level_up 事件中最大的 new_level">
-                <Statistic title="最高星级" value={formatInt(kpi?.max_level_reached)} suffix="级" />
-              </Tooltip>
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small">
-              <Tooltip title="= 教程完成用户 / 窗口内 session_start 用户。粗略代理首日 1 日留存">
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <Tooltip title="新用户中曾完成 tutorial_completed 的比例（全生命周期）">
                 <Statistic
-                  title="教程完成率"
-                  value={formatPercent(kpi?.tutorial_complete_rate)}
+                  title="新用户教程完成率"
+                  value={formatPercent(kpi?.new_user_tutorial_complete_rate)}
+                  valueStyle={{ color: '#1677ff', fontWeight: 700 }}
                 />
               </Tooltip>
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small">
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <Tooltip title="新用户中窗口内至少触发过 1 次 tutorial_step(done)">
+                <Statistic
+                  title="进入引导率"
+                  value={formatPercent(kpi?.new_user_tutorial_start_rate)}
+                />
+              </Tooltip>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <Tooltip title="新用户中曾 order_deliver 的比例">
+                <Statistic
+                  title="首单交付率"
+                  value={formatPercent(kpi?.new_user_order_deliver_rate)}
+                />
+              </Tooltip>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
+              <Tooltip title="新用户中曾 ad_show 的比例，接近变现漏斗">
+                <Statistic
+                  title="看广告率"
+                  value={formatPercent(kpi?.new_user_ad_show_rate)}
+                />
+              </Tooltip>
+            </Col>
+            <Col xs={12} md={8} lg={4}>
               <Statistic
-                title="教程完成用户"
-                value={formatInt(kpi?.tutorial_completed_users)}
+                title="完成教程"
+                value={formatInt(kpi?.new_user_tutorial_completed_users)}
                 suffix="人"
               />
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small">
-              <Statistic
-                title="启动用户（分母）"
-                value={formatInt(kpi?.session_users)}
-                suffix="人"
-              />
-            </Card>
-          </Col>
-        </Row>
-
-        <Card type="inner" title="星级分布（按到达星级聚合）">
-          {levelDist.length > 0 ? (
-            <ReactECharts option={levelDistOption} style={{ height: 320 }} />
-          ) : (
-            <Empty description="窗口内还没有星级升级数据" />
-          )}
+            </Col>
+          </Row>
         </Card>
 
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={10}>
-            <Card type="inner" title="新手引导漏斗">
+            <Card type="inner" title="新手引导漏斗（窗口内步骤）">
               {tutorialOption ? (
                 <ReactECharts option={tutorialOption} style={{ height: 320 }} />
               ) : (
@@ -267,7 +274,7 @@ export function GrowthProgressPanel() {
             </Card>
           </Col>
           <Col xs={24} lg={14}>
-            <Card type="inner" title="引导步骤明细">
+            <Card type="inner" title="引导步骤明细（查卡在哪一步）">
               <Table
                 size="small"
                 dataSource={tutorial}
@@ -279,6 +286,25 @@ export function GrowthProgressPanel() {
             </Card>
           </Col>
         </Row>
+
+        <Card type="inner" title="等级成长（长期参考）">
+          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+            <Col xs={12} md={8}>
+              <Statistic title="升级总次数" value={formatInt(kpi?.total_level_ups)} suffix="次" />
+            </Col>
+            <Col xs={12} md={8}>
+              <Statistic title="升级用户数" value={formatInt(kpi?.level_up_users)} suffix="人" />
+            </Col>
+            <Col xs={12} md={8}>
+              <Statistic title="最高等级" value={formatInt(kpi?.max_level_reached)} suffix="级" />
+            </Col>
+          </Row>
+          {levelDist.length > 0 ? (
+            <ReactECharts option={levelDistOption} style={{ height: 280 }} />
+          ) : (
+            <Empty description="窗口内还没有等级升级数据" />
+          )}
+        </Card>
       </Space>
     </Card>
   );
