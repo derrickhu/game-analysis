@@ -127,6 +127,7 @@ class AnalyticsImpl {
       transport: opts.transport,
       endpoint: opts.endpoint,
       maxBatchSize: opts.maxBatchSize,
+      debug: this.debugMode,
     });
     this.limiter = new SamplingLimiter({
       samplingRules: { ...DEFAULT_SAMPLING_RULES, ...(opts.samplingRules || {}) },
@@ -197,7 +198,12 @@ class AnalyticsImpl {
       return;
     }
     if (!eventName) return;
-    if (!this.limiter.shouldKeep(eventName)) return;
+    if (!this.limiter.shouldKeep(eventName)) {
+      if (this.debugMode) {
+        debug('analytics', `drop ${eventName} (sampling/rate-limit)`);
+      }
+      return;
+    }
 
     const envelope = this.buildEnvelope(eventName, params);
     this.queue.enqueue(envelope);

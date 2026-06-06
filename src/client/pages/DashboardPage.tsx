@@ -17,6 +17,7 @@ import ReactECharts from 'echarts-for-react';
 
 import { getGameDescriptor } from '../../shared/games';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
+import { fetchJson } from '../fetchJson';
 import { RealtimeAdRevenue } from '../RealtimeAdRevenue';
 import { RealtimeShare } from '../RealtimeShare';
 import { buildWindowQuery, resolveWindow, tsToUtcBucketStr, type WindowValue } from '../timeWindow';
@@ -250,31 +251,31 @@ export function DashboardPage() {
       setLoading(true);
       try {
         const queryStr = buildWindowQuery(nextWindow);
-        const overviewPromise = fetch(
+        const overviewPromise = fetchJson<OverviewResponse>(
           `/api/realtime/overview?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
-        ).then((r) => r.json() as Promise<OverviewResponse>);
-        const adSummaryPromise = fetch(
+        );
+        const adSummaryPromise = fetchJson<AdSummaryLiteResponse>(
           `/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
-        ).then((r) => r.json() as Promise<AdSummaryLiteResponse>);
-        const costPromise = fetch(
+        );
+        const costPromise = fetchJson<AcquisitionCostResponse>(
           `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${buildDateRangeQuery(nextWindow)}`,
-        ).then((r) => r.json() as Promise<AcquisitionCostResponse>);
+        );
         const compareQueryStr = buildShiftedWindowQuery(nextWindow, -86_400_000);
-        const compareOverviewPromise = fetch(
+        const compareOverviewPromise = fetchJson<OverviewResponse>(
           `/api/realtime/overview?game=${encodeURIComponent(nextGameKey)}&${compareQueryStr}`,
-        ).then((r) => r.json() as Promise<OverviewResponse>);
-        const compareAdSummaryPromise = fetch(
+        );
+        const compareAdSummaryPromise = fetchJson<AdSummaryLiteResponse>(
           `/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${compareQueryStr}`,
-        ).then((r) => r.json() as Promise<AdSummaryLiteResponse>);
-        const compareCostPromise = fetch(
+        );
+        const compareCostPromise = fetchJson<AcquisitionCostResponse>(
           `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${buildDateRangeQuery(nextWindow, -86_400_000)}`,
-        ).then((r) => r.json() as Promise<AcquisitionCostResponse>);
+        );
         // D3 ROI 只展示已经完整出数的 cohort：cohort 日 + 3 天必须已经结束。
         const roiToDate = addDaysDateKey(dateKey(Date.now()), -4);
         const roiFromDate = addDaysDateKey(roiToDate, -30);
-        const businessRoiPromise = fetch(
+        const businessRoiPromise = fetchJson<BusinessRoiLiteResponse>(
           `/api/realtime/business-inputs?game=${encodeURIComponent(nextGameKey)}&from_date=${encodeURIComponent(roiFromDate)}&to_date=${encodeURIComponent(roiToDate)}`,
-        ).then((r) => r.json() as Promise<BusinessRoiLiteResponse>);
+        );
         const [
           ovRes,
           adRes,

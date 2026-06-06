@@ -6,6 +6,10 @@ if (!process.env.TZ) {
   process.env.TZ = 'Asia/Shanghai';
 }
 
+import { installProcessLifecycleLogging, getProcessLogPath } from './process-lifecycle';
+
+installProcessLifecycleLogging();
+
 import Fastify from 'fastify';
 
 import { getConfig } from './config';
@@ -79,7 +83,11 @@ void initializeStorage()
   });
 startScheduler();
 
-app.listen({ port: config.apiPort, host: '127.0.0.1' }).catch((error) => {
-  app.log.error(error);
-  process.exit(1);
-});
+app.listen({ port: config.apiPort, host: '127.0.0.1' })
+  .then(() => {
+    app.log.info({ processLog: getProcessLogPath() }, '进程诊断日志已启用（uncaughtException / 信号 / 心跳）');
+  })
+  .catch((error) => {
+    app.log.error(error, 'API 监听失败');
+    process.exit(1);
+  });

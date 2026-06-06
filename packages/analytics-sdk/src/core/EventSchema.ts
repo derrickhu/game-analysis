@@ -106,6 +106,12 @@ export const EVENT_NAMES = {
   ORDER_DITCH: 'order_ditch',
   /** 装饰花愿购买（房间风格 / 家具 / 摆件） */
   DECORATION_PURCHASE: 'decoration_purchase',
+  /** 主场景顶栏摊位商店购买 */
+  MERCH_SHOP_PURCHASE: 'merch_shop_purchase',
+  /** 大地图弹窗商店购买 */
+  POPUP_SHOP_PURCHASE: 'popup_shop_purchase',
+  /** 新手礼包领取（广告进度达成后一次性发奖） */
+  NEWBIE_GIFT_CLAIM: 'newbie_gift_claim',
   /** 换装解锁（皮肤 / 衣服 / 装扮） */
   DRESSUP_UNLOCK: 'dressup_unlock',
   /** 全局星级提升（合成经营游戏的成长锚点） */

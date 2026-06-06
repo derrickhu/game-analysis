@@ -21,16 +21,27 @@ export class Sender {
   private readonly transport: TransportAdapter;
   private readonly endpoint: string;
   private readonly maxBatchSize: number;
+  private readonly debugMode: boolean;
 
-  constructor(opts: { transport: TransportAdapter; endpoint: string; maxBatchSize?: number }) {
+  constructor(opts: {
+    transport: TransportAdapter;
+    endpoint: string;
+    maxBatchSize?: number;
+    debug?: boolean;
+  }) {
     this.transport = opts.transport;
     this.endpoint = opts.endpoint;
     this.maxBatchSize = opts.maxBatchSize && opts.maxBatchSize > 0 ? opts.maxBatchSize : 50;
+    this.debugMode = !!opts.debug;
   }
 
   async flush(queue: EventQueue): Promise<void> {
     const batch = queue.take(this.maxBatchSize);
     if (batch.length === 0) return;
+
+    if (this.debugMode) {
+      debug('sender', `flushing n=${batch.length} events=[${this.formatBatchSummary(batch)}]`);
+    }
 
     const slices = this.splitBySize(batch);
     for (const slice of slices) {
@@ -63,7 +74,12 @@ export class Sender {
           timeoutMs: 10000,
         });
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          debug('sender', `sent batch=${batch.length} attempt=${attempt + 1}`);
+          if (this.debugMode) {
+            debug(
+              'sender',
+              `batch sent ok n=${batch.length} attempt=${attempt + 1} events=[${this.formatBatchSummary(batch)}]`,
+            );
+          }
           return true;
         }
         // 4xx 客户端错误（请求格式不对）不再重试，直接进死信避免持续打服务端
@@ -83,5 +99,16 @@ export class Sender {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /** debug 模式下汇总 batch 内事件名，便于开发者工具核对上报内容 */
+  private formatBatchSummary(batch: AnalyticsEvent[]): string {
+    const counts: Record<string, number> = {};
+    for (const event of batch) {
+      counts[event.event_name] = (counts[event.event_name] || 0) + 1;
+    }
+    return Object.entries(counts)
+      .map(([name, count]) => (count > 1 ? `${name}×${count}` : name))
+      .join(', ');
   }
 }

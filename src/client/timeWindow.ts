@@ -16,9 +16,9 @@
 
 export interface CustomRangeValue {
   kind: 'range';
-  /** 起点（含），毫秒时间戳 */
+  /** 起点（含）：选中首日本地 00:00:00.000 */
   fromTs: number;
-  /** 终点（含），毫秒时间戳 */
+  /** 终点（含）：选中末日本地 23:59:59.999；发 API 时再 min(..., now) 避免查未来桶 */
   toTs: number;
 }
 
@@ -37,6 +37,25 @@ export const WINDOW_OPTIONS: { value: 'today' | 'yesterday' | number; label: str
 ];
 
 export const DEFAULT_WINDOW: WindowValue = 'today';
+
+function localTodayStartMs(now = Date.now()): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * 日历区间查询终点：
+ * - 存储：末日本地 23:59:59.999（新版 RangePicker）
+ * - 兼容旧 URL：曾写入「点击时刻」而非 23:59:59
+ * - 只要区间覆盖今天，每次查询都延伸到 now；历史日则用 min(存储终点, now)
+ */
+function effectiveRangeEnd(storedEndTs: number, now = Date.now()): number {
+  if (storedEndTs >= localTodayStartMs(now)) {
+    return now;
+  }
+  return Math.min(storedEndTs, now);
+}
 
 /** 把毫秒时间戳格式化成后端接口接受的 UTC bucket 字符串 YYYY-MM-DDTHH:mm */
 export function tsToUtcBucketStr(ts: number): string {
@@ -77,7 +96,10 @@ export function resolveWindow(window: WindowValue): { fromTs: number; toTs: numb
   if (typeof window === 'number') {
     return { fromTs: now - window * 60_000, toTs: now };
   }
-  return { fromTs: window.fromTs, toTs: window.toTs };
+  return {
+    fromTs: window.fromTs,
+    toTs: effectiveRangeEnd(window.toTs, now),
+  };
 }
 
 /**
@@ -129,7 +151,7 @@ export function parseWindowFromUrl(raw: string | null | undefined): WindowValue 
  * - 'today'：精确传 from=今日本地时区 00:00 + to=now
  * - 'yesterday'：精确传 from=昨天本地时区 00:00 + to=23:59:59
  * - number：from = now - N 分钟，to = now
- * - range ：直接使用用户手选的 fromTs / toTs（已由 UI 兜底校验范围合法）
+ * - range ：from=首日 00:00，to=min(末日 23:59:59, now)
  */
 export function buildWindowQuery(window: WindowValue): string {
   const now = Date.now();
@@ -151,7 +173,7 @@ export function buildWindowQuery(window: WindowValue): string {
     toTs = now;
   } else {
     fromTs = window.fromTs;
-    toTs = window.toTs;
+    toTs = effectiveRangeEnd(window.toTs, now);
   }
   const fromBucket = tsToUtcBucketStr(fromTs);
   const toBucket = tsToUtcBucketStr(toTs);

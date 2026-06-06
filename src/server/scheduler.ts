@@ -15,6 +15,7 @@ import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 import { recomputeRetentionCohorts } from './metrics/retention';
 import { recomputeLevelPassRates } from './metrics/level-pass-rate';
 import { recomputeAttribution } from './metrics/attribution';
+import { runLoggedTask } from './process-lifecycle';
 
 let started = false;
 
@@ -49,20 +50,22 @@ export function startScheduler(): void {
   //    与聚合 bucket 同样是 5 分钟粒度，dashboard 端到端延迟 ~5 分钟，对广告业务完全够用，
   //    比之前 30s 一次节省 ~10 倍 CloudBase 调用次数
   const eventsCron = process.env.ANALYTICS_EVENTS_CRON || '*/5 * * * *';
-  cron.schedule(eventsCron, async () => {
-    for (const game of getEnabledAnalyticsGames()) {
-      try {
-        const summary = await ingestEventsForGame(game);
-        if (summary.fetched > 0) {
-          console.log(
-            `[scheduler] events ${game.gameKey}: fetched=${summary.fetched}, inserted=${summary.inserted}, ` +
-              `cursor=${summary.cursorBefore} -> ${summary.cursorAfter}, adMinuteRows=${summary.newAdMinuteRows}`,
-          );
+  cron.schedule(eventsCron, () => {
+    runLoggedTask('scheduler/events', async () => {
+      for (const game of getEnabledAnalyticsGames()) {
+        try {
+          const summary = await ingestEventsForGame(game);
+          if (summary.fetched > 0) {
+            console.log(
+              `[scheduler] events ${game.gameKey}: fetched=${summary.fetched}, inserted=${summary.inserted}, ` +
+                `cursor=${summary.cursorBefore} -> ${summary.cursorAfter}, adMinuteRows=${summary.newAdMinuteRows}`,
+            );
+          }
+        } catch (error) {
+          console.error(`[scheduler] events 拉取失败 ${game.gameKey}:`, error);
         }
-      } catch (error) {
-        console.error(`[scheduler] events 拉取失败 ${game.gameKey}:`, error);
       }
-    }
+    });
   });
 
   // 3) 兜底清理过期事件：每天凌晨 3 点跑一次
@@ -157,11 +160,11 @@ export function startScheduler(): void {
     }
   };
   cron.schedule(ltvCron, () => {
-    void runLtvRecompute('cron');
+    runLoggedTask('scheduler/ltv', () => runLtvRecompute('cron'));
   });
   // 进程启动后异步触发一次，避免 dashboard 第一次打开时看到的还是上次部署前的数据
   setTimeout(() => {
-    void runLtvRecompute('startup');
+    runLoggedTask('scheduler/ltv-startup', () => runLtvRecompute('startup'));
   }, 5_000);
 
   // 6) 闯关模式近 30 天通关率：每天凌晨 4:20 计算完整的最近 30 天，并发布给游戏端读取。

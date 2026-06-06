@@ -132,11 +132,9 @@ function BusinessHeaderControls() {
             value={[dayjs(resolved.fromTs), dayjs(resolved.toTs)] as [Dayjs, Dayjs]}
             onChange={(range) => {
               if (!range || !range[0] || !range[1]) return;
-              // 用户在日历里选 5/3 ~ 5/8 时，落地为 5/3 00:00 ~ 5/8 23:59:59；
-              // 但 toTs 不能越过"现在"，否则后端按未来时间生成空桶 / 客户端时钟漂移会让某些桶
-              // active_uu=ad_uau=1 算出 100% 渗透率误导发版分析。这里 clamp 到 now。
+              // 落地为 首日 00:00 ~ 末日 23:59:59.999；真正发 API 时再由 timeWindow 做 min(..., now)
               const fromTs = range[0].startOf('day').valueOf();
-              const toTs = Math.min(range[1].endOf('day').valueOf(), Date.now());
+              const toTs = range[1].endOf('day').valueOf();
               if (toTs <= fromTs) {
                 message.warning('结束时间必须晚于开始时间');
                 return;
@@ -144,7 +142,10 @@ function BusinessHeaderControls() {
               setWindowSel({ kind: 'range', fromTs, toTs });
             }}
             presets={[
-              { label: '今天', value: [dayjs().startOf('day'), dayjs()] as [Dayjs, Dayjs] },
+              {
+                label: '今天',
+                value: [dayjs().startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs],
+              },
               {
                 label: '昨天',
                 value: [
@@ -154,11 +155,17 @@ function BusinessHeaderControls() {
               },
               {
                 label: '近 7 天',
-                value: [dayjs().subtract(6, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs],
+                value: [
+                  dayjs().subtract(6, 'day').startOf('day'),
+                  dayjs().endOf('day'),
+                ] as [Dayjs, Dayjs],
               },
               {
                 label: '近 30 天',
-                value: [dayjs().subtract(29, 'day').startOf('day'), dayjs()] as [Dayjs, Dayjs],
+                value: [
+                  dayjs().subtract(29, 'day').startOf('day'),
+                  dayjs().endOf('day'),
+                ] as [Dayjs, Dayjs],
               },
             ]}
           />

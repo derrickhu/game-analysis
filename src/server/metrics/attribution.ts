@@ -77,6 +77,25 @@ export interface AttributionDailyCohortRow {
   click_id_users: number;
 }
 
+export interface ReengagementDailyRow {
+  touch_date: string;
+  reengaged_users: number;
+  paid_or_known_users: number;
+  click_id_users: number;
+  touch_events: number;
+}
+
+export interface ReengagementProviderRow {
+  key: string;
+  provider: string;
+  channel: string;
+  campaign_id: string;
+  adgroup_id: string;
+  creative_id: string;
+  reengaged_users: number;
+  touch_events: number;
+}
+
 export interface AttributionOverview {
   game_key: string;
   from_date: string;
@@ -92,6 +111,14 @@ export interface AttributionOverview {
     postback_dry_run: number;
   };
   daily_cohorts: AttributionDailyCohortRow[];
+  reengagement_summary: {
+    reengaged_users: number;
+    paid_or_known_users: number;
+    click_id_users: number;
+    touch_events: number;
+  };
+  reengagement_daily: ReengagementDailyRow[];
+  reengagement_by_provider: ReengagementProviderRow[];
   rankings: AttributionOverviewRow[];
   quality: Array<{ key: string; label: string; count: number; ratio: number }>;
   recent_touchpoints: Array<Record<string, unknown>>;
@@ -99,13 +126,34 @@ export interface AttributionOverview {
 }
 
 function parseParams(value: RawEventRow['params_json']): Record<string, unknown> {
+  return parseJsonObject(value);
+}
+
+/** MySQL JSON 列读出来可能是 object，也可能是 string */
+function parseJsonObject(value: unknown): Record<string, unknown> {
   if (!value) return {};
-  if (typeof value === 'object') return value;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function stringifyJson(value: unknown): string {
+  if (typeof value === 'string') return value || '{}';
   try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    return JSON.stringify(value ?? {});
   } catch {
-    return {};
+    return '{}';
   }
 }
 
@@ -262,37 +310,48 @@ async function listFirstSeen(gameKey: string): Promise<FirstSeenRow[]> {
   return rows as FirstSeenRow[];
 }
 
-async function listFirstTouchByUser(gameKey: string): Promise<Map<string, AttributionTouchpointRow>> {
+async function listTouchpointsByUser(gameKey: string): Promise<Map<string, AttributionTouchpointRow[]>> {
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
-    `SELECT t.*
-       FROM attribution_touchpoints t
-       JOIN (
-         SELECT game_key, user_key, MIN(event_ts) AS min_ts
-           FROM attribution_touchpoints
-          WHERE game_key = ?
-          GROUP BY game_key, user_key
-       ) m ON t.game_key = m.game_key AND t.user_key = m.user_key AND t.event_ts = m.min_ts
-      WHERE t.game_key = ?`,
-    [gameKey, gameKey],
+    `SELECT * FROM attribution_touchpoints WHERE game_key = ? ORDER BY user_key, event_ts ASC`,
+    [gameKey],
   );
-  const out = new Map<string, AttributionTouchpointRow>();
+  const out = new Map<string, AttributionTouchpointRow[]>();
   for (const row of rows as AttributionTouchpointRow[]) {
-    if (!out.has(row.user_key)) out.set(row.user_key, row);
+    const list = out.get(row.user_key) || [];
+    list.push(row);
+    out.set(row.user_key, list);
   }
   return out;
 }
 
+/** 首触只认「注册当天」的启动触点，避免老用户投流后回流污染历史 cohort */
+function selectRegistrationDayFirstTouch(
+  firstSeenTs: number,
+  touches: AttributionTouchpointRow[] | undefined,
+): AttributionTouchpointRow | undefined {
+  if (!touches || touches.length === 0) return undefined;
+  const firstSeenDate = toLocalDateKey(firstSeenTs);
+  const dayStart = dateStartTs(firstSeenDate);
+  const dayEnd = dateEndTs(firstSeenDate);
+  const onRegistrationDay = touches.filter((t) => t.event_ts >= dayStart && t.event_ts <= dayEnd);
+  if (onRegistrationDay.length === 0) return undefined;
+  return onRegistrationDay.reduce((min, t) => (t.event_ts < min.event_ts ? t : min));
+}
+
 export async function resolveUserAttribution(gameKey: string): Promise<number> {
   await initAttributionStorage();
-  const [firstSeen, firstTouchByUser] = await Promise.all([
+  const [firstSeen, touchpointsByUser] = await Promise.all([
     listFirstSeen(gameKey),
-    listFirstTouchByUser(gameKey),
+    listTouchpointsByUser(gameKey),
   ]);
   const now = Date.now();
   const rows: UserAttributionRow[] = firstSeen.map((user) => {
-    const touch = firstTouchByUser.get(user.user_key);
-    const raw = touch ? JSON.parse(touch.raw_json || '{}') as Record<string, unknown> : {};
+    const touch = selectRegistrationDayFirstTouch(
+      Number(user.first_seen_ts || 0),
+      touchpointsByUser.get(user.user_key),
+    );
+    const raw = touch ? parseJsonObject(touch.raw_json) : {};
     const provider = touch?.provider || 'organic';
     const type = touch ? attributionType(raw, provider) : 'organic';
     const match = touch ? matchType(raw, provider) : 'organic';
@@ -315,7 +374,7 @@ export async function resolveUserAttribution(gameKey: string): Promise<number> {
       gdt_vid: touch?.gdt_vid || '',
       launch_scene: touch?.launch_scene || '',
       touch_id: touch?.touch_id || '',
-      raw_json: touch?.raw_json || '{}',
+      raw_json: stringifyJson(touch?.raw_json),
       updated_at: now,
     };
   });
@@ -500,6 +559,146 @@ export async function recomputeAttribution(
   };
 }
 
+/** 拉新/触点同步：有广告参数或非 organic/unknown 的来源 */
+function isAdTouchSignal(provider: string, clickId: string, gdtVid: string): boolean {
+  if (clickId || gdtVid) return true;
+  return provider !== 'organic' && provider !== 'unknown' && provider !== '';
+}
+
+/** 回流归因：仅统计广告再触达（投流/点击标识），不含 referrer_app、share 等跳转 */
+function isReengagementAdTouch(provider: string, clickId: string, gdtVid: string): boolean {
+  if (clickId || gdtVid) return true;
+  return provider === 'tencent_ads';
+}
+
+function isReengagementTouch(firstSeenTs: number, touchTs: number): boolean {
+  return toLocalDateKey(firstSeenTs) < toLocalDateKey(touchTs);
+}
+
+async function computeReengagementMetrics(
+  gameKey: string,
+  from: string,
+  to: string,
+): Promise<{
+  summary: AttributionOverview['reengagement_summary'];
+  daily: ReengagementDailyRow[];
+  byProvider: ReengagementProviderRow[];
+}> {
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `SELECT t.user_key, t.event_ts, t.provider, t.channel, t.campaign_id, t.adgroup_id,
+            t.creative_id, t.click_id, t.gdt_vid, ua.first_seen_ts
+       FROM attribution_touchpoints t
+       INNER JOIN user_attribution ua
+         ON t.game_key = ua.game_key AND t.user_key = ua.user_key
+      WHERE t.game_key = ?
+        AND t.event_ts BETWEEN ? AND ?`,
+    [gameKey, dateStartTs(from), dateEndTs(to)],
+  );
+
+  const dailyMap = new Map<string, {
+    users: Set<string>;
+    paidUsers: Set<string>;
+    clickUsers: Set<string>;
+    touchEvents: number;
+  }>();
+  const providerMap = new Map<string, {
+    provider: string;
+    channel: string;
+    campaign_id: string;
+    adgroup_id: string;
+    creative_id: string;
+    users: Set<string>;
+    touchEvents: number;
+  }>();
+  const periodUsers = new Set<string>();
+  const periodPaidUsers = new Set<string>();
+  const periodClickUsers = new Set<string>();
+  let periodTouchEvents = 0;
+
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const provider = str(row.provider);
+    const clickId = str(row.click_id);
+    const gdtVid = str(row.gdt_vid);
+    if (!isReengagementAdTouch(provider, clickId, gdtVid)) continue;
+
+    const touchTs = num(row.event_ts);
+    const firstSeenTs = num(row.first_seen_ts);
+    if (!isReengagementTouch(firstSeenTs, touchTs)) continue;
+
+    const touchDate = toLocalDateKey(touchTs);
+    if (touchDate < from || touchDate > to) continue;
+
+    const userKey = str(row.user_key);
+    periodUsers.add(userKey);
+    periodTouchEvents += 1;
+    if (provider === 'tencent_ads') periodPaidUsers.add(userKey);
+    if (clickId || gdtVid) periodClickUsers.add(userKey);
+
+    let daily = dailyMap.get(touchDate);
+    if (!daily) {
+      daily = { users: new Set(), paidUsers: new Set(), clickUsers: new Set(), touchEvents: 0 };
+      dailyMap.set(touchDate, daily);
+    }
+    daily.users.add(userKey);
+    daily.touchEvents += 1;
+    if (provider === 'tencent_ads') daily.paidUsers.add(userKey);
+    if (clickId || gdtVid) daily.clickUsers.add(userKey);
+
+    const providerKey = [provider, str(row.channel), str(row.campaign_id), str(row.adgroup_id), str(row.creative_id)].join('|');
+    let bucket = providerMap.get(providerKey);
+    if (!bucket) {
+      bucket = {
+        provider,
+        channel: str(row.channel),
+        campaign_id: str(row.campaign_id),
+        adgroup_id: str(row.adgroup_id),
+        creative_id: str(row.creative_id),
+        users: new Set(),
+        touchEvents: 0,
+      };
+      providerMap.set(providerKey, bucket);
+    }
+    bucket.users.add(userKey);
+    bucket.touchEvents += 1;
+  }
+
+  const daily = [...dailyMap.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([touch_date, bucket]) => ({
+      touch_date,
+      reengaged_users: bucket.users.size,
+      paid_or_known_users: bucket.paidUsers.size,
+      click_id_users: bucket.clickUsers.size,
+      touch_events: bucket.touchEvents,
+    }));
+
+  const byProvider = [...providerMap.values()]
+    .map((bucket) => ({
+      key: [bucket.provider, bucket.channel, bucket.campaign_id, bucket.adgroup_id, bucket.creative_id].join('|'),
+      provider: bucket.provider,
+      channel: bucket.channel,
+      campaign_id: bucket.campaign_id,
+      adgroup_id: bucket.adgroup_id,
+      creative_id: bucket.creative_id,
+      reengaged_users: bucket.users.size,
+      touch_events: bucket.touchEvents,
+    }))
+    .sort((a, b) => b.reengaged_users - a.reengaged_users || b.touch_events - a.touch_events)
+    .slice(0, 200);
+
+  return {
+    summary: {
+      reengaged_users: periodUsers.size,
+      paid_or_known_users: periodPaidUsers.size,
+      click_id_users: periodClickUsers.size,
+      touch_events: periodTouchEvents,
+    },
+    daily,
+    byProvider,
+  };
+}
+
 export async function getAttributionOverview(
   gameKey: string,
   fromDate?: string,
@@ -618,6 +817,8 @@ export async function getAttributionOverview(
     ratio: total > 0 ? round4(item.count / total) : 0,
   }));
 
+  const reengagement = await computeReengagementMetrics(gameKey, from, to);
+
   const [recentTouchpoints] = await pool.query(
     `SELECT touch_id, event_ts, user_key, provider, channel, campaign_id, adgroup_id,
             creative_id, click_id, gdt_vid, launch_scene, match_source, raw_json
@@ -651,6 +852,9 @@ export async function getAttributionOverview(
       postback_dry_run: postbackDryRun,
     },
     daily_cohorts,
+    reengagement_summary: reengagement.summary,
+    reengagement_daily: reengagement.daily,
+    reengagement_by_provider: reengagement.byProvider,
     rankings,
     quality,
     recent_touchpoints: recentTouchpoints as Array<Record<string, unknown>>,

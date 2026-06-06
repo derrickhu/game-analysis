@@ -821,11 +821,19 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!findAnalyticsGame(gameKey)) {
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
-    const result = await recomputeAttribution(gameKey, {
-      fromDate: body.from_date,
-      toDate: body.to_date,
-    });
-    return { ok: true, ...result };
+    try {
+      const result = await recomputeAttribution(gameKey, {
+        fromDate: body.from_date,
+        toDate: body.to_date,
+      });
+      return { ok: true, ...result };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'RECOMPUTE_ATTRIBUTION_FAILED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   // 通用 cohort 留存分析：按某个新增日期 cohort 输出 D0-D30 留存曲线，并按设备类型拆分。
