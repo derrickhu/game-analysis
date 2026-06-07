@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Card, Col, Empty, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
+import { Alert, Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -19,13 +19,6 @@ interface StarLevelRow {
   to_level: number;
   user_cnt: number;
   event_cnt: number;
-}
-
-interface TutorialStepRow {
-  step_id: string;
-  user_cnt: number;
-  event_cnt: number;
-  avg_duration_ms: number;
 }
 
 interface GrowthKpi {
@@ -49,19 +42,8 @@ interface GrowthResponse {
   query?: { game_key: string; from: string; to: string; window_minutes: number };
   kpi?: GrowthKpi;
   level_distribution?: StarLevelRow[];
-  tutorial_funnel?: TutorialStepRow[];
   code?: string;
   error?: string;
-}
-
-function formatDuration(ms: number): string {
-  if (!ms || !Number.isFinite(ms)) return '-';
-  if (ms < 1000) return `${ms} ms`;
-  const sec = Math.round(ms / 1000);
-  if (sec < 60) return `${sec} 秒`;
-  const min = Math.floor(sec / 60);
-  const remain = sec % 60;
-  return `${min} 分 ${remain} 秒`;
 }
 
 /**
@@ -104,7 +86,6 @@ export function GrowthProgressPanel() {
   }, [gameKey, windowSel, refreshToken, load]);
 
   const levelDist = data?.level_distribution || [];
-  const tutorial = data?.tutorial_funnel || [];
   const kpi = data?.kpi;
 
   const levelDistOption = useMemo(() => {
@@ -144,56 +125,6 @@ export function GrowthProgressPanel() {
       ],
     };
   }, [levelDist]);
-
-  const tutorialOption = useMemo(() => {
-    if (tutorial.length === 0) return null;
-    return {
-      tooltip: { trigger: 'item', formatter: '{b}: {c} 人' },
-      series: [
-        {
-          type: 'funnel',
-          left: '10%',
-          right: '10%',
-          top: 30,
-          bottom: 30,
-          minSize: '15%',
-          maxSize: '95%',
-          sort: 'none',
-          gap: 4,
-          label: { show: true, position: 'inside', color: '#fff', fontWeight: 600 },
-          data: tutorial.map((s) => ({
-            name: s.step_id,
-            value: s.user_cnt,
-          })),
-        },
-      ],
-    };
-  }, [tutorial]);
-
-  const tutorialColumns = [
-    { title: '引导步骤', dataIndex: 'step_id', key: 'step_id' },
-    {
-      title: '完成用户数',
-      dataIndex: 'user_cnt',
-      key: 'user_cnt',
-      align: 'right' as const,
-      render: (v: number) => formatInt(v),
-    },
-    {
-      title: '事件数',
-      dataIndex: 'event_cnt',
-      key: 'event_cnt',
-      align: 'right' as const,
-      render: (v: number) => formatInt(v),
-    },
-    {
-      title: '平均耗时',
-      dataIndex: 'avg_duration_ms',
-      key: 'avg_duration_ms',
-      align: 'right' as const,
-      render: (v: number) => formatDuration(v),
-    },
-  ];
 
   return (
     <Card
@@ -262,30 +193,6 @@ export function GrowthProgressPanel() {
             </Col>
           </Row>
         </Card>
-
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={10}>
-            <Card type="inner" title="新手引导漏斗（窗口内步骤）">
-              {tutorialOption ? (
-                <ReactECharts option={tutorialOption} style={{ height: 320 }} />
-              ) : (
-                <Empty description="窗口内还没有 tutorial_step 事件" />
-              )}
-            </Card>
-          </Col>
-          <Col xs={24} lg={14}>
-            <Card type="inner" title="引导步骤明细（查卡在哪一步）">
-              <Table
-                size="small"
-                dataSource={tutorial}
-                rowKey="step_id"
-                pagination={false}
-                columns={tutorialColumns}
-                locale={{ emptyText: '暂无引导步骤数据' }}
-              />
-            </Card>
-          </Col>
-        </Row>
 
         <Card type="inner" title="等级成长（长期参考）">
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>

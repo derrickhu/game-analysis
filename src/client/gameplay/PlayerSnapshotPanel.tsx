@@ -8,7 +8,6 @@ import {
   Row,
   Space,
   Statistic,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -56,12 +55,6 @@ interface ValueBucket {
   min_value: number;
 }
 
-interface TutorialStepBucket {
-  step: number;
-  user_cnt: number;
-  completed: 0 | 1;
-}
-
 interface DailyTrendPoint {
   date: string;
   user_count: number;
@@ -93,7 +86,6 @@ interface SnapshotResponse {
   huayuan_buckets?: ValueBucket[];
   diamond_buckets?: ValueBucket[];
   deco_buckets?: ValueBucket[];
-  tutorial_steps?: TutorialStepBucket[];
   daily_trend?: DailyTrendPoint[];
   latest_run?: LatestRun | null;
   code?: string;
@@ -321,18 +313,6 @@ export function PlayerSnapshotPanel() {
     };
   }, [data?.daily_trend]);
 
-  // 教程停留分布表格
-  const tutorialColumns = [
-    { title: '步骤', dataIndex: 'step', key: 'step', render: (v: number) => `Step ${v}` },
-    { title: '玩家数', dataIndex: 'user_cnt', key: 'user_cnt', align: 'right' as const, render: formatInt },
-    {
-      title: '是否已完成',
-      dataIndex: 'completed',
-      key: 'completed',
-      render: (v: 0 | 1) => (v === 1 ? <Tag color="green">已完成</Tag> : <Tag>引导中</Tag>),
-    },
-  ];
-
   return (
     <Card
       title={
@@ -543,17 +523,6 @@ export function PlayerSnapshotPanel() {
                 </Card>
               </Col>
             </Row>
-
-            {/* 教程停留 */}
-            <Card size="small" title="新手引导停留分布（按 tutorial.step 字段）">
-              <Table
-                dataSource={data?.tutorial_steps || []}
-                columns={tutorialColumns}
-                rowKey={(r) => `${r.step}-${r.completed}`}
-                pagination={false}
-                size="small"
-              />
-            </Card>
 
             {/* 30 天趋势 */}
             <Card size="small" title="最近 30 天每日趋势（横切面平均）">
