@@ -107,6 +107,13 @@ export const ALL_GAMES: GameDescriptor[] = [
     gameplayPanels: ['level_progress', 'match_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'xiaochu' },
   },
+  {
+    gameKey: 'wujin_wenzhang',
+    displayName: '无尽纹章',
+    hasAnalyticsSdk: false,
+    hasSnapshotIngest: false,
+    monetization: { ads: true, iap: false, ecpmProfile: 'wujin_wenzhang' },
+  },
 ];
 
 export function getGameDescriptor(gameKey: string): GameDescriptor | undefined {
