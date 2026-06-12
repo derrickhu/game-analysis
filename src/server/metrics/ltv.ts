@@ -11,6 +11,8 @@ import {
 } from '../ltv-db';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+/** 与 realtime-overview / retention 一致：新增、cohort、CPI 分母都以 session_start 为准 */
+const SESSION_START = 'session_start';
 const TARGET_LTV_DAYS = [0, 1, 3, 7, 14, 30] as const;
 const MAX_COHORT_AGE_DAY = 30;
 
@@ -203,8 +205,9 @@ async function listFirstSeen(gameKey: string): Promise<Map<string, string>> {
     `SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
        FROM analytics_events
       WHERE game_key = ?
+        AND event_name = ?
       GROUP BY ${USER_KEY_SQL}`,
-    [gameKey],
+    [gameKey, SESSION_START],
   );
   const map = new Map<string, string>();
   for (const row of rows as FirstSeenRow[]) {
@@ -259,7 +262,10 @@ export async function recomputeUserDaily(
     const userKey = String(row.user_key || '');
     if (!userKey) continue;
     const dateKey = toLocalDateKey(Number(row.event_ts));
-    const firstSeenDate = firstSeen.get(userKey) || dateKey;
+    const firstSeenDate = firstSeen.get(userKey);
+    // 无 session_start 的用户不参与 user_daily / cohort / ROI 新增统计；
+    // 原先 fallback 到 dateKey 会把 attribution_touchpoint 等前置事件误算为「当天新增」。
+    if (!firstSeenDate) continue;
     const key = `${dateKey}|${userKey}`;
     let daily = dailyMap.get(key);
     if (!daily) {
