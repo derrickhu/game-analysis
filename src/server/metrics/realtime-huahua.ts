@@ -24,9 +24,11 @@
 
 import { getMysqlPool, isMysqlMode } from '../db';
 import { countNewUsersInWindow } from './realtime-overview';
+import { toLocalDateKey } from './ltv';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+const SESSION_START = 'session_start';
 
 /** merge_success 默认 10% 采样，估算实际值时把样本数 ×10 折算回去 */
 const MERGE_SAMPLING_INVERSE = 10;
@@ -610,10 +612,35 @@ export interface HuahuaGrowthKpi {
   computed_at: number;
 }
 
+export interface HuahuaNewUserTutorialDailyPoint {
+  /** 新用户 cohort 日期（本地 YYYY-MM-DD，以首次 session_start 为准） */
+  date: string;
+  /** 当日首次 session_start 的去重用户数 */
+  new_users: number;
+  /** 上述新用户中曾完成 tutorial_completed 的人数（全生命周期） */
+  new_user_tutorial_completed_users: number;
+  /** 上述新用户中曾触发 tutorial_step(done) 的人数（全生命周期） */
+  new_user_tutorial_started_users: number;
+  /** 上述新用户中曾 order_deliver 的人数（全生命周期） */
+  new_user_order_deliver_users: number;
+  /** 上述新用户中曾 ad_show 的人数（全生命周期） */
+  new_user_ad_show_users: number;
+  /** 教程完成率 = completed / new_users */
+  new_user_tutorial_complete_rate: number | null;
+  /** 进入引导率 = started / new_users */
+  new_user_tutorial_start_rate: number | null;
+  /** 首单交付率 = order_deliver / new_users */
+  new_user_order_deliver_rate: number | null;
+  /** 看广告率 = ad_show / new_users */
+  new_user_ad_show_rate: number | null;
+}
+
 export interface HuahuaGrowthResult {
   kpi: HuahuaGrowthKpi;
   level_distribution: HuahuaStarLevelRow[];
   tutorial_funnel: HuahuaTutorialStepRow[];
+  /** 近 N 天（默认 7）按日 cohort 的教程完成率 + 新用户基数 */
+  new_user_tutorial_daily: HuahuaNewUserTutorialDailyPoint[];
 }
 
 async function computeStarLevelDistribution(
@@ -814,18 +841,147 @@ function rate(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
 }
 
+function dateKeyToStartTs(dateKey: string): number {
+  return new Date(`${dateKey}T00:00:00`).getTime();
+}
+
+function addDays(dateKey: string, days: number): string {
+  const d = new Date(`${dateKey}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return toLocalDateKey(d.getTime());
+}
+
+/**
+ * 近 N 天（含今天）按日 cohort 的新户核心指标。
+ * 分母 = 当日首次 session_start；转化分子 = 全生命周期是否达成。
+ */
+async function computeNewUserTutorialDailySeries(
+  gameKey: string,
+  days = 7,
+): Promise<HuahuaNewUserTutorialDailyPoint[]> {
+  ensureMysql();
+  const today = toLocalDateKey(Date.now());
+  const fromDate = addDays(today, -(days - 1));
+  const fromTs = dateKeyToStartTs(fromDate);
+  const toTs = dateKeyToStartTs(addDays(today, 1)) - 1;
+
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `WITH first_sess AS (
+       SELECT ${USER_KEY_SQL} AS uk, MIN(event_ts) AS first_ts
+         FROM analytics_events
+        WHERE game_key = ? AND event_name = ?
+        GROUP BY ${USER_KEY_SQL}
+     ),
+     cohort AS (
+       SELECT uk, first_ts
+         FROM first_sess
+        WHERE first_ts BETWEEN ? AND ?
+     ),
+     tutorial_done AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = 'tutorial_step'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.step_id')) = 'tutorial_completed'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
+     ),
+     tutorial_started AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ?
+          AND event_name = 'tutorial_step'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
+     ),
+     order_deliver AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ? AND event_name = 'order_deliver'
+     ),
+     ad_show AS (
+       SELECT DISTINCT ${USER_KEY_SQL} AS uk
+         FROM analytics_events
+        WHERE game_key = ? AND event_name = 'ad_show'
+     )
+     SELECT c.uk,
+            c.first_ts,
+            CASE WHEN td.uk IS NOT NULL THEN 1 ELSE 0 END AS completed,
+            CASE WHEN ts.uk IS NOT NULL THEN 1 ELSE 0 END AS started,
+            CASE WHEN od.uk IS NOT NULL THEN 1 ELSE 0 END AS order_deliver,
+            CASE WHEN ads.uk IS NOT NULL THEN 1 ELSE 0 END AS ad_show
+       FROM cohort c
+       LEFT JOIN tutorial_done td ON c.uk = td.uk
+       LEFT JOIN tutorial_started ts ON c.uk = ts.uk
+       LEFT JOIN order_deliver od ON c.uk = od.uk
+       LEFT JOIN ad_show ads ON c.uk = ads.uk`,
+    [gameKey, SESSION_START, fromTs, toTs, gameKey, gameKey, gameKey, gameKey],
+  );
+
+  type DayStats = {
+    new_users: number;
+    completed: number;
+    started: number;
+    order_deliver: number;
+    ad_show: number;
+  };
+  const byDate = new Map<string, DayStats>();
+  for (let i = 0; i < days; i++) {
+    byDate.set(addDays(fromDate, i), {
+      new_users: 0,
+      completed: 0,
+      started: 0,
+      order_deliver: 0,
+      ad_show: 0,
+    });
+  }
+
+  for (const r of rows as Array<{
+    uk: string;
+    first_ts: number;
+    completed: number;
+    started: number;
+    order_deliver: number;
+    ad_show: number;
+  }>) {
+    const dateKey = toLocalDateKey(Number(r.first_ts));
+    const bucket = byDate.get(dateKey);
+    if (!bucket) continue;
+    bucket.new_users++;
+    if (Number(r.completed) === 1) bucket.completed++;
+    if (Number(r.started) === 1) bucket.started++;
+    if (Number(r.order_deliver) === 1) bucket.order_deliver++;
+    if (Number(r.ad_show) === 1) bucket.ad_show++;
+  }
+
+  return Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, stats]) => ({
+      date,
+      new_users: stats.new_users,
+      new_user_tutorial_completed_users: stats.completed,
+      new_user_tutorial_started_users: stats.started,
+      new_user_order_deliver_users: stats.order_deliver,
+      new_user_ad_show_users: stats.ad_show,
+      new_user_tutorial_complete_rate: rate(stats.completed, stats.new_users),
+      new_user_tutorial_start_rate: rate(stats.started, stats.new_users),
+      new_user_order_deliver_rate: rate(stats.order_deliver, stats.new_users),
+      new_user_ad_show_rate: rate(stats.ad_show, stats.new_users),
+    }));
+}
+
 export async function getHuahuaGrowthOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
 ): Promise<HuahuaGrowthResult> {
   ensureMysql();
-  const [levelDist, tutorial, sessionUsers, cohort, newUsers] = await Promise.all([
+  const [levelDist, tutorial, sessionUsers, cohort, newUsers, tutorialDaily] = await Promise.all([
     computeStarLevelDistribution(gameKey, fromTs, toTs),
     computeTutorialFunnel(gameKey, fromTs, toTs),
     countSessionUsers(gameKey, fromTs, toTs),
     computeNewUserCohortMetrics(gameKey, fromTs, toTs),
     countNewUsersInWindow(gameKey, fromTs, toTs),
+    computeNewUserTutorialDailySeries(gameKey, 7),
   ]);
   // new_users 与大盘「窗口内新增」同口径；cohort 查询负责引导/首单/看广告转化分子
   const alignedNewUsers = newUsers > 0 ? newUsers : cohort.new_users;
@@ -859,6 +1015,7 @@ export async function getHuahuaGrowthOverview(
     },
     level_distribution: levelDist.rows,
     tutorial_funnel: tutorial.rows,
+    new_user_tutorial_daily: tutorialDaily,
   };
 }
 
