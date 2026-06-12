@@ -68,7 +68,8 @@ export function startScheduler(): void {
     });
   });
 
-  // 3) 兜底清理过期事件：每天凌晨 3 点跑一次
+  // 3) 兜底清理过期事件：每天凌晨 3 点（可通过 ANALYTICS_CLEAN_CRON 覆盖）
+  //    与 LTV 默认 cron（7,22,37,52 分）错开，降低同进程 node-cron 漏触发风险。
   // 双 retention：本地 90 天（D7 留存兜底 + 历史回看）/ 云端 7 天（CloudBase 配额限制）
   // 通过 ANALYTICS_RETENTION_DAYS_LOCAL / ANALYTICS_RETENTION_DAYS_CLOUD 单独覆盖
   // 兼容老变量 ANALYTICS_RETENTION_DAYS：未设新变量时，老变量同时作用于本地和云端
@@ -128,11 +129,11 @@ export function startScheduler(): void {
     await runPlayerSnapshotIngest('hotpot');
   });
 
-  // 5) 通用 LTV / user_daily 回算：每 15 分钟把所有已接入 SDK 的游戏批量重算一次
-  //    - 不回算等于 ROI 页面看到的 game_new_users / d30_projected_ltv 永远是上一次手动回算时的快照
-  //    - 频率 15 分钟与 events 拉取 5 分钟相比已经留了缓冲，避免事件还未入库就回算空数据
-  //    - 通过 LTV_RECOMPUTE_CRON 覆盖；服务启动后立即跑一次保证刚部署也有最新底座
-  const ltvCron = process.env.LTV_RECOMPUTE_CRON || '*/15 * * * *';
+  // 5) 通用 LTV / user_daily 回算：默认每 15 分钟一次，但刻意错开整点/刻钟
+  //    （7,22,37,52），避免与 03:00 事件清理、04:00 玩家快照等同进程运维任务撞车。
+  //    Node 单线程：LTV 重算若与 cleanup 同时落在 03:00，会占满 event loop，node-cron 会漏触发清理。
+  //    通过 LTV_RECOMPUTE_CRON 覆盖；服务启动后 5s 仍立即跑一次保证刚部署也有最新底座。
+  const ltvCron = process.env.LTV_RECOMPUTE_CRON || '7,22,37,52 * * * *';
   const runLtvRecompute = async (trigger: 'cron' | 'startup') => {
     for (const game of getEnabledAnalyticsGames()) {
       try {
