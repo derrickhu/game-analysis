@@ -100,6 +100,14 @@ export const ALL_GAMES: GameDescriptor[] = [
     monetization: { ads: true, iap: false, ecpmProfile: 'caizhu' },
   },
   {
+    gameKey: 'petTower',
+    displayName: '灵宠消消塔2',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    gameplayPanels: ['level_progress'],
+    monetization: { ads: false, iap: false, ecpmProfile: 'petTower' },
+  },
+  {
     gameKey: 'xiaochu',
     displayName: '灵宠消消塔',
     hasAnalyticsSdk: true,

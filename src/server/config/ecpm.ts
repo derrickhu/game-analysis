@@ -37,6 +37,10 @@ const ECPM_TABLE: Record<string, number> = {
   'caizhu.interstitial': 9,
   'caizhu._default': 15,
 
+  // petTower（灵宠消消塔2）
+  'petTower.reward': 24,
+  'petTower._default': 15,
+
   // xiaochu
   'xiaochu.reward.staminaRecovery': 24,
   'xiaochu.reward.signDouble': 24,

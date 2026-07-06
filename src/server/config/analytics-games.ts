@@ -45,6 +45,12 @@ export const ANALYTICS_GAMES: AnalyticsGameConfig[] = [
     enabled: true,
   },
   {
+    gameKey: 'petTower',
+    displayName: '灵宠消消塔2',
+    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
+    enabled: true,
+  },
+  {
     gameKey: 'xiaochu',
     displayName: '灵宠消消塔',
     cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
