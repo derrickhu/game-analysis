@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, Empty, Input, Select, Space, Table, Tag, Typography } from 'antd';
 
+import { appendPlatformQuery, type PlatformFilter } from '../shared/platforms';
 import { type WindowValue, buildWindowQuery } from './timeWindow';
 
 /**
@@ -58,6 +59,7 @@ interface EventNamesResponse {
 
 interface EventsExplorerProps {
   fixedGameKey: string;
+  platform: PlatformFilter;
   windowSel: WindowValue;
   refreshToken: number;
 }
@@ -83,7 +85,7 @@ function eventColor(name: string): string {
 }
 
 export function EventsExplorer(props: EventsExplorerProps): ReactElement {
-  const { fixedGameKey: gameKey, windowSel, refreshToken } = props;
+  const { fixedGameKey: gameKey, platform, windowSel, refreshToken } = props;
   const [data, setData] = useState<EventsResponse | null>(null);
   const [eventNames, setEventNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,7 +96,7 @@ export function EventsExplorer(props: EventsExplorerProps): ReactElement {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const winQs = buildWindowQuery(windowSel);
+      const winQs = appendPlatformQuery(buildWindowQuery(windowSel), platform);
       const params = new URLSearchParams();
       params.set('game', gameKey);
       if (eventNameFilter) params.set('event_name', eventNameFilter);
@@ -109,28 +111,28 @@ export function EventsExplorer(props: EventsExplorerProps): ReactElement {
     } finally {
       setLoading(false);
     }
-  }, [gameKey, windowSel, eventNameFilter, userQuery, pagination.current, pagination.pageSize]);
+  }, [gameKey, platform, windowSel, eventNameFilter, userQuery, pagination.current, pagination.pageSize]);
 
   const loadEventNames = useCallback(async () => {
     try {
-      const winQs = buildWindowQuery(windowSel);
+      const winQs = appendPlatformQuery(buildWindowQuery(windowSel), platform);
       const res = await fetch(`/api/realtime/event-names?game=${encodeURIComponent(gameKey)}&${winQs}`);
       const json = (await res.json()) as EventNamesResponse;
       if (json.ok && json.names) setEventNames(json.names);
     } catch (err) {
       console.warn('[events] load names failed', err);
     }
-  }, [gameKey, windowSel]);
+  }, [gameKey, platform, windowSel]);
 
   useEffect(() => {
     void loadData();
     void loadEventNames();
   }, [loadData, loadEventNames, refreshToken]);
 
-  // 切换游戏 / 时间窗口 / 筛选时回到第 1 页（保持 pageSize 不变）
+  // 切换游戏 / 平台 / 时间窗口 / 筛选时回到第 1 页（保持 pageSize 不变）
   useEffect(() => {
     setPagination((prev) => ({ ...prev, current: 1 }));
-  }, [gameKey, windowSel, eventNameFilter, userQuery]);
+  }, [gameKey, platform, windowSel, eventNameFilter, userQuery]);
 
   const columns = useMemo(
     () => [

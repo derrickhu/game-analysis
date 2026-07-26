@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 import {
@@ -101,7 +102,7 @@ function bucketShort(bucket: string): string {
  * 受全局 AnalyticsFilterContext 控制：gameKey/windowSel/refreshToken 变化都会触发重新拉取。
  */
 export function LevelProgressPanel() {
-  const { gameKey, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [passRateSnapshot, setPassRateSnapshot] = useState<LevelPassRateSnapshot | null>(null);
   const requestSeqRef = useRef(0);
@@ -110,7 +111,7 @@ export function LevelProgressPanel() {
     async (nextGameKey: string, nextWindow: WindowValue) => {
       const seq = ++requestSeqRef.current;
       try {
-        const queryStr = buildWindowQuery(nextWindow);
+        const queryStr = appendPlatformQuery(buildWindowQuery(nextWindow), platform);
         const res = await fetch(
           `/api/realtime/level-progress?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         );
@@ -139,12 +140,12 @@ export function LevelProgressPanel() {
         message.error(`加载关卡进度失败: ${String(error)}`);
       }
     },
-    [setLastRefreshedAt],
+    [platform, setLastRefreshedAt],
   );
 
   useEffect(() => {
     void load(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, load]);
+  }, [gameKey, platform, windowSel, refreshToken, load]);
 
   const levelDistOption = useMemo(() => {
     const dist = progress?.distribution || [];

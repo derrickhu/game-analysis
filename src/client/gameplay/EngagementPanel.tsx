@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
@@ -78,7 +79,7 @@ const DRAW_KIND_LABELS: Record<string, string> = {
  * 数据源：/api/realtime/huahua-engagement
  */
 export function EngagementPanel() {
-  const { gameKey, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [data, setData] = useState<EngagementResponse | null>(null);
   const requestSeqRef = useRef(0);
 
@@ -86,7 +87,7 @@ export function EngagementPanel() {
     async (nextGameKey: string, nextWindow: WindowValue) => {
       const seq = ++requestSeqRef.current;
       try {
-        const queryStr = buildWindowQuery(nextWindow);
+        const queryStr = appendPlatformQuery(buildWindowQuery(nextWindow), platform);
         const res = await fetch(
           `/api/realtime/huahua-engagement?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         );
@@ -102,12 +103,12 @@ export function EngagementPanel() {
         message.error(`加载参与度数据失败：${String(error)}`);
       }
     },
-    [setLastRefreshedAt],
+    [platform, setLastRefreshedAt],
   );
 
   useEffect(() => {
     void load(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, load]);
+  }, [gameKey, platform, windowSel, refreshToken, load]);
 
   const kpi = data?.kpi;
   const series = data?.series || [];

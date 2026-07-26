@@ -161,17 +161,18 @@ async function callDeepSeek(prompt: string): Promise<{ model: string; content: s
 
 export async function analyzeRoiWithDeepSeek(
   gameKey: string,
-  options: { baselineDays?: number; maturityDay?: 3 | 7 } = {},
+  options: { baselineDays?: number; maturityDay?: 3 | 7; platform?: string } = {},
 ): Promise<RoiAiAnalysisResult> {
   const decisionDate = toLocalDateKey(Date.now());
   const baselineDays = Math.max(3, Math.min(30, Number(options.baselineDays) || 7));
   const maturityDay = options.maturityDay || 3;
+  const platform = options.platform;
   const fromDate = addDays(decisionDate, -baselineDays);
   const toDate = addDays(decisionDate, -1);
   const [decision, roiOverview, ltvOverview] = await Promise.all([
-    getBusinessRoiDecision(gameKey, { targetDate: decisionDate, baselineDays, maturityDay }),
-    getBusinessRoiOverview(gameKey, fromDate, toDate),
-    getLtvOverview(gameKey, fromDate, toDate),
+    getBusinessRoiDecision(gameKey, { targetDate: decisionDate, baselineDays, maturityDay, platform }),
+    getBusinessRoiOverview(gameKey, fromDate, toDate, platform),
+    getLtvOverview(gameKey, fromDate, toDate, platform),
   ]);
   const prompt = buildPrompt({ gameKey, baselineDays, decision, roiOverview, ltvOverview });
   const ai = await withTimeout(callDeepSeek(prompt), deepSeekTimeoutMs());

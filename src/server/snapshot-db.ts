@@ -354,22 +354,53 @@ export async function listRecentSnapshotRuns(gameKey?: string, limit = 10): Prom
 /** 给前端 panel 用：取最新一次成功的 snapshot 元信息 */
 export async function getLatestSnapshotMeta(
   gameKey: string,
+  options: {
+    /** 档案 user_id 前缀，如 wx / dy；有值时只统计该端玩家 */
+    userIdPrefix?: string;
+    /** 优先匹配该云集合的拉取 run（如 huahua_tt_playerData） */
+    collectionName?: string;
+  } = {},
 ): Promise<{ snapshot_date: string; user_count: number; latest_run?: PlayerSnapshotRun } | null> {
   ensureGameKey(gameKey);
   const pool = await getMysqlPool();
-  const [dateRows] = await pool.query(
-    `SELECT snapshot_date, COUNT(*) AS cnt
-       FROM ${snapshotTable(gameKey)}
-      GROUP BY snapshot_date
-      ORDER BY snapshot_date DESC
-      LIMIT 1`,
-  );
+  const prefix = (options.userIdPrefix || '').trim();
+  const [dateRows] = prefix
+    ? await pool.query(
+        `SELECT snapshot_date, COUNT(*) AS cnt
+           FROM ${snapshotTable(gameKey)}
+          WHERE user_id LIKE ?
+          GROUP BY snapshot_date
+          ORDER BY snapshot_date DESC
+          LIMIT 1`,
+        [`${prefix}:%`],
+      )
+    : await pool.query(
+        `SELECT snapshot_date, COUNT(*) AS cnt
+           FROM ${snapshotTable(gameKey)}
+          GROUP BY snapshot_date
+          ORDER BY snapshot_date DESC
+          LIMIT 1`,
+      );
   const top = (dateRows as Array<{ snapshot_date: string; cnt: number }>)[0];
   if (!top) return null;
-  const runs = await listRecentSnapshotRuns(gameKey, 1);
+
+  let latestRun: PlayerSnapshotRun | undefined;
+  if (options.collectionName) {
+    const [runRows] = await pool.query(
+      `SELECT * FROM player_snapshot_runs
+        WHERE game_key = ? AND collection_name = ?
+        ORDER BY started_at DESC LIMIT 1`,
+      [gameKey, options.collectionName],
+    );
+    latestRun = (runRows as PlayerSnapshotRun[])[0];
+  }
+  if (!latestRun) {
+    const runs = await listRecentSnapshotRuns(gameKey, 1);
+    latestRun = runs[0];
+  }
   return {
     snapshot_date: top.snapshot_date,
     user_count: Number(top.cnt),
-    latest_run: runs[0],
+    latest_run: latestRun,
   };
 }

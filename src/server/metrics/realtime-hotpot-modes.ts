@@ -1,5 +1,6 @@
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
+import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 
@@ -98,8 +99,9 @@ export async function getHotpotFruitSliceOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HotpotFruitSliceOverview> {
-  const rows = await listModeRows(gameKey, FRUIT_SLICE_EVENTS, fromTs, toTs);
+  const rows = await listModeRows(gameKey, FRUIT_SLICE_EVENTS, fromTs, toTs, platform);
   const starts = rows.filter((r) => r.event_name === 'fruit_slice_start');
   const ends = rows.filter((r) => r.event_name === 'fruit_slice_end');
   const startUsers = new Set(starts.map((r) => r.uk));
@@ -134,8 +136,9 @@ export async function getHotpotDailyLimitedOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HotpotDailyLimitedOverview> {
-  const rows = await listModeRows(gameKey, DAILY_LIMITED_EVENTS, fromTs, toTs);
+  const rows = await listModeRows(gameKey, DAILY_LIMITED_EVENTS, fromTs, toTs, platform);
   const starts = rows.filter((r) => r.event_name === 'daily_limited_start');
   const ends = rows.filter((r) => r.event_name === 'daily_limited_end');
   const successEnds = ends.filter((r) => boolParam(r, 'success'));
@@ -176,17 +179,19 @@ async function listModeRows(
   eventNames: readonly string[],
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<AnalyticsRow[]> {
   const placeholders = eventNames.map(() => '?').join(',');
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT event_name, event_ts, ${USER_KEY_SQL} AS uk, params_json
          FROM analytics_events
         WHERE game_key = ? AND event_name IN (${placeholders})
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         ORDER BY event_ts ASC`,
-      [gameKey, ...eventNames, fromTs, toTs],
+      [gameKey, ...eventNames, fromTs, toTs, ...platformParams],
     );
     return rows as AnalyticsRow[];
   }
@@ -194,9 +199,9 @@ async function listModeRows(
     `SELECT event_name, event_ts, ${USER_KEY_SQL} AS uk, params_json
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (${placeholders})
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       ORDER BY event_ts ASC`,
-  ).all(gameKey, ...eventNames, fromTs, toTs) as AnalyticsRow[];
+  ).all(gameKey, ...eventNames, fromTs, toTs, ...platformParams) as AnalyticsRow[];
 }
 
 function buildFruitSliceSeries(rows: AnalyticsRow[], fromTs: number, toTs: number): HotpotFruitSliceOverview['series'] {

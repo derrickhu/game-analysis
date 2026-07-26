@@ -294,6 +294,48 @@ do_status() {
   echo ""
 }
 
+launchd_loaded() {
+  local label="$1"
+  launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1
+}
+
+# 已 install launchd 时，普通 kill 会被 KeepAlive 立刻拉起旧/同配置进程；
+# 改代码后必须 kickstart -k 才能让新源码生效。
+do_restart_launchd() {
+  local domain="gui/$(id -u)"
+  if launchd_loaded "$LAUNCHD_API_LABEL"; then
+    echo "🔄 launchd kickstart api ..."
+    launchctl kickstart -k "${domain}/${LAUNCHD_API_LABEL}"
+  else
+    stop_one api "$API_PORT"
+  fi
+  if launchd_loaded "$LAUNCHD_WEB_LABEL"; then
+    echo "🔄 launchd kickstart web ..."
+    launchctl kickstart -k "${domain}/${LAUNCHD_WEB_LABEL}"
+  else
+    stop_one web "$WEB_PORT"
+  fi
+  sleep 1
+  # 若未走 launchd，kickstart 分支不会启动，这里兜底 start
+  do_start
+}
+
+do_stop() {
+  local domain="gui/$(id -u)"
+  # 若装了 launchd KeepAlive，先 bootout 再杀端口，否则杀完会被立刻拉起
+  if launchd_loaded "$LAUNCHD_API_LABEL"; then
+    echo "⏸ 临时卸下 launchd api（KeepAlive 不会再拉起）..."
+    launchctl bootout "${domain}/${LAUNCHD_API_LABEL}" 2>/dev/null || true
+  fi
+  if launchd_loaded "$LAUNCHD_WEB_LABEL"; then
+    echo "⏸ 临时卸下 launchd web（KeepAlive 不会再拉起）..."
+    launchctl bootout "${domain}/${LAUNCHD_WEB_LABEL}" 2>/dev/null || true
+  fi
+  stop_one api "$API_PORT"
+  stop_one web "$WEB_PORT"
+  echo "✅ 服务已停止（若需开机自启，重新执行 ./start.sh install）"
+}
+
 do_start() {
   start_one api "$API_PORT" "$NODE_BIN" "$TSX_BIN" src/server/index.ts
   start_one web "$WEB_PORT" "$NODE_BIN" "$VITE_BIN" --host 0.0.0.0 --port "$WEB_PORT" --strictPort
@@ -317,15 +359,10 @@ case "${1:-start}" in
     do_start
     ;;
   stop)
-    stop_one api "$API_PORT"
-    stop_one web "$WEB_PORT"
-    echo "✅ 服务已停止"
+    do_stop
     ;;
   restart)
-    stop_one api "$API_PORT"
-    stop_one web "$WEB_PORT"
-    sleep 0.5
-    do_start
+    do_restart_launchd
     ;;
   status|st)
     do_status

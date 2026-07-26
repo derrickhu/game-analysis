@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type mysql from 'mysql2/promise';
 
 import { getDb, getMysqlPool, isMysqlMode } from './db';
+import { PLATFORM_SQL, platformSqlParams } from './metrics/platform-filter';
 
 /**
  * Analytics 事件流相关的本地存储：events 流水表 + 拉取 cursor 表 + 分钟级广告聚合表。
@@ -498,11 +499,13 @@ export async function listEvents(opts: {
   toTs: number;
   eventName?: string;
   userQuery?: string;   // 模糊匹配 user_id / anonymous_id（任一字段包含都返回）
+  platform?: string;
   limit: number;
   offset: number;
 }): Promise<{ rows: AnalyticsEventRow[]; total: number }> {
   await ensureMigrated();
-  const { gameKey, fromTs, toTs, eventName, userQuery, limit, offset } = opts;
+  const { gameKey, fromTs, toTs, eventName, userQuery, platform, limit, offset } = opts;
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const conds = ['game_key = ?', 'event_ts BETWEEN ? AND ?'];
@@ -515,12 +518,13 @@ export async function listEvents(opts: {
       conds.push('(user_id LIKE ? OR anonymous_id LIKE ?)');
       args.push(`%${userQuery}%`, `%${userQuery}%`);
     }
-    const where = conds.join(' AND ');
-    const [countRows] = await pool.query(`SELECT COUNT(*) AS c FROM analytics_events WHERE ${where}`, args);
+    const where = `${conds.join(' AND ')}${PLATFORM_SQL}`;
+    const whereArgs = [...args, ...platformParams];
+    const [countRows] = await pool.query(`SELECT COUNT(*) AS c FROM analytics_events WHERE ${where}`, whereArgs);
     const total = Number((countRows as Array<{ c: number }>)[0]?.c || 0);
     const [rows] = await pool.query(
       `SELECT * FROM analytics_events WHERE ${where} ORDER BY event_ts DESC LIMIT ? OFFSET ?`,
-      [...args, limit, offset],
+      [...whereArgs, limit, offset],
     );
     return { rows: rows as AnalyticsEventRow[], total };
   }
@@ -535,34 +539,36 @@ export async function listEvents(opts: {
     conds.push('(user_id LIKE ? OR anonymous_id LIKE ?)');
     args.push(`%${userQuery}%`, `%${userQuery}%`);
   }
-  const where = conds.join(' AND ');
-  const total = (db.prepare(`SELECT COUNT(*) AS c FROM analytics_events WHERE ${where}`).get(...args) as { c: number }).c;
+  const where = `${conds.join(' AND ')}${PLATFORM_SQL}`;
+  const whereArgs = [...args, ...platformParams];
+  const total = (db.prepare(`SELECT COUNT(*) AS c FROM analytics_events WHERE ${where}`).get(...whereArgs) as { c: number }).c;
   const rows = db
     .prepare(`SELECT * FROM analytics_events WHERE ${where} ORDER BY event_ts DESC LIMIT ? OFFSET ?`)
-    .all(...args, limit, offset) as AnalyticsEventRow[];
+    .all(...whereArgs, limit, offset) as AnalyticsEventRow[];
   return { rows, total };
 }
 
 /** 列出某游戏在 [fromTs,toTs] 内出现过的所有事件名，供前端事件名下拉用 */
-export async function listEventNames(gameKey: string, fromTs: number, toTs: number): Promise<string[]> {
+export async function listEventNames(gameKey: string, fromTs: number, toTs: number, platform?: string): Promise<string[]> {
   await ensureMigrated();
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT DISTINCT event_name FROM analytics_events
-        WHERE game_key = ? AND event_ts BETWEEN ? AND ?
+        WHERE game_key = ? AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         ORDER BY event_name ASC`,
-      [gameKey, fromTs, toTs],
+      [gameKey, fromTs, toTs, ...platformParams],
     );
     return (rows as Array<{ event_name: string }>).map((r) => r.event_name);
   }
   const rows = getDb()
     .prepare(
       `SELECT DISTINCT event_name FROM analytics_events
-        WHERE game_key = ? AND event_ts BETWEEN ? AND ?
+        WHERE game_key = ? AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         ORDER BY event_name ASC`,
     )
-    .all(gameKey, fromTs, toTs) as Array<{ event_name: string }>;
+    .all(gameKey, fromTs, toTs, ...platformParams) as Array<{ event_name: string }>;
   return rows.map((r) => r.event_name);
 }
 

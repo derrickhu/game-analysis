@@ -15,6 +15,8 @@ import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import type { FilterValue, SorterResult } from 'antd/es/table/interface';
 
+import { platformToSnapshotPrefix, type PlatformFilter } from '../../shared/platforms';
+
 import { formatInt } from './utils';
 
 const { Text } = Typography;
@@ -54,6 +56,8 @@ interface ListResponse {
 
 interface PlayerSnapshotTableProps {
   gameKey: string;
+  /** 全局平台筛选（Header 上的 Select）；映射成档案前缀作为默认平台筛选，可被表格内手动筛选覆盖 */
+  globalPlatform: PlatformFilter;
   /** 由父组件传入的快照日期；切换日期时整张表会重新拉 */
   snapshotDate: string;
   /** 父组件「立即拉取」完成后会 +1，子组件感知到刷新即可重拉 */
@@ -130,7 +134,12 @@ function formatTs(ts: number): string {
  *   3. 数值过滤（min_level / min_huayuan）放在表格上方的工具条里，
  *      因为 Antd 列头 filterDropdown 写起来很重，独立工具条更清晰
  */
-export function PlayerSnapshotTable({ gameKey, snapshotDate, refreshNonce = 0 }: PlayerSnapshotTableProps) {
+export function PlayerSnapshotTable({
+  gameKey,
+  globalPlatform,
+  snapshotDate,
+  refreshNonce = 0,
+}: PlayerSnapshotTableProps) {
   const [state, setState] = useState<TableState>(DEFAULT_STATE);
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -155,7 +164,9 @@ export function PlayerSnapshotTable({ gameKey, snapshotDate, refreshNonce = 0 }:
         params.set('page', String(s.page));
         params.set('pageSize', String(s.pageSize));
         if (s.userIdSearch) params.set('q', s.userIdSearch);
-        if (s.platform) params.set('platform', s.platform);
+        // 表格内手动选的平台列筛选优先；未手动选时跟随全局平台（wechat→wx / douyin→dy）
+        const effectivePlatform = s.platform || platformToSnapshotPrefix(globalPlatform);
+        if (effectivePlatform) params.set('platform', effectivePlatform);
         if (s.tutorialCompleted === 0 || s.tutorialCompleted === 1) {
           params.set('tutorialCompleted', String(s.tutorialCompleted));
         }
@@ -177,7 +188,7 @@ export function PlayerSnapshotTable({ gameKey, snapshotDate, refreshNonce = 0 }:
         if (seq === requestSeqRef.current) setLoading(false);
       }
     },
-    [gameKey],
+    [gameKey, globalPlatform],
   );
 
   useEffect(() => {

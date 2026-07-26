@@ -9,6 +9,7 @@ import {
   type CohortLtvDailyRow,
   type UserDailyRow,
 } from '../ltv-db';
+import { PLATFORM_SQL, isPlatformFilterActive, platformSqlParams } from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 /** 与 realtime-overview / retention 一致：新增、cohort、CPI 分母都以 session_start 为准 */
@@ -345,14 +346,16 @@ export async function recomputeUserDaily(
   return { game_key: gameKey, from_date: fromDate, to_date: toDate, rows: inserted };
 }
 
-export async function recomputeCohortLtv(
+/**
+ * cohort LTV 核心计算：把 user_daily 行按 first_seen_date 分组重算出 D0..D30 的 cohort 汇总。
+ * 纯内存计算，不落库；recomputeCohortLtv（落库）和按平台过滤的实时路径（不落库）共用。
+ */
+export function buildCohortLtvRows(
   gameKey: string,
-  options: { fromCohortDate?: string; toCohortDate?: string } = {},
-): Promise<RecomputeLtvResult> {
-  const userRows = await listUserDailyRows(gameKey);
-  const cohortDates = userRows.map((r) => r.first_seen_date).sort();
-  const fromCohortDate = options.fromCohortDate || cohortDates[0] || toLocalDateKey(Date.now());
-  const toCohortDate = options.toCohortDate || cohortDates[cohortDates.length - 1] || fromCohortDate;
+  userRows: UserDailyRow[],
+  fromCohortDate: string,
+  toCohortDate: string,
+): CohortLtvDailyRow[] {
   const eligibleRows = userRows.filter(
     (r) => r.first_seen_date >= fromCohortDate && r.first_seen_date <= toCohortDate,
   );
@@ -410,6 +413,35 @@ export async function recomputeCohortLtv(
       });
     }
   }
+  return out;
+}
+
+/** 某平台在该游戏下所有曾有 session_start 的 user_key 集合（用于按平台过滤 user_daily/cohort，全生命周期口径，不限时间窗） */
+export async function listPlatformUserKeys(gameKey: string, platform: string): Promise<Set<string>> {
+  const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
+  const [rows] = await pool.query(
+    `SELECT DISTINCT ${USER_KEY_SQL} AS user_key
+       FROM analytics_events
+      WHERE game_key = ? AND event_name = ?${PLATFORM_SQL}`,
+    [gameKey, SESSION_START, ...platformParams],
+  );
+  const set = new Set<string>();
+  for (const row of rows as Array<{ user_key: string }>) {
+    if (row.user_key) set.add(row.user_key);
+  }
+  return set;
+}
+
+export async function recomputeCohortLtv(
+  gameKey: string,
+  options: { fromCohortDate?: string; toCohortDate?: string } = {},
+): Promise<RecomputeLtvResult> {
+  const userRows = await listUserDailyRows(gameKey);
+  const cohortDates = userRows.map((r) => r.first_seen_date).sort();
+  const fromCohortDate = options.fromCohortDate || cohortDates[0] || toLocalDateKey(Date.now());
+  const toCohortDate = options.toCohortDate || cohortDates[cohortDates.length - 1] || fromCohortDate;
+  const out = buildCohortLtvRows(gameKey, userRows, fromCohortDate, toCohortDate);
   const inserted = await replaceCohortLtvRows(gameKey, fromCohortDate, toCohortDate, out);
   return { game_key: gameKey, from_cohort_date: fromCohortDate, to_cohort_date: toCohortDate, rows: inserted };
 }
@@ -443,8 +475,21 @@ export async function getLtvOverview(
   gameKey: string,
   fromCohortDate: string,
   toCohortDate: string,
+  platform?: string,
 ): Promise<LtvApiResult> {
-  const rows = await listCohortLtvRows(gameKey, fromCohortDate, toCohortDate);
+  let rows: CohortLtvDailyRow[];
+  let notice =
+    'LTV 收入优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM，因此仍是按广告展示分摊后的 cohort 收入口径。';
+  if (isPlatformFilterActive(platform)) {
+    // 预聚合表 analytics_cohort_ltv_daily 不区分平台；选定具体平台时基于该平台的 user_daily 子集
+    // 在内存里重算 cohort LTV，不落库，避免污染全平台聚合数据。
+    const platformUserKeys = await listPlatformUserKeys(gameKey, platform as string);
+    const userRows = (await listUserDailyRows(gameKey)).filter((r) => platformUserKeys.has(r.user_key));
+    rows = buildCohortLtvRows(gameKey, userRows, fromCohortDate, toCohortDate);
+    notice += '（已按平台实时重算，未落库）';
+  } else {
+    rows = await listCohortLtvRows(gameKey, fromCohortDate, toCohortDate);
+  }
   const byCohort = new Map<string, CohortLtvDailyRow[]>();
   for (const row of rows) {
     const list = byCohort.get(row.cohort_date) || [];
@@ -500,7 +545,7 @@ export async function getLtvOverview(
     game_key: gameKey,
     estimated: true,
     revenue_type: 'ad_estimated',
-    notice: 'LTV 收入优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM，因此仍是按广告展示分摊后的 cohort 收入口径。',
+    notice,
     cohorts,
     summary: buildSummary(cohorts),
   };
@@ -557,8 +602,16 @@ export async function getMonetizationOverview(
   gameKey: string,
   fromDate: string,
   toDate: string,
+  platform?: string,
 ): Promise<MonetizationResult> {
-  const rows = (await listUserDailyRows(gameKey)).filter((r) => r.date_key >= fromDate && r.date_key <= toDate);
+  let allUserDaily = await listUserDailyRows(gameKey);
+  let notice = '商业化金额优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM。';
+  if (isPlatformFilterActive(platform)) {
+    const platformUserKeys = await listPlatformUserKeys(gameKey, platform as string);
+    allUserDaily = allUserDaily.filter((r) => platformUserKeys.has(r.user_key));
+    notice += '（已按平台过滤，未落库）';
+  }
+  const rows = allUserDaily.filter((r) => r.date_key >= fromDate && r.date_key <= toDate);
   const activeUsers = new Set(rows.filter((r) => r.is_active).map((r) => r.user_key));
   const newUsers = new Set(rows.filter((r) => r.is_new_user).map((r) => r.user_key));
   const allUsers = new Set(rows.map((r) => r.user_key));
@@ -571,12 +624,12 @@ export async function getMonetizationOverview(
   const adShow = rows.reduce((sum, r) => sum + Number(r.ad_show_cnt || 0), 0);
   const adRequest = rows.reduce((sum, r) => sum + Number(r.ad_request_cnt || 0), 0);
   const adComplete = rows.reduce((sum, r) => sum + Number(r.ad_complete_cnt || 0), 0);
-  const ltv = await getLtvOverview(gameKey, fromDate, toDate);
+  const ltv = await getLtvOverview(gameKey, fromDate, toDate, platform);
   const dau = activeUsers.size;
   return {
     game_key: gameKey,
     estimated: true,
-    notice: '商业化金额优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM。',
+    notice,
     total_days: totalDays,
     active_user_days: activeUserDays,
     avg_dau: Math.round(avgDau),

@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import ReactECharts from 'echarts-for-react';
 
 import { getGameDescriptor } from '../../shared/games';
+import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
@@ -141,6 +142,7 @@ function MetricTitle({ label, help }: { label: string; help: string }) {
 export function LtvPage({ windowOverride }: { windowOverride?: WindowValue } = {}) {
   const {
     gameKey,
+    platform,
     windowSel,
     refreshToken,
     setLoading,
@@ -166,7 +168,7 @@ export function LtvPage({ windowOverride }: { windowOverride?: WindowValue } = {
       setLoading(true);
       try {
         // 商业化页传入 windowOverride 时使用页内窗口；独立 LTV 路由才跟随顶部日期选择器。
-        const queryStr = buildWindowQuery(nextWindow);
+        const queryStr = appendPlatformQuery(buildWindowQuery(nextWindow), platform);
         const [ltvRes, monetizationRes] = await Promise.all([
           fetch(`/api/realtime/ltv?game=${encodeURIComponent(nextGameKey)}&${queryStr}`).then(
             (r) => r.json() as Promise<LtvResponse>,
@@ -190,12 +192,12 @@ export function LtvPage({ windowOverride }: { windowOverride?: WindowValue } = {
         if (seq === requestSeqRef.current) setLoading(false);
       }
     },
-    [setLastRefreshedAt, setLoading],
+    [platform, setLastRefreshedAt, setLoading],
   );
 
   useEffect(() => {
     void loadAll(gameKey, activeWindow);
-  }, [gameKey, activeWindow, refreshToken, loadAll]);
+  }, [gameKey, platform, activeWindow, refreshToken, loadAll]);
 
   const chartOption = useMemo(() => {
     const cohorts = (ltv?.cohorts || []).slice(-30);

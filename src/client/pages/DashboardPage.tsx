@@ -16,6 +16,7 @@ import {
 import ReactECharts from 'echarts-for-react';
 
 import { getGameDescriptor } from '../../shared/games';
+import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { fetchJson } from '../fetchJson';
 import { RealtimeAdRevenue } from '../RealtimeAdRevenue';
@@ -115,7 +116,8 @@ function formatRetentionFraction(
   returned: number | undefined,
   cohort: number | undefined,
 ): string {
-  const cohortLabel = cohortDate ? `${cohortDate} 活跃` : 'cohort';
+  // 分母是「新增 cohort」（首次 session_start），不是当日活跃；文案勿写成「活跃」以免和 DAU 对不上
+  const cohortLabel = cohortDate ? `${cohortDate} 新增` : 'cohort';
   const anchorLabel = anchorDate ? `${anchorDate} 回访` : '锚点日回访';
   if (cohort === undefined || cohort === 0) return `${cohortLabel} 0 人，暂无样本`;
   return `${cohortLabel} ${cohort} 人 → ${anchorLabel} ${returned ?? 0} 人`;
@@ -214,6 +216,7 @@ function yuan(value: number | null | undefined, digits = 2): string {
 export function DashboardPage() {
   const {
     gameKey,
+    platform,
     windowSel,
     refreshToken,
     setLoading,
@@ -250,7 +253,7 @@ export function DashboardPage() {
       const seq = ++requestSeqRef.current;
       setLoading(true);
       try {
-        const queryStr = buildWindowQuery(nextWindow);
+        const queryStr = appendPlatformQuery(buildWindowQuery(nextWindow), platform);
         const overviewPromise = fetchJson<OverviewResponse>(
           `/api/realtime/overview?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         );
@@ -258,9 +261,12 @@ export function DashboardPage() {
           `/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         );
         const costPromise = fetchJson<AcquisitionCostResponse>(
-          `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${buildDateRangeQuery(nextWindow)}`,
+          `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${appendPlatformQuery(buildDateRangeQuery(nextWindow), platform)}`,
         );
-        const compareQueryStr = buildShiftedWindowQuery(nextWindow, -86_400_000);
+        const compareQueryStr = appendPlatformQuery(
+          buildShiftedWindowQuery(nextWindow, -86_400_000),
+          platform,
+        );
         const compareOverviewPromise = fetchJson<OverviewResponse>(
           `/api/realtime/overview?game=${encodeURIComponent(nextGameKey)}&${compareQueryStr}`,
         );
@@ -268,13 +274,13 @@ export function DashboardPage() {
           `/api/realtime/ad-revenue?game=${encodeURIComponent(nextGameKey)}&${compareQueryStr}`,
         );
         const compareCostPromise = fetchJson<AcquisitionCostResponse>(
-          `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${buildDateRangeQuery(nextWindow, -86_400_000)}`,
+          `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${appendPlatformQuery(buildDateRangeQuery(nextWindow, -86_400_000), platform)}`,
         );
         // D3 ROI 只展示已经完整出数的 cohort：cohort 日 + 3 天必须已经结束。
         const roiToDate = addDaysDateKey(dateKey(Date.now()), -4);
         const roiFromDate = addDaysDateKey(roiToDate, -30);
         const businessRoiPromise = fetchJson<BusinessRoiLiteResponse>(
-          `/api/realtime/business-inputs?game=${encodeURIComponent(nextGameKey)}&from_date=${encodeURIComponent(roiFromDate)}&to_date=${encodeURIComponent(roiToDate)}`,
+          `/api/realtime/business-inputs?game=${encodeURIComponent(nextGameKey)}&${appendPlatformQuery(`from_date=${encodeURIComponent(roiFromDate)}&to_date=${encodeURIComponent(roiToDate)}`, platform)}`,
         );
         const [
           ovRes,
@@ -315,12 +321,12 @@ export function DashboardPage() {
         if (seq === requestSeqRef.current) setLoading(false);
       }
     },
-    [setLoading, setLastRefreshedAt],
+    [platform, setLoading, setLastRefreshedAt],
   );
 
   useEffect(() => {
     void loadAll(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, loadAll]);
+  }, [gameKey, platform, windowSel, refreshToken, loadAll]);
 
   // 活跃 / 新增双线（5 分钟桶）
   const activeChartOption = useMemo(() => {
@@ -640,8 +646,8 @@ export function DashboardPage() {
         </Col>
       </Row>
 
-      <RealtimeAdRevenue fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
-      <RealtimeShare fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />
+      <RealtimeAdRevenue fixedGameKey={gameKey} platform={platform} windowSel={windowSel} refreshToken={refreshToken} />
+      <RealtimeShare fixedGameKey={gameKey} platform={platform} windowSel={windowSel} refreshToken={refreshToken} />
     </Space>
   );
 }

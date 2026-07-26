@@ -16,6 +16,7 @@ import {
 import { ReloadOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 
+import { huahuaPlayerDataCollection } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 
 import { PlayerSnapshotTable } from './PlayerSnapshotTable';
@@ -88,6 +89,8 @@ interface SnapshotResponse {
   deco_buckets?: ValueBucket[];
   daily_trend?: DailyTrendPoint[];
   latest_run?: LatestRun | null;
+  /** 当前平台对应的云存档集合名 */
+  source_collection?: string;
   code?: string;
   error?: string;
 }
@@ -109,7 +112,7 @@ interface SnapshotResponse {
  *   - POST /api/realtime/snapshot-now      手动触发一次全量拉取
  */
 export function PlayerSnapshotPanel() {
-  const { gameKey, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [data, setData] = useState<SnapshotResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [pulling, setPulling] = useState(false);
@@ -118,13 +121,15 @@ export function PlayerSnapshotPanel() {
   const requestSeqRef = useRef(0);
 
   const load = useCallback(
-    async (nextGameKey: string) => {
+    async (nextGameKey: string, nextPlatform: string) => {
       const seq = ++requestSeqRef.current;
       setLoading(true);
       try {
-        const res = await fetch(
-          `/api/realtime/huahua-snapshot?game=${encodeURIComponent(nextGameKey)}`,
-        );
+        const params = new URLSearchParams({
+          game: nextGameKey,
+          platform: nextPlatform,
+        });
+        const res = await fetch(`/api/realtime/huahua-snapshot?${params.toString()}`);
         const json = (await res.json()) as SnapshotResponse;
         if (seq !== requestSeqRef.current) return;
         if (!json.ok) {
@@ -143,8 +148,8 @@ export function PlayerSnapshotPanel() {
   );
 
   useEffect(() => {
-    void load(gameKey);
-  }, [gameKey, refreshToken, load]);
+    void load(gameKey, platform);
+  }, [gameKey, platform, refreshToken, load]);
 
   const handleManualPull = useCallback(async () => {
     if (pulling) return;
@@ -153,7 +158,7 @@ export function PlayerSnapshotPanel() {
       const res = await fetch(`/api/realtime/snapshot-now`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game: gameKey }),
+        body: JSON.stringify({ game: gameKey, platform }),
       });
       const json = (await res.json()) as {
         ok: boolean;
@@ -161,24 +166,25 @@ export function PlayerSnapshotPanel() {
         fetched?: number;
         inserted?: number;
         duration_ms?: number;
+        collection_name?: string;
         error?: string;
       };
       if (json.ok) {
         message.success(
-          `拉取完成 ${json.snapshot_date || ''}：${json.fetched || 0} 条 / ${json.duration_ms || 0}ms`,
+          `拉取完成 ${json.collection_name || ''} ${json.snapshot_date || ''}：${json.fetched || 0} 条 / ${json.duration_ms || 0}ms`,
         );
       } else {
         message.error(`拉取失败：${json.error || '未知错误'}`);
       }
       // 拉完重新查一次，刷新看板 + 通知子表格也重拉
-      await load(gameKey);
+      await load(gameKey, platform);
       setTableRefreshNonce((v) => v + 1);
     } catch (error) {
       message.error(`拉取请求失败：${String(error)}`);
     } finally {
       setPulling(false);
     }
-  }, [gameKey, load, pulling]);
+  }, [gameKey, platform, load, pulling]);
 
   const kpi = data?.kpi;
   const hasData = !!data?.query?.has_data && !!kpi && kpi.user_count > 0;
@@ -324,7 +330,11 @@ export function PlayerSnapshotPanel() {
       extra={
         <Space>
           <Text type="secondary">
-            数据源：每日 04:00 全量拉取 {`huahua_playerData`} 集合
+            数据源：每日 04:00 全量拉取{' '}
+            {data?.source_collection ||
+              data?.latest_run?.collection_name ||
+              huahuaPlayerDataCollection(platform)}{' '}
+            集合
           </Text>
           <Button
             icon={<ReloadOutlined />}
@@ -532,6 +542,7 @@ export function PlayerSnapshotPanel() {
             {/* 玩家明细：服务端排序 + 筛选 + 分页 */}
             <PlayerSnapshotTable
               gameKey={gameKey}
+              globalPlatform={platform}
               snapshotDate={snapshotDate}
               refreshNonce={tableRefreshNonce}
             />

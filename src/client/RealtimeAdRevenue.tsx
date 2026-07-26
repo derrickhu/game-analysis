@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import { appendPlatformQuery, type PlatformFilter } from '../shared/platforms';
 import {
   defaultSeriesZoomStart,
   formatSeriesBucketLabel,
@@ -269,6 +270,8 @@ const kpiCardStyles = {
 interface RealtimeAdRevenueProps {
   /** 必填：当前选中的游戏（由 App 顶部全局选择器决定），本组件随之刷新 */
   fixedGameKey: string;
+  /** 必填：全局渠道平台筛选（由 App 顶部 Select 决定） */
+  platform: PlatformFilter;
   /** 必填：全局时间窗口（由 App 顶部 Select 决定） */
   windowSel: WindowValue;
   /** 必填：每点击一次顶部刷新就 +1，子组件 useEffect 依赖它来重新拉数据 */
@@ -276,7 +279,7 @@ interface RealtimeAdRevenueProps {
 }
 
 export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
-  const { fixedGameKey: gameKey, windowSel, refreshToken } = props;
+  const { fixedGameKey: gameKey, platform, windowSel, refreshToken } = props;
   const [data, setData] = useState<AdRevenueResponse | null>(null);
   const [adErrors, setAdErrors] = useState<AdErrorsResponse | null>(null);
   // 广告错误表格默认折叠为 5 行紧凑视图，避免占满屏。需要排查时再展开看完整列表。
@@ -287,7 +290,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
   const loadData = useCallback(async () => {
     try {
       // 'today' 每次实时算今日 00:00，跨过半夜会自动滑到新的一天
-      const queryStr = buildWindowQuery(windowSel);
+      const queryStr = appendPlatformQuery(buildWindowQuery(windowSel), platform);
       const url = `/api/realtime/ad-revenue?game=${encodeURIComponent(gameKey)}&${queryStr}`;
       const res = await fetch(url);
       const json = (await res.json()) as AdRevenueResponse | { ok: false; error?: string };
@@ -297,11 +300,11 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     } catch (err) {
       console.warn('[realtime-ad] load ad data failed', err);
     }
-  }, [gameKey, windowSel]);
+  }, [gameKey, platform, windowSel]);
 
   const loadAdErrors = useCallback(async () => {
     try {
-      const queryStr = buildWindowQuery(windowSel);
+      const queryStr = appendPlatformQuery(buildWindowQuery(windowSel), platform);
       const url = `/api/realtime/ad-errors?game=${encodeURIComponent(gameKey)}&limit=20&${queryStr}`;
       const res = await fetch(url);
       const json = (await res.json()) as AdErrorsResponse | { ok: false; error?: string };
@@ -311,7 +314,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     } catch (err) {
       console.warn('[realtime-ad] load ad errors failed', err);
     }
-  }, [gameKey, windowSel]);
+  }, [gameKey, platform, windowSel]);
 
   useEffect(() => {
     void loadData();

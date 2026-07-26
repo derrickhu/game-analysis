@@ -1,4 +1,5 @@
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
+import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 
@@ -75,8 +76,9 @@ export async function getCaizhuGameplayOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<CaizhuGameplayOverview> {
-  const rows = await listRows(gameKey, fromTs, toTs);
+  const rows = await listRows(gameKey, fromTs, toTs, platform);
   const classicStarts = rows.filter((row) => row.event_name === 'classic_start');
   const classicEnds = rows.filter((row) => row.event_name === 'classic_end');
   const scores = classicEnds.map((row) => numParam(row, 'score')).filter((v) => v > 0);
@@ -106,19 +108,20 @@ export async function getCaizhuGameplayOverview(
   };
 }
 
-async function listRows(gameKey: string, fromTs: number, toTs: number): Promise<AnalyticsRow[]> {
+async function listRows(gameKey: string, fromTs: number, toTs: number, platform?: string): Promise<AnalyticsRow[]> {
   const placeholders = CAIZHU_EVENTS.map(() => '?').join(',');
+  const platformParams = platformSqlParams(platform);
   const sql = `SELECT event_name, ${USER_KEY_SQL} AS uk, params_json
                  FROM analytics_events
                 WHERE game_key = ?
                   AND event_name IN (${placeholders})
-                  AND event_ts BETWEEN ? AND ?`;
+                  AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`;
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
-    const [rows] = await pool.query(sql, [gameKey, ...CAIZHU_EVENTS, fromTs, toTs]);
+    const [rows] = await pool.query(sql, [gameKey, ...CAIZHU_EVENTS, fromTs, toTs, ...platformParams]);
     return rows as AnalyticsRow[];
   }
-  return getDb().prepare(sql).all(gameKey, ...CAIZHU_EVENTS, fromTs, toTs) as AnalyticsRow[];
+  return getDb().prepare(sql).all(gameKey, ...CAIZHU_EVENTS, fromTs, toTs, ...platformParams) as AnalyticsRow[];
 }
 
 function buildModeEntries(rows: AnalyticsRow[]): CaizhuGameplayOverview['mode_entries'] {

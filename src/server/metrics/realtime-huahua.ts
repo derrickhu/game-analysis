@@ -26,6 +26,7 @@ import { getMysqlPool, isMysqlMode } from '../db';
 import { countNewUsersInWindow } from './realtime-overview';
 import { toLocalDateKey } from './ltv';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
+import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
@@ -128,9 +129,11 @@ async function sumChannelAmount(
   fromTs: number,
   toTs: number,
   channels: Array<{ event: string; field: string; label: string }>,
+  platform?: string,
 ): Promise<HuahuaEconomyChannelRow[]> {
   if (channels.length === 0) return [];
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   // 一行一个渠道：相同 event 不同 field（如 checkin_sign.diamond / streak_bonus_diamond）拆 2 行
   const out: HuahuaEconomyChannelRow[] = [];
   for (const c of channels) {
@@ -140,8 +143,8 @@ async function sumChannelAmount(
          COALESCE(SUM(CAST(JSON_EXTRACT(params_json, ?) AS SIGNED)), 0) AS amount
        FROM analytics_events
        WHERE game_key = ? AND event_name = ?
-         AND event_ts BETWEEN ? AND ?`,
-      [`$.${c.field}`, gameKey, c.event, fromTs, toTs],
+         AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [`$.${c.field}`, gameKey, c.event, fromTs, toTs, ...platformParams],
     );
     const r = (rows as Array<{ cnt: number; amount: number }>)[0];
     const amount = Number(r?.amount || 0);
@@ -158,8 +161,10 @@ async function countEconomyActiveUsers(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<number> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const allEvents = Array.from(
     new Set([
       ...HUAYUAN_IN_CHANNELS.map((c) => c.event),
@@ -175,8 +180,8 @@ async function countEconomyActiveUsers(
     `SELECT COUNT(DISTINCT ${USER_KEY_SQL}) AS uu
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (${placeholders})
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, ...allEvents, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, ...allEvents, fromTs, toTs, ...platformParams],
   );
   return Number((rows as Array<{ uu: number }>)[0]?.uu || 0);
 }
@@ -186,15 +191,17 @@ async function countStaminaSupply(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{ stamina_buy_cnt: number; stamina_ad_cnt: number }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT event_name, COUNT(*) AS c
        FROM analytics_events
       WHERE game_key = ? AND event_name IN ('stamina_buy','stamina_ad_recover')
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       GROUP BY event_name`,
-    [gameKey, fromTs, toTs],
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   let buy = 0;
   let ad = 0;
@@ -214,8 +221,10 @@ async function computeEconomySeries(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaEconomySeriesPoint[]> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const allEvents = Array.from(
     new Set([
       ...HUAYUAN_IN_CHANNELS.map((c) => c.event),
@@ -229,8 +238,8 @@ async function computeEconomySeries(
     `SELECT event_name, event_ts, params_json
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (${placeholders})
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, ...allEvents, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, ...allEvents, fromTs, toTs, ...platformParams],
   );
 
   const map = new Map<string, HuahuaEconomySeriesPoint>();
@@ -284,6 +293,7 @@ export async function getHuahuaEconomyOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaEconomyResult> {
   ensureMysql();
   const [
@@ -295,13 +305,13 @@ export async function getHuahuaEconomyOverview(
     stamina,
     series,
   ] = await Promise.all([
-    sumChannelAmount(gameKey, fromTs, toTs, HUAYUAN_IN_CHANNELS),
-    sumChannelAmount(gameKey, fromTs, toTs, HUAYUAN_OUT_CHANNELS),
-    sumChannelAmount(gameKey, fromTs, toTs, DIAMOND_IN_CHANNELS),
-    sumChannelAmount(gameKey, fromTs, toTs, DIAMOND_OUT_CHANNELS),
-    countEconomyActiveUsers(gameKey, fromTs, toTs),
-    countStaminaSupply(gameKey, fromTs, toTs),
-    computeEconomySeries(gameKey, fromTs, toTs),
+    sumChannelAmount(gameKey, fromTs, toTs, HUAYUAN_IN_CHANNELS, platform),
+    sumChannelAmount(gameKey, fromTs, toTs, HUAYUAN_OUT_CHANNELS, platform),
+    sumChannelAmount(gameKey, fromTs, toTs, DIAMOND_IN_CHANNELS, platform),
+    sumChannelAmount(gameKey, fromTs, toTs, DIAMOND_OUT_CHANNELS, platform),
+    countEconomyActiveUsers(gameKey, fromTs, toTs, platform),
+    countStaminaSupply(gameKey, fromTs, toTs, platform),
+    computeEconomySeries(gameKey, fromTs, toTs, platform),
   ]);
   const totalIn = huayuanIn.reduce((s, r) => s + r.amount, 0);
   const totalOut = huayuanOut.reduce((s, r) => s + r.amount, 0);
@@ -380,15 +390,17 @@ async function countOrderEvents(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<Record<OrderEventName, number>> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT event_name, COUNT(*) AS c
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (?,?,?,?)
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       GROUP BY event_name`,
-    [gameKey, ...ORDER_EVENTS, fromTs, toTs],
+    [gameKey, ...ORDER_EVENTS, fromTs, toTs, ...platformParams],
   );
   const out: Record<OrderEventName, number> = {
     order_spawn: 0,
@@ -407,16 +419,18 @@ async function countTimedOrderRate(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{ spawn: number; deliver: number }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT event_name, COUNT(*) AS c
        FROM analytics_events
       WHERE game_key = ? AND event_name IN ('order_spawn','order_deliver')
         AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.order_type')) = 'timed'
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       GROUP BY event_name`,
-    [gameKey, fromTs, toTs],
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   let spawn = 0;
   let deliver = 0;
@@ -431,16 +445,18 @@ async function sumOrderRewards(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{ total_huayuan: number; total_diamond: number }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         COALESCE(SUM(CAST(JSON_EXTRACT(params_json, '$.huayuan_reward') AS SIGNED)), 0) AS hy,
         COALESCE(SUM(CAST(JSON_EXTRACT(params_json, '$.diamond_reward') AS SIGNED)), 0) AS dm
        FROM analytics_events
       WHERE game_key = ? AND event_name = 'order_deliver'
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   const r = (rows as Array<{ hy: number; dm: number }>)[0];
   return {
@@ -453,8 +469,10 @@ async function computeOrderTierDistribution(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaOrderTierRow[]> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         event_name,
@@ -462,9 +480,9 @@ async function computeOrderTierDistribution(
         COUNT(*) AS c
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (?,?,?,?)
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       GROUP BY event_name, tier`,
-    [gameKey, ...ORDER_EVENTS, fromTs, toTs],
+    [gameKey, ...ORDER_EVENTS, fromTs, toTs, ...platformParams],
   );
   const map = new Map<string, HuahuaOrderTierRow>();
   for (const r of rows as Array<{ event_name: OrderEventName; tier: string | null; c: number }>) {
@@ -497,14 +515,16 @@ async function computeOrderSeries(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaOrderSeriesPoint[]> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT event_name, event_ts
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (?,?,?,?)
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, ...ORDER_EVENTS, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, ...ORDER_EVENTS, fromTs, toTs, ...platformParams],
   );
   const map = new Map<string, HuahuaOrderSeriesPoint>();
   const startBucketTs = bucketToTs(tsToBucket(fromTs));
@@ -529,14 +549,15 @@ export async function getHuahuaOrderOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaOrderResult> {
   ensureMysql();
   const [counts, timed, rewards, byTier, series] = await Promise.all([
-    countOrderEvents(gameKey, fromTs, toTs),
-    countTimedOrderRate(gameKey, fromTs, toTs),
-    sumOrderRewards(gameKey, fromTs, toTs),
-    computeOrderTierDistribution(gameKey, fromTs, toTs),
-    computeOrderSeries(gameKey, fromTs, toTs),
+    countOrderEvents(gameKey, fromTs, toTs, platform),
+    countTimedOrderRate(gameKey, fromTs, toTs, platform),
+    sumOrderRewards(gameKey, fromTs, toTs, platform),
+    computeOrderTierDistribution(gameKey, fromTs, toTs, platform),
+    computeOrderSeries(gameKey, fromTs, toTs, platform),
   ]);
   return {
     kpi: {
@@ -647,16 +668,18 @@ async function computeStarLevelDistribution(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{ rows: HuahuaStarLevelRow[]; totalEvents: number; uniqueUsers: number; maxLevel: number }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         CAST(JSON_EXTRACT(params_json, '$.new_level') AS SIGNED) AS lv,
         ${USER_KEY_SQL} AS uk
        FROM analytics_events
       WHERE game_key = ? AND event_name = 'star_level_up'
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   const userByLevel = new Map<number, Set<string>>();
   const eventByLevel = new Map<number, number>();
@@ -687,8 +710,10 @@ async function computeTutorialFunnel(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{ rows: HuahuaTutorialStepRow[]; completedUsers: number }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.step_id')) AS step_id,
@@ -698,8 +723,8 @@ async function computeTutorialFunnel(
        FROM analytics_events
       WHERE game_key = ? AND event_name = 'tutorial_step'
         AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   // 用 step_index 排序（更稳）；同 step_index 共享一行（理论唯一）
   const userByStep = new Map<string, Set<string>>();
@@ -753,14 +778,15 @@ async function computeTutorialFunnel(
   return { rows: out, completedUsers: completedUsers.size };
 }
 
-async function countSessionUsers(gameKey: string, fromTs: number, toTs: number): Promise<number> {
+async function countSessionUsers(gameKey: string, fromTs: number, toTs: number, platform?: string): Promise<number> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT COUNT(DISTINCT ${USER_KEY_SQL}) AS uu
        FROM analytics_events
       WHERE game_key = ? AND event_name = 'session_start'
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   return Number((rows as Array<{ uu: number }>)[0]?.uu || 0);
 }
@@ -770,6 +796,7 @@ async function computeNewUserCohortMetrics(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{
   new_users: number;
   new_user_tutorial_started_users: number;
@@ -778,11 +805,12 @@ async function computeNewUserCohortMetrics(
   new_user_ad_show_users: number;
 }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `WITH      first_sess AS (
        SELECT ${USER_KEY_SQL} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
-        WHERE game_key = ? AND event_name = 'session_start'
+        WHERE game_key = ? AND event_name = 'session_start'${PLATFORM_SQL}
         GROUP BY ${USER_KEY_SQL}
      ),
      new_users AS (
@@ -794,7 +822,7 @@ async function computeNewUserCohortMetrics(
         WHERE game_key = ?
           AND event_name = 'tutorial_step'
           AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.step_id')) = 'tutorial_completed'
-          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'${PLATFORM_SQL}
      ),
      tutorial_started AS (
        SELECT DISTINCT ${USER_KEY_SQL} AS uk
@@ -802,17 +830,17 @@ async function computeNewUserCohortMetrics(
         WHERE game_key = ?
           AND event_name = 'tutorial_step'
           AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
      ),
      order_deliver AS (
        SELECT DISTINCT ${USER_KEY_SQL} AS uk
          FROM analytics_events
-        WHERE game_key = ? AND event_name = 'order_deliver'
+        WHERE game_key = ? AND event_name = 'order_deliver'${PLATFORM_SQL}
      ),
      ad_show AS (
        SELECT DISTINCT ${USER_KEY_SQL} AS uk
          FROM analytics_events
-        WHERE game_key = ? AND event_name = 'ad_show'
+        WHERE game_key = ? AND event_name = 'ad_show'${PLATFORM_SQL}
      )
      SELECT
        COUNT(DISTINCT n.uk) AS new_users,
@@ -825,7 +853,14 @@ async function computeNewUserCohortMetrics(
        LEFT JOIN tutorial_done td ON n.uk = td.uk
        LEFT JOIN order_deliver od ON n.uk = od.uk
        LEFT JOIN ad_show ads ON n.uk = ads.uk`,
-    [gameKey, fromTs, toTs, gameKey, gameKey, fromTs, toTs, gameKey, gameKey],
+    [
+      gameKey, ...platformParams,
+      fromTs, toTs,
+      gameKey, ...platformParams,
+      gameKey, fromTs, toTs, ...platformParams,
+      gameKey, ...platformParams,
+      gameKey, ...platformParams,
+    ],
   );
   const row = (rows as Array<Record<string, unknown>>)[0] || {};
   return {
@@ -858,19 +893,21 @@ function addDays(dateKey: string, days: number): string {
 async function computeNewUserTutorialDailySeries(
   gameKey: string,
   days = 7,
+  platform?: string,
 ): Promise<HuahuaNewUserTutorialDailyPoint[]> {
   ensureMysql();
   const today = toLocalDateKey(Date.now());
   const fromDate = addDays(today, -(days - 1));
   const fromTs = dateKeyToStartTs(fromDate);
   const toTs = dateKeyToStartTs(addDays(today, 1)) - 1;
+  const platformParams = platformSqlParams(platform);
 
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `WITH first_sess AS (
        SELECT ${USER_KEY_SQL} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
-        WHERE game_key = ? AND event_name = ?
+        WHERE game_key = ? AND event_name = ?${PLATFORM_SQL}
         GROUP BY ${USER_KEY_SQL}
      ),
      cohort AS (
@@ -884,24 +921,24 @@ async function computeNewUserTutorialDailySeries(
         WHERE game_key = ?
           AND event_name = 'tutorial_step'
           AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.step_id')) = 'tutorial_completed'
-          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'${PLATFORM_SQL}
      ),
      tutorial_started AS (
        SELECT DISTINCT ${USER_KEY_SQL} AS uk
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = 'tutorial_step'
-          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'
+          AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.status')) = 'done'${PLATFORM_SQL}
      ),
      order_deliver AS (
        SELECT DISTINCT ${USER_KEY_SQL} AS uk
          FROM analytics_events
-        WHERE game_key = ? AND event_name = 'order_deliver'
+        WHERE game_key = ? AND event_name = 'order_deliver'${PLATFORM_SQL}
      ),
      ad_show AS (
        SELECT DISTINCT ${USER_KEY_SQL} AS uk
          FROM analytics_events
-        WHERE game_key = ? AND event_name = 'ad_show'
+        WHERE game_key = ? AND event_name = 'ad_show'${PLATFORM_SQL}
      )
      SELECT c.uk,
             c.first_ts,
@@ -914,7 +951,14 @@ async function computeNewUserTutorialDailySeries(
        LEFT JOIN tutorial_started ts ON c.uk = ts.uk
        LEFT JOIN order_deliver od ON c.uk = od.uk
        LEFT JOIN ad_show ads ON c.uk = ads.uk`,
-    [gameKey, SESSION_START, fromTs, toTs, gameKey, gameKey, gameKey, gameKey],
+    [
+      gameKey, SESSION_START, ...platformParams,
+      fromTs, toTs,
+      gameKey, ...platformParams,
+      gameKey, ...platformParams,
+      gameKey, ...platformParams,
+      gameKey, ...platformParams,
+    ],
   );
 
   type DayStats = {
@@ -973,15 +1017,16 @@ export async function getHuahuaGrowthOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaGrowthResult> {
   ensureMysql();
   const [levelDist, tutorial, sessionUsers, cohort, newUsers, tutorialDaily] = await Promise.all([
-    computeStarLevelDistribution(gameKey, fromTs, toTs),
-    computeTutorialFunnel(gameKey, fromTs, toTs),
-    countSessionUsers(gameKey, fromTs, toTs),
-    computeNewUserCohortMetrics(gameKey, fromTs, toTs),
-    countNewUsersInWindow(gameKey, fromTs, toTs),
-    computeNewUserTutorialDailySeries(gameKey, 7),
+    computeStarLevelDistribution(gameKey, fromTs, toTs, platform),
+    computeTutorialFunnel(gameKey, fromTs, toTs, platform),
+    countSessionUsers(gameKey, fromTs, toTs, platform),
+    computeNewUserCohortMetrics(gameKey, fromTs, toTs, platform),
+    countNewUsersInWindow(gameKey, fromTs, toTs, platform),
+    computeNewUserTutorialDailySeries(gameKey, 7, platform),
   ]);
   // new_users 与大盘「窗口内新增」同口径；cohort 查询负责引导/首单/看广告转化分子
   const alignedNewUsers = newUsers > 0 ? newUsers : cohort.new_users;
@@ -1083,6 +1128,7 @@ async function computeEngagementCounts(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{
   daily_quest_claim_cnt: number;
   daily_quest_users: number;
@@ -1098,6 +1144,7 @@ async function computeEngagementCounts(
   collection_discover_cnt: number;
 }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         event_name,
@@ -1105,9 +1152,9 @@ async function computeEngagementCounts(
         COUNT(DISTINCT ${USER_KEY_SQL}) AS uu
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (?,?,?,?,?,?,?)
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       GROUP BY event_name`,
-    [gameKey, ...ENGAGEMENT_EVENTS, fromTs, toTs],
+    [gameKey, ...ENGAGEMENT_EVENTS, fromTs, toTs, ...platformParams],
   );
   const out: Record<string, { c: number; uu: number }> = {};
   for (const r of rows as Array<{ event_name: string; c: number; uu: number }>) {
@@ -1134,16 +1181,18 @@ async function computeAffinityCardSummary(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<{ total_cards: number; duplicate_cards: number }> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         COALESCE(SUM(CAST(JSON_EXTRACT(params_json, '$.card_count') AS SIGNED)), 0) AS total,
         COALESCE(SUM(CAST(JSON_EXTRACT(params_json, '$.duplicate_count') AS SIGNED)), 0) AS dup
        FROM analytics_events
       WHERE game_key = ? AND event_name = 'affinity_card_drop'
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   const r = (rows as Array<{ total: number; dup: number }>)[0];
   return { total_cards: Number(r?.total || 0), duplicate_cards: Number(r?.dup || 0) };
@@ -1153,14 +1202,16 @@ async function computeEngagementSeries(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaEngagementSeriesPoint[]> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT event_name, event_ts
        FROM analytics_events
       WHERE game_key = ? AND event_name IN (?,?,?,?,?,?,?)
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, ...ENGAGEMENT_EVENTS, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, ...ENGAGEMENT_EVENTS, fromTs, toTs, ...platformParams],
   );
   const map = new Map<string, HuahuaEngagementSeriesPoint>();
   const startBucketTs = bucketToTs(tsToBucket(fromTs));
@@ -1209,19 +1260,21 @@ async function computeTopDailyQuests(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaEngagementTopRow[]> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.template_id')) AS k,
         COUNT(*) AS c
        FROM analytics_events
       WHERE game_key = ? AND event_name = 'daily_quest_claim'
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       GROUP BY k
       ORDER BY c DESC
       LIMIT 10`,
-    [gameKey, fromTs, toTs],
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   return (rows as Array<{ k: string | null; c: number }>).map((r) => ({
     key: r.k || 'unknown',
@@ -1233,18 +1286,20 @@ async function computeFountainBreakdown(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaEngagementTopRow[]> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
         JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.draw_kind')) AS k,
         COUNT(*) AS c
        FROM analytics_events
       WHERE game_key = ? AND event_name = 'fountain_draw'
-        AND event_ts BETWEEN ? AND ?
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       GROUP BY k
       ORDER BY c DESC`,
-    [gameKey, fromTs, toTs],
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   return (rows as Array<{ k: string | null; c: number }>).map((r) => ({
     key: r.k || 'unknown',
@@ -1256,14 +1311,15 @@ export async function getHuahuaEngagementOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<HuahuaEngagementResult> {
   ensureMysql();
   const [counts, affinity, series, topQuests, drawBreakdown] = await Promise.all([
-    computeEngagementCounts(gameKey, fromTs, toTs),
-    computeAffinityCardSummary(gameKey, fromTs, toTs),
-    computeEngagementSeries(gameKey, fromTs, toTs),
-    computeTopDailyQuests(gameKey, fromTs, toTs),
-    computeFountainBreakdown(gameKey, fromTs, toTs),
+    computeEngagementCounts(gameKey, fromTs, toTs, platform),
+    computeAffinityCardSummary(gameKey, fromTs, toTs, platform),
+    computeEngagementSeries(gameKey, fromTs, toTs, platform),
+    computeTopDailyQuests(gameKey, fromTs, toTs, platform),
+    computeFountainBreakdown(gameKey, fromTs, toTs, platform),
   ]);
   return {
     kpi: {

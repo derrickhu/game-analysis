@@ -2,26 +2,27 @@
  * 花花玩家档案快照拉取 job
  *
  * 流程：
- *   1. 用同款 CloudBase node SDK 凭证连 huahua_playerData 集合
- *   2. 分页全量扫表（pageSize=200，1k 用户大约 5 次 RTT，~3 秒）
+ *   1. 用同款 CloudBase node SDK 凭证连存档集合
+ *      - 微信：huahua_playerData（userId 前缀 wx:）
+ *      - 抖音：huahua_tt_playerData（userId 前缀 dy:）
+ *   2. 分页全量扫表（pageSize=200）
  *   3. 每个 doc 通过 parseHuahuaPlayerSnapshot 抽取扁平化字段
  *   4. 批量 upsert 到 huahua_player_snapshots 表，主键 (user_id, snapshot_date)
  *   5. 顺手 prune 30 天前的旧快照
  *
- * 设计取舍：
- *   - 全量覆盖：玩家数据每天只拉 1 次，全量比增量简单；活跃 1k 用户也就 ~30k 行/月
- *   - 不落原始 payload：huahua_save 等 JSON 长度可达几十 KB，长期存储成本和隐私风险都不划算，
- *     只落"分析维度的扁平整数字段"
- *   - 错误隔离：单条 doc parse 失败不阻塞整个拉取，记日志后跳过
- *
  * 用法：
- *   - cron 自动：scheduler 每日 04:00（上海时区）触发
- *   - 手动触发：POST /api/realtime/snapshot-now { game: 'huahua' }，用于联调和数据修正
+ *   - cron 自动：两端集合都拉
+ *   - 手动：POST /api/realtime/snapshot-now { game: 'huahua', platform: 'douyin' }
  */
 
 import tcb from '@cloudbase/node-sdk';
 
 import { findAnalyticsGame } from '../config/analytics-games';
+import {
+  normalizePlatformFilter,
+  platformToSnapshotPrefix,
+  playerDataCollection,
+} from '../../shared/platforms';
 import {
   createSnapshotRun,
   finishSnapshotRun,
@@ -31,10 +32,30 @@ import {
   type PlayerSnapshotRow,
 } from '../snapshot-db';
 
-const COLLECTION_NAME = 'huahua_playerData';
 const PAGE_SIZE = 200;
 /** 默认保留 30 天，覆盖月度 KPI 趋势够用 */
 const DEFAULT_RETENTION_DAYS = 30;
+
+interface SnapshotSource {
+  /** 埋点/全局筛选口径 */
+  platform: 'wechat' | 'douyin';
+  collection: string;
+  /** 档案 user_id 前缀 */
+  userPrefix: 'wx' | 'dy';
+}
+
+const HUAHUA_SNAPSHOT_SOURCES: SnapshotSource[] = [
+  {
+    platform: 'wechat',
+    collection: playerDataCollection('huahua', 'wechat'),
+    userPrefix: 'wx',
+  },
+  {
+    platform: 'douyin',
+    collection: playerDataCollection('huahua', 'douyin'),
+    userPrefix: 'dy',
+  },
+];
 
 export interface SnapshotIngestResult {
   ok: boolean;
@@ -45,6 +66,8 @@ export interface SnapshotIngestResult {
   pruned_old_rows: number;
   duration_ms: number;
   trigger_source: 'cron' | 'manual';
+  /** 本次实际拉取的云集合（多源时逗号拼接） */
+  collection_name?: string;
   error?: string;
 }
 
@@ -192,9 +215,18 @@ function countActiveCustomers(saveRaw: any): number {
  * 完整提取一个玩家的 snapshot row。
  * 任何子字段缺失都 fallback 0 / 空，不抛错。
  */
-export function parseHuahuaPlayerSnapshot(doc: any, snapshotDate: string): PlayerSnapshotRow | null {
-  const userId = String(doc?.userId || '').trim();
+export function parseHuahuaPlayerSnapshot(
+  doc: any,
+  snapshotDate: string,
+  /** 来源集合对应的档案前缀；写入 platform 列，避免老档 platform 字段不一致 */
+  forcedUserPrefix?: 'wx' | 'dy' | 'h5' | 'anon',
+): PlayerSnapshotRow | null {
+  let userId = String(doc?.userId || '').trim();
   if (!userId) return null;
+  // 防御：云端偶发缺前缀时，按来源集合补上，保证看板按 wx:/dy: 过滤可用
+  if (forcedUserPrefix && !userId.includes(':')) {
+    userId = `${forcedUserPrefix}:${userId}`;
+  }
 
   const payload = doc?.payload && typeof doc.payload === 'object' ? doc.payload : {};
   const save = parseJsonString(payload.huahua_save);
@@ -268,11 +300,20 @@ export function parseHuahuaPlayerSnapshot(doc: any, snapshotDate: string): Playe
     toNumber(doc?.updatedAt),
   ].reduce((max, ts) => (ts > 0 && ts <= maxAllowedActiveAt ? Math.max(max, ts) : max), 0) || now;
 
+  const platformFromDoc = String(doc?.platform || '').trim().toLowerCase();
+  const platform =
+    forcedUserPrefix ||
+    (platformFromDoc === 'wechat' || platformFromDoc === 'wx'
+      ? 'wx'
+      : platformFromDoc === 'douyin' || platformFromDoc === 'dy'
+        ? 'dy'
+        : platformFromDoc || 'unknown');
+
   return {
     user_id: userId,
     snapshot_date: snapshotDate,
     snapshot_ts: Date.now(),
-    platform: String(doc?.platform || 'unknown'),
+    platform,
     last_active_at: lastActiveAt,
     level,
     star,
@@ -300,9 +341,68 @@ export function parseHuahuaPlayerSnapshot(doc: any, snapshotDate: string): Playe
 // 主入口：拉取 + 入库 + prune
 // ============================================================
 
+function resolveSources(platform?: string): SnapshotSource[] {
+  const normalized = normalizePlatformFilter(platform);
+  if (!normalized) return HUAHUA_SNAPSHOT_SOURCES;
+  const matched = HUAHUA_SNAPSHOT_SOURCES.filter((s) => s.platform === normalized);
+  if (matched.length > 0) return matched;
+  // 兼容直接传 wx/dy 前缀
+  const prefix = platformToSnapshotPrefix(platform) || normalized;
+  const byPrefix = HUAHUA_SNAPSHOT_SOURCES.filter((s) => s.userPrefix === prefix);
+  return byPrefix.length > 0 ? byPrefix : HUAHUA_SNAPSHOT_SOURCES;
+}
+
+async function ingestOneCollection(
+  db: { collection: (name: string) => { skip: (n: number) => { limit: (n: number) => { get: () => Promise<{ data?: unknown[] }> } } } },
+  source: SnapshotSource,
+  snapshotDate: string,
+  triggerSource: 'cron' | 'manual',
+): Promise<{ fetched: number; inserted: number; ok: boolean; error?: string }> {
+  const runId = await createSnapshotRun('huahua', source.collection, snapshotDate, triggerSource);
+  let fetched = 0;
+  let inserted = 0;
+  try {
+    let offset = 0;
+    while (true) {
+      const res = await db.collection(source.collection).skip(offset).limit(PAGE_SIZE).get();
+      const docs = Array.isArray(res.data) ? res.data : [];
+      if (docs.length === 0) break;
+
+      const batch: PlayerSnapshotRow[] = [];
+      for (const doc of docs) {
+        try {
+          const row = parseHuahuaPlayerSnapshot(doc, snapshotDate, source.userPrefix);
+          if (row) batch.push(row);
+        } catch (err) {
+          console.warn(
+            `[snapshot] 解析单条失败 collection=${source.collection} userId=${(doc as any)?.userId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+      if (batch.length > 0) {
+        inserted += await upsertPlayerSnapshots('huahua', batch);
+      }
+
+      fetched += docs.length;
+      offset += docs.length;
+      if (docs.length < PAGE_SIZE) break;
+    }
+    await finishSnapshotRun(runId, 'success', fetched, inserted);
+    return { fetched, inserted, ok: true };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    await finishSnapshotRun(runId, 'failed', fetched, inserted, msg);
+    return { fetched, inserted, ok: false, error: msg };
+  }
+}
+
 export async function ingestHuahuaSnapshots(options: {
   triggerSource: 'cron' | 'manual';
   retentionDays?: number;
+  /** wechat / douyin；不传则两端都拉（cron 默认） */
+  platform?: string;
 }): Promise<SnapshotIngestResult> {
   const startedAt = Date.now();
   const game = findAnalyticsGame('huahua');
@@ -311,48 +411,30 @@ export async function ingestHuahuaSnapshots(options: {
   }
   const env = game.cloudEnv;
   const snapshotDate = toShanghaiDateKey(startedAt);
-  const runId = await createSnapshotRun('huahua', COLLECTION_NAME, snapshotDate, options.triggerSource);
+  const sources = resolveSources(options.platform);
   let fetched = 0;
   let inserted = 0;
   let pruned = 0;
+  const errors: string[] = [];
 
   try {
     const { secretId, secretKey, sessionToken } = readCredentials();
     const app = tcb.init({ env, secretId, secretKey, sessionToken });
     const db = app.database();
 
-    let offset = 0;
-    while (true) {
-      const res = await db.collection(COLLECTION_NAME).skip(offset).limit(PAGE_SIZE).get();
-      const docs = Array.isArray(res.data) ? res.data : [];
-      if (docs.length === 0) break;
-
-      const batch: PlayerSnapshotRow[] = [];
-      for (const doc of docs) {
-        try {
-          const row = parseHuahuaPlayerSnapshot(doc, snapshotDate);
-          if (row) batch.push(row);
-        } catch (err) {
-          // 单条失败不阻塞整个拉取，记日志即可——比"全部失败"更安全
-          console.warn(
-            `[snapshot] 解析单条失败 userId=${(doc as any)?.userId}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+    for (const source of sources) {
+      console.log(`[snapshot] huahua 拉取集合 ${source.collection} (platform=${source.platform})`);
+      const part = await ingestOneCollection(db, source, snapshotDate, options.triggerSource);
+      fetched += part.fetched;
+      inserted += part.inserted;
+      if (!part.ok && part.error) {
+        errors.push(`${source.collection}: ${part.error}`);
       }
-      if (batch.length > 0) {
-        const n = await upsertPlayerSnapshots('huahua', batch);
-        inserted += n;
-      }
-
-      fetched += docs.length;
-      offset += docs.length;
-      if (docs.length < PAGE_SIZE) break;
     }
 
     pruned = await pruneOldSnapshots('huahua', options.retentionDays ?? DEFAULT_RETENTION_DAYS);
-    await finishSnapshotRun(runId, 'success', fetched, inserted);
     return {
-      ok: true,
+      ok: errors.length === 0,
       game_key: 'huahua',
       snapshot_date: snapshotDate,
       fetched,
@@ -360,10 +442,11 @@ export async function ingestHuahuaSnapshots(options: {
       pruned_old_rows: pruned,
       duration_ms: Date.now() - startedAt,
       trigger_source: options.triggerSource,
+      collection_name: sources.map((s) => s.collection).join(','),
+      error: errors.length > 0 ? errors.join(' | ') : undefined,
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    await finishSnapshotRun(runId, 'failed', fetched, inserted, msg);
     return {
       ok: false,
       game_key: 'huahua',
@@ -373,6 +456,7 @@ export async function ingestHuahuaSnapshots(options: {
       pruned_old_rows: pruned,
       duration_ms: Date.now() - startedAt,
       trigger_source: options.triggerSource,
+      collection_name: sources.map((s) => s.collection).join(','),
       error: msg,
     };
   }

@@ -14,6 +14,8 @@ import { SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import type { FilterValue, SorterResult } from 'antd/es/table/interface';
 
+import { platformToSnapshotPrefix, type PlatformFilter } from '../../shared/platforms';
+
 import { formatInt } from './utils';
 
 const { Text } = Typography;
@@ -47,6 +49,8 @@ interface ListResponse {
 
 interface HotpotPlayerSnapshotTableProps {
   snapshotDate: string;
+  /** 顶部全局平台筛选；表格内手动选平台列时优先生效 */
+  globalPlatform?: PlatformFilter;
   refreshNonce?: number;
 }
 
@@ -92,7 +96,11 @@ function formatActiveTime(ts: number): string {
   return new Date(ts).toLocaleString('zh-CN', { hour12: false });
 }
 
-export function HotpotPlayerSnapshotTable({ snapshotDate, refreshNonce = 0 }: HotpotPlayerSnapshotTableProps) {
+export function HotpotPlayerSnapshotTable({
+  snapshotDate,
+  globalPlatform = 'wechat',
+  refreshNonce = 0,
+}: HotpotPlayerSnapshotTableProps) {
   const [items, setItems] = useState<HotpotPlayerListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -113,7 +121,9 @@ export function HotpotPlayerSnapshotTable({ snapshotDate, refreshNonce = 0 }: Ho
         pageSize: String(state.pageSize),
       });
       if (state.userIdSearch) params.set('q', state.userIdSearch);
-      if (state.platform) params.set('platform', state.platform);
+      // 表格内手动选的平台列筛选优先；未手动选时跟随全局平台（wechat→wx）
+      const effectivePlatform = state.platform || platformToSnapshotPrefix(globalPlatform);
+      if (effectivePlatform) params.set('platform', effectivePlatform);
       if (state.minCoins != null) params.set('minCoins', String(state.minCoins));
       if (state.maxCoins != null) params.set('maxCoins', String(state.maxCoins));
       if (state.minBowlLevel != null) params.set('minBowlLevel', String(state.minBowlLevel));
@@ -133,7 +143,7 @@ export function HotpotPlayerSnapshotTable({ snapshotDate, refreshNonce = 0 }: Ho
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
-  }, [snapshotDate, state]);
+  }, [snapshotDate, state, globalPlatform]);
 
   useEffect(() => {
     if (!snapshotDate || snapshotDate === '-') return;

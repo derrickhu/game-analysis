@@ -134,7 +134,7 @@ function shortJson(value: unknown): string {
 }
 
 export function AttributionPage() {
-  const { gameKey, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [range, setRange] = useState<[Dayjs, Dayjs]>(defaultAttributionRange);
   const [data, setData] = useState<AttributionResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -157,6 +157,8 @@ export function AttributionPage() {
         game: gameKey,
         from_date: dates.fromDate,
         to_date: dates.toDate,
+        // 这里的 platform 是渠道筛选（wechat/douyin/all），非归因表里的广告商 platform 字段；后端自行处理口径
+        platform,
       });
       const res = await fetch(`/api/realtime/attribution?${params.toString()}`);
       const json = (await res.json()) as AttributionResponse;
@@ -172,11 +174,11 @@ export function AttributionPage() {
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
-  }, [dates.fromDate, dates.toDate, gameKey, setLastRefreshedAt]);
+  }, [dates.fromDate, dates.toDate, gameKey, platform, setLastRefreshedAt]);
 
   useEffect(() => {
     void load();
-  }, [gameKey, refreshToken, load]);
+  }, [gameKey, platform, refreshToken, load]);
 
   const handleRecompute = useCallback(async () => {
     setRecomputing(true);

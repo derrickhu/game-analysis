@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
@@ -68,7 +69,7 @@ interface GrowthResponse {
  *   - 教程完成 / 首单 / 看广告 = 该 cohort 生命周期内是否达成
  */
 export function GrowthProgressPanel() {
-  const { gameKey, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [data, setData] = useState<GrowthResponse | null>(null);
   const requestSeqRef = useRef(0);
 
@@ -76,7 +77,7 @@ export function GrowthProgressPanel() {
     async (nextGameKey: string, nextWindow: WindowValue) => {
       const seq = ++requestSeqRef.current;
       try {
-        const queryStr = buildWindowQuery(nextWindow);
+        const queryStr = appendPlatformQuery(buildWindowQuery(nextWindow), platform);
         const res = await fetch(
           `/api/realtime/huahua-growth?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         );
@@ -92,12 +93,12 @@ export function GrowthProgressPanel() {
         message.error(`加载成长数据失败：${String(error)}`);
       }
     },
-    [setLastRefreshedAt],
+    [platform, setLastRefreshedAt],
   );
 
   useEffect(() => {
     void load(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, load]);
+  }, [gameKey, platform, windowSel, refreshToken, load]);
 
   const levelDist = data?.level_distribution || [];
   const tutorialDaily = data?.new_user_tutorial_daily ?? [];

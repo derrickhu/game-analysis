@@ -1,5 +1,6 @@
 import { getMysqlPool } from '../db';
 import { HOUR_BUCKET_SIZE_MS, bucketToTs, tsToHourBucket } from './bucket';
+import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
 
 const SHARE_EVENT_NAME = 'share_app_message';
 const SESSION_START_EVENT_NAME = 'session_start';
@@ -83,10 +84,12 @@ export async function getShareOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<ShareOverview> {
   const pool = await getMysqlPool();
   const fromBucket = tsToHourBucket(fromTs);
   const toBucket = tsToHourBucket(toTs);
+  const platformParams = platformSqlParams(platform);
 
   const [[summaryRows], [seriesRows], [breakdownRows]] = await Promise.all([
     pool.query(
@@ -96,16 +99,16 @@ export async function getShareOverview(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
-      [gameKey, SHARE_EVENT_NAME, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, SHARE_EVENT_NAME, fromTs, toTs, ...platformParams],
     ),
     pool.query(
       `SELECT event_ts, ${USER_KEY_SQL} AS uk
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
-      [gameKey, SHARE_EVENT_NAME, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, SHARE_EVENT_NAME, fromTs, toTs, ...platformParams],
     ),
     pool.query(
       `SELECT
@@ -116,10 +119,10 @@ export async function getShareOverview(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         GROUP BY entry_point
         ORDER BY share_count DESC`,
-      [gameKey, SHARE_EVENT_NAME, fromTs, toTs],
+      [gameKey, SHARE_EVENT_NAME, fromTs, toTs, ...platformParams],
     ),
   ]);
 
@@ -131,8 +134,8 @@ export async function getShareOverview(
        FROM analytics_events
       WHERE game_key = ?
         AND event_name = ?
-        AND event_ts BETWEEN ? AND ?`,
-    [gameKey, SESSION_START_EVENT_NAME, fromTs, toTs],
+        AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, SESSION_START_EVENT_NAME, fromTs, toTs, ...platformParams],
   );
   const dau = Number((dauRows as Array<{ dau: number }>)[0]?.dau || 0);
 

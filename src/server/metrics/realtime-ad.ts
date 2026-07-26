@@ -1,6 +1,8 @@
 import { isMysqlMode, getDb, getMysqlPool } from '../db';
 import { estimateRevenueCny, getEstimatedEcpm } from '../config/ecpm';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket, tsToDayBucket, tsToHourBucket } from './bucket';
+import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
+import type { AdMinuteRow } from '../analytics-db';
 
 const AD_EVENT_NAMES = ['ad_request', 'ad_show', 'ad_click', 'ad_close', 'ad_error'] as const;
 type AdEventName = (typeof AD_EVENT_NAMES)[number];
@@ -84,10 +86,11 @@ export async function getAdUserMetrics(
   toTs: number,
   totalShow: number,
   totalRevenue: number,
+  platform?: string,
 ): Promise<AdUserMetrics> {
   const [adUau, dau] = await Promise.all([
-    countDistinctUsersByEvent(gameKey, fromTs, toTs, 'ad_show'),
-    countDistinctUsersByEvent(gameKey, fromTs, toTs, 'session_start'),
+    countDistinctUsersByEvent(gameKey, fromTs, toTs, 'ad_show', platform),
+    countDistinctUsersByEvent(gameKey, fromTs, toTs, 'session_start', platform),
   ]);
   const adPenetrationRate = dau > 0 ? Math.round((adUau / dau) * 10000) / 100 : 0;
   const adShowPerUu = adUau > 0 ? Math.round((totalShow / adUau) * 100) / 100 : 0;
@@ -137,6 +140,7 @@ export async function listSeriesUserBuckets(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<SeriesUserBuckets> {
   const adUau = new Map<string, Set<string>>();
   const activeUu = new Map<string, Set<string>>();
@@ -148,13 +152,14 @@ export async function listSeriesUserBuckets(
     return { adUau, activeUu, adUauHourly, activeUuHourly, adUauDaily, activeUuDaily };
   }
 
+  const platformParams = platformSqlParams(platform);
   const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id) AS uk";
   // 不限制 event_name：每条事件都进 active_uu，ad_show 额外进 ad_uau
   // 一次扫描同时折 5 分钟桶 + 1 小时桶，避免分别扫两遍
   const sql = `SELECT event_ts, event_name, ${userKeySql}
                  FROM analytics_events
                 WHERE game_key = ?
-                  AND event_ts BETWEEN ? AND ?`;
+                  AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`;
 
   const addToSet = (map: Map<string, Set<string>>, key: string, uk: string) => {
     let set = map.get(key);
@@ -182,13 +187,13 @@ export async function listSeriesUserBuckets(
 
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
-    const [rows] = await pool.query(sql, [gameKey, fromTs, toTs]);
+    const [rows] = await pool.query(sql, [gameKey, fromTs, toTs, ...platformParams]);
     for (const r of rows as Array<{ event_ts: number; event_name: string; uk: string }>) {
       onRow(Number(r.event_ts), String(r.event_name), String(r.uk ?? ''));
     }
   } else {
     const stmt = getDb().prepare(sql);
-    for (const r of stmt.iterate(gameKey, fromTs, toTs) as IterableIterator<{
+    for (const r of stmt.iterate(gameKey, fromTs, toTs, ...platformParams) as IterableIterator<{
       event_ts: number;
       event_name: string;
       uk: string;
@@ -204,10 +209,12 @@ async function countDistinctUsersByEvent(
   fromTs: number,
   toTs: number,
   eventName: string,
+  platform?: string,
 ): Promise<number> {
   if (toTs < fromTs) return 0;
   // 复用 realtime-overview 同款身份归一表达式：未登录的 anonymous 用户也算入分母，避免人为压低 DAU
   const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
@@ -215,8 +222,8 @@ async function countDistinctUsersByEvent(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
-      [gameKey, eventName, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, eventName, fromTs, toTs, ...platformParams],
     );
     return Number((rows as Array<{ c: number }>)[0]?.c || 0);
   }
@@ -226,9 +233,9 @@ async function countDistinctUsersByEvent(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
     )
-    .get(gameKey, eventName, fromTs, toTs) as { c: number };
+    .get(gameKey, eventName, fromTs, toTs, ...platformParams) as { c: number };
   return Number(row?.c || 0);
 }
 
@@ -236,10 +243,12 @@ async function aggregateBuckets(
   gameKey: string,
   minuteFrom: string,
   minuteTo: string,
+  platform?: string,
 ): Promise<AdAggregateBucket[]> {
   // 把 bucket 字符串还原成时间戳上下界（左闭右闭：fromTs 为桶起点，toTs 为该桶终点）
   const fromTs = bucketToTs(minuteFrom);
   const toTs = bucketToTs(minuteTo) + BUCKET_SIZE_MS - 1;
+  const platformParams = platformSqlParams(platform);
 
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
@@ -249,8 +258,8 @@ async function aggregateBuckets(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name IN (${placeholders})
-          AND event_ts >= ? AND event_ts <= ?`,
-      [gameKey, ...AD_EVENT_NAMES, fromTs, toTs],
+          AND event_ts >= ? AND event_ts <= ?${PLATFORM_SQL}`,
+      [gameKey, ...AD_EVENT_NAMES, fromTs, toTs, ...platformParams],
     );
     return reduceRowsToBuckets(gameKey, rows as Array<{ event_name: string; event_ts: number; params_json: string | Record<string, unknown> }>);
   }
@@ -262,14 +271,45 @@ async function aggregateBuckets(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name IN (${placeholders})
-          AND event_ts >= ? AND event_ts <= ?`,
+          AND event_ts >= ? AND event_ts <= ?${PLATFORM_SQL}`,
     )
-    .all(gameKey, ...AD_EVENT_NAMES, fromTs, toTs) as Array<{
+    .all(gameKey, ...AD_EVENT_NAMES, fromTs, toTs, ...platformParams) as Array<{
       event_name: string;
       event_ts: number;
       params_json: string;
     }>;
   return reduceRowsToBuckets(gameKey, rows);
+}
+
+/**
+ * 当需要按平台过滤广告桶时，不读混算的 analytics_ad_minute（该表不区分平台），
+ * 而是从 analytics_events 即时聚合出与 listAdMinute 行形状兼容的结果。
+ * ecpm_used / ad_revenue_estimated_cny 先填 0，路由层会用真实 eCPM 结合 ad_show_cnt 重新估算覆盖。
+ */
+export async function aggregateAdMinuteFromEvents(
+  gameKey: string,
+  fromMinute: string,
+  toMinute: string,
+  platform?: string,
+): Promise<AdMinuteRow[]> {
+  const buckets = await aggregateBuckets(gameKey, fromMinute, toMinute, platform);
+  const updatedAt = Date.now();
+  return buckets
+    .map((b) => ({
+      game_key: b.game_key,
+      minute_bucket: b.minute_bucket,
+      ad_type: b.ad_type,
+      scene: b.scene,
+      ad_request_cnt: b.ad_request_cnt,
+      ad_show_cnt: b.ad_show_cnt,
+      ad_click_cnt: b.ad_click_cnt,
+      ad_complete_cnt: b.ad_complete_cnt,
+      ad_error_cnt: b.ad_error_cnt,
+      ecpm_used: 0,
+      ad_revenue_estimated_cny: 0,
+      updated_at: updatedAt,
+    }))
+    .sort((a, b) => (a.minute_bucket < b.minute_bucket ? -1 : a.minute_bucket > b.minute_bucket ? 1 : 0));
 }
 
 function reduceRowsToBuckets(
@@ -498,10 +538,12 @@ export async function listAdErrorTopN(
   fromTs: number,
   toTs: number,
   limit = 20,
+  platform?: string,
 ): Promise<AdErrorRow[]> {
   if (toTs < fromTs) return [];
 
   const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+  const platformParams = platformSqlParams(platform);
   // SQL 内部多取一些行，给折叠双发留余量；折叠后再 slice limit
   const sqlLimit = Math.max(limit * 2, 40);
 
@@ -521,11 +563,11 @@ export async function listAdErrorTopN(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = 'ad_error'
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         GROUP BY scene, ad_type, err_code, err_msg
         ORDER BY cnt DESC
         LIMIT ?`,
-      [gameKey, fromTs, toTs, sqlLimit],
+      [gameKey, fromTs, toTs, ...platformParams, sqlLimit],
     );
     raw = (rows as Array<{
       scene: string | null;
@@ -561,12 +603,12 @@ export async function listAdErrorTopN(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = 'ad_error'
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         GROUP BY scene, ad_type, err_code, err_msg
         ORDER BY cnt DESC
         LIMIT ?`,
     )
-    .all(gameKey, fromTs, toTs, sqlLimit) as Array<{
+    .all(gameKey, fromTs, toTs, ...platformParams, sqlLimit) as Array<{
     scene: string | null;
     ad_type: string | null;
     err_code: string | number | null;

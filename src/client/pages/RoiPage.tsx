@@ -21,6 +21,7 @@ import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 
 import { getGameDescriptor } from '../../shared/games';
+import type { PlatformFilter } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 
 const { Text } = Typography;
@@ -363,12 +364,13 @@ function defaultDisplayRange(): [Dayjs, Dayjs] {
   return [yesterday.subtract(29, 'day'), yesterday];
 }
 
-async function fetchRoiData(gameKey: string, range: [Dayjs, Dayjs]): Promise<RoiResponse> {
+async function fetchRoiData(gameKey: string, range: [Dayjs, Dayjs], platform: PlatformFilter): Promise<RoiResponse> {
   const [from, to] = range;
   const queryStr = new URLSearchParams({
     game: gameKey,
     from_date: from.format('YYYY-MM-DD'),
     to_date: to.format('YYYY-MM-DD'),
+    platform,
   }).toString();
   const res = await fetch(`/api/realtime/business-inputs?${queryStr}`);
   return (await res.json()) as RoiResponse;
@@ -379,18 +381,25 @@ async function fetchRoiDecision(
   targetDate: Dayjs,
   baselineDays: number,
   maturityDay: 3 | 7,
+  platform: PlatformFilter,
 ): Promise<RoiDecisionResponse> {
   const queryStr = new URLSearchParams({
     game: gameKey,
     target_date: targetDate.format('YYYY-MM-DD'),
     baseline_days: String(baselineDays),
     maturity_day: String(maturityDay),
+    platform,
   }).toString();
   const res = await fetch(`/api/realtime/business-roi-decision?${queryStr}`);
   return (await res.json()) as RoiDecisionResponse;
 }
 
-async function fetchRoiAiAnalysis(gameKey: string, baselineDays: number, maturityDay: 3 | 7): Promise<RoiAiAnalysisResponse> {
+async function fetchRoiAiAnalysis(
+  gameKey: string,
+  baselineDays: number,
+  maturityDay: 3 | 7,
+  platform: PlatformFilter,
+): Promise<RoiAiAnalysisResponse> {
   const res = await fetch('/api/realtime/business-roi-ai-analysis', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -398,17 +407,23 @@ async function fetchRoiAiAnalysis(gameKey: string, baselineDays: number, maturit
       game: gameKey,
       baseline_days: baselineDays,
       maturity_day: maturityDay,
+      platform,
     }),
   });
   return (await res.json()) as RoiAiAnalysisResponse;
 }
 
-async function fetchMonetizationData(gameKey: string, range: [Dayjs, Dayjs]): Promise<MonetizationResponse> {
+async function fetchMonetizationData(
+  gameKey: string,
+  range: [Dayjs, Dayjs],
+  platform: PlatformFilter,
+): Promise<MonetizationResponse> {
   const [from, to] = range;
   const queryStr = new URLSearchParams({
     game: gameKey,
     from_date: from.format('YYYY-MM-DD'),
     to_date: to.format('YYYY-MM-DD'),
+    platform,
   }).toString();
   const res = await fetch(`/api/realtime/monetization?${queryStr}`);
   return (await res.json()) as MonetizationResponse;
@@ -417,12 +432,14 @@ async function fetchMonetizationData(gameKey: string, range: [Dayjs, Dayjs]): Pr
 async function fetchAcquisitionIntelligence(
   gameKey: string,
   range: [Dayjs, Dayjs],
+  platform: PlatformFilter,
 ): Promise<AcquisitionIntelligenceResponse> {
   const [from, to] = range;
   const queryStr = new URLSearchParams({
     game: gameKey,
     from_date: from.format('YYYY-MM-DD'),
     to_date: to.format('YYYY-MM-DD'),
+    platform,
   }).toString();
   const res = await fetch(`/api/realtime/acquisition-intelligence?${queryStr}`);
   return (await res.json()) as AcquisitionIntelligenceResponse;
@@ -435,6 +452,7 @@ async function fetchAcquisitionIntelligence(
 export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}) {
   const {
     gameKey,
+    platform,
     refreshToken,
     setLoading,
     setLastRefreshedAt,
@@ -467,9 +485,9 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
       try {
         const activeRange = range || displayRange || defaultDisplayRange();
         const [json, monetizationJson, acquisitionJson] = await Promise.all([
-          fetchRoiData(nextGameKey, activeRange),
-          fetchMonetizationData(nextGameKey, activeRange),
-          fetchAcquisitionIntelligence(nextGameKey, activeRange),
+          fetchRoiData(nextGameKey, activeRange, platform),
+          fetchMonetizationData(nextGameKey, activeRange, platform),
+          fetchAcquisitionIntelligence(nextGameKey, activeRange, platform),
         ]);
         if (seq !== requestSeqRef.current) return null;
         if (!json.ok) message.error(`获取 ROI 数据失败: ${json.error || json.code}`);
@@ -488,18 +506,18 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
         if (seq === requestSeqRef.current) setLoading(false);
       }
     },
-    [displayRange, setLastRefreshedAt, setLoading],
+    [displayRange, platform, setLastRefreshedAt, setLoading],
   );
 
   useEffect(() => {
     void loadAll(gameKey);
-  }, [gameKey, displayRange, refreshToken, loadAll]);
+  }, [gameKey, platform, displayRange, refreshToken, loadAll]);
 
   const loadDecision = useCallback(
     async (nextBaselineDays = baselineDays, nextMaturityDay = maturityDay) => {
       setDecisionLoading(true);
       try {
-        const json = await fetchRoiDecision(gameKey, dayjs(), nextBaselineDays, nextMaturityDay);
+        const json = await fetchRoiDecision(gameKey, dayjs(), nextBaselineDays, nextMaturityDay, platform);
         if (!json.ok) {
           message.error(`获取投放决策失败: ${json.error || json.code}`);
           return;
@@ -511,17 +529,17 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
         setDecisionLoading(false);
       }
     },
-    [baselineDays, gameKey, maturityDay],
+    [baselineDays, gameKey, maturityDay, platform],
   );
 
   useEffect(() => {
     void loadDecision(baselineDays, maturityDay);
-  }, [baselineDays, gameKey, loadDecision, maturityDay]);
+  }, [baselineDays, gameKey, loadDecision, maturityDay, platform]);
 
   const onAiAnalyze = async () => {
     setAiLoading(true);
     try {
-      const json = await fetchRoiAiAnalysis(gameKey, baselineDays, maturityDay);
+      const json = await fetchRoiAiAnalysis(gameKey, baselineDays, maturityDay, platform);
       if (!json.ok) {
         message.error(`AI 分析失败: ${json.error || json.code}`);
         setAiAnalysis(json);
@@ -538,11 +556,11 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
 
   useEffect(() => {
     if (!decision?.target_date || aiAnalysis?.ok || aiLoading) return;
-    const key = `${gameKey}-${decision.target_date}-${baselineDays}-${maturityDay}`;
+    const key = `${gameKey}-${decision.target_date}-${baselineDays}-${maturityDay}-${platform}`;
     if (aiRequestKeyRef.current === key) return;
     aiRequestKeyRef.current = key;
     void onAiAnalyze();
-  }, [aiAnalysis?.ok, aiLoading, baselineDays, decision?.target_date, gameKey, maturityDay]);
+  }, [aiAnalysis?.ok, aiLoading, baselineDays, decision?.target_date, gameKey, maturityDay, platform]);
 
   const onDelete = async (dateKey: string) => {
     const res = await fetch(

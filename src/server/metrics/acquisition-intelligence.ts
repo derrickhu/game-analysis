@@ -3,10 +3,27 @@ import {
   listCohortLtvRows,
   listTencentAdsCreativeReportRawRows,
   listTencentAdsTargetingTagReportRawRows,
+  listUserDailyRows,
   type CohortLtvDailyRow,
   type TencentAdsCreativeReportRawRow,
   type TencentAdsTargetingTagReportRawRow,
 } from '../ltv-db';
+import { buildCohortLtvRows, listPlatformUserKeys } from './ltv';
+import { isPlatformFilterActive } from './platform-filter';
+
+async function loadCohortLtvRowsForPlatform(
+  gameKey: string,
+  fromDate: string,
+  toDate: string,
+  platform?: string,
+): Promise<CohortLtvDailyRow[]> {
+  if (!isPlatformFilterActive(platform)) return listCohortLtvRows(gameKey, fromDate, toDate);
+  // 广告投放素材/定向报表本身不带埋点 platform，这里只用该平台用户子集重算 cohort LTV 权重，
+  // 让 linked_d30_roas 近似反映"如果只看该平台"的回收水平；不落库。
+  const platformUserKeys = await listPlatformUserKeys(gameKey, platform as string);
+  const userRows = (await listUserDailyRows(gameKey)).filter((r) => platformUserKeys.has(r.user_key));
+  return buildCohortLtvRows(gameKey, userRows, fromDate, toDate);
+}
 
 export interface AcquisitionIntelligenceMetricRow {
   key: string;
@@ -372,10 +389,11 @@ export async function getAcquisitionIntelligenceOverview(
   gameKey: string,
   fromDate: string,
   toDate: string,
+  platform?: string,
 ): Promise<AcquisitionIntelligenceResult> {
   const [businessRows, ltvRows, targetingRawRows, creativeRawRows] = await Promise.all([
     listBusinessDailyInputs(gameKey, fromDate, toDate),
-    listCohortLtvRows(gameKey, fromDate, toDate),
+    loadCohortLtvRowsForPlatform(gameKey, fromDate, toDate, platform),
     listTencentAdsTargetingTagReportRawRows(gameKey, fromDate, toDate),
     listTencentAdsCreativeReportRawRows(gameKey, fromDate, toDate),
   ]);

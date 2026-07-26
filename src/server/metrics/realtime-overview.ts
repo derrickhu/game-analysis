@@ -1,5 +1,6 @@
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
+import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
 
 /**
  * 实时综合看板（DAU / 新增 / 留存 / 活跃趋势）
@@ -78,6 +79,7 @@ export async function getOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<OverviewResult> {
   const now = Date.now();
   // 锚点日 = 窗口结束日所在的本地自然日（YYYY-MM-DD）
@@ -93,14 +95,14 @@ export async function getOverview(
 
   // 并行计算各 KPI（SQLite 是同步驱动，所以并行收益很小，但代码组织上更清晰）
   const [dau, active1h, newInWindow, retentionD1, retentionD7] = await Promise.all([
-    countDistinctUsers(gameKey, fromTs, toTs, SESSION_START),
-    countDistinctUsers(gameKey, oneHourFrom, toTs), // 任意事件都算活跃
-    countNewUsersInWindow(gameKey, fromTs, toTs),
-    cohortRetention(gameKey, d1CohortStart, d1CohortEnd, anchorDayStart, anchorDayEnd),
-    cohortRetention(gameKey, d7CohortStart, d7CohortEnd, anchorDayStart, anchorDayEnd),
+    countDistinctUsers(gameKey, fromTs, toTs, SESSION_START, platform),
+    countDistinctUsers(gameKey, oneHourFrom, toTs, undefined, platform), // 任意事件都算活跃
+    countNewUsersInWindow(gameKey, fromTs, toTs, platform),
+    cohortRetention(gameKey, d1CohortStart, d1CohortEnd, anchorDayStart, anchorDayEnd, platform),
+    cohortRetention(gameKey, d7CohortStart, d7CohortEnd, anchorDayStart, anchorDayEnd, platform),
   ]);
 
-  const series = await getActiveSeries(gameKey, fromTs, toTs);
+  const series = await getActiveSeries(gameKey, fromTs, toTs, platform);
 
   return {
     kpi: {
@@ -128,19 +130,23 @@ async function countDistinctUsers(
   fromTs: number,
   toTs: number,
   eventName?: string,
+  platform?: string,
 ): Promise<number> {
   if (toTs < fromTs) return 0;
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const sql = eventName
       ? `SELECT COUNT(DISTINCT ${USER_KEY_SQL_MYSQL}) AS c
            FROM analytics_events
           WHERE game_key = ? AND event_ts BETWEEN ? AND ?
-            AND event_name = ?`
+            AND event_name = ?${PLATFORM_SQL}`
       : `SELECT COUNT(DISTINCT ${USER_KEY_SQL_MYSQL}) AS c
            FROM analytics_events
-          WHERE game_key = ? AND event_ts BETWEEN ? AND ?`;
-    const params = eventName ? [gameKey, fromTs, toTs, eventName] : [gameKey, fromTs, toTs];
+          WHERE game_key = ? AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`;
+    const params = eventName
+      ? [gameKey, fromTs, toTs, eventName, ...platformParams]
+      : [gameKey, fromTs, toTs, ...platformParams];
     const [rows] = await pool.query(sql, params);
     return Number((rows as Array<{ c: number }>)[0]?.c || 0);
   }
@@ -151,18 +157,18 @@ async function countDistinctUsers(
         `SELECT COUNT(DISTINCT ${USER_KEY_SQL_SQLITE}) AS c
            FROM analytics_events
           WHERE game_key = ? AND event_ts BETWEEN ? AND ?
-            AND event_name = ?`,
+            AND event_name = ?${PLATFORM_SQL}`,
       )
-      .get(gameKey, fromTs, toTs, eventName) as { c: number };
+      .get(gameKey, fromTs, toTs, eventName, ...platformParams) as { c: number };
     return Number(r?.c || 0);
   }
   const r = db
     .prepare(
       `SELECT COUNT(DISTINCT ${USER_KEY_SQL_SQLITE}) AS c
          FROM analytics_events
-        WHERE game_key = ? AND event_ts BETWEEN ? AND ?`,
+        WHERE game_key = ? AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
     )
-    .get(gameKey, fromTs, toTs) as { c: number };
+    .get(gameKey, fromTs, toTs, ...platformParams) as { c: number };
   return Number(r?.c || 0);
 }
 
@@ -174,8 +180,10 @@ export async function countNewUsersInWindow(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<number> {
   if (toTs < fromTs) return 0;
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
@@ -183,10 +191,10 @@ export async function countNewUsersInWindow(
          SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name = ?
+            AND event_name = ?${PLATFORM_SQL}
           GROUP BY ${USER_KEY_SQL_MYSQL}
        ) t WHERE t.first_ts BETWEEN ? AND ?`,
-      [gameKey, SESSION_START, fromTs, toTs],
+      [gameKey, SESSION_START, ...platformParams, fromTs, toTs],
     );
     return Number((rows as Array<{ c: number }>)[0]?.c || 0);
   }
@@ -196,11 +204,11 @@ export async function countNewUsersInWindow(
          SELECT ${USER_KEY_SQL_SQLITE} AS uk, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name = ?
+            AND event_name = ?${PLATFORM_SQL}
           GROUP BY ${USER_KEY_SQL_SQLITE}
        ) t WHERE t.first_ts BETWEEN ? AND ?`,
     )
-    .get(gameKey, SESSION_START, fromTs, toTs) as { c: number };
+    .get(gameKey, SESSION_START, ...platformParams, fromTs, toTs) as { c: number };
   return Number(r?.c || 0);
 }
 
@@ -215,9 +223,11 @@ async function cohortRetention(
   baseTo: number,
   retainFrom: number,
   retainTo: number,
+  platform?: string,
 ): Promise<CohortStat> {
   const empty: CohortStat = { cohort: 0, retain: 0, rate: null };
   if (baseTo < baseFrom || retainTo < retainFrom) return empty;
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
@@ -228,7 +238,7 @@ async function cohortRetention(
          SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name = ?
+            AND event_name = ?${PLATFORM_SQL}
           GROUP BY ${USER_KEY_SQL_MYSQL}
          HAVING first_ts BETWEEN ? AND ?
        ) base
@@ -237,9 +247,20 @@ async function cohortRetention(
            FROM analytics_events
           WHERE game_key = ?
             AND event_name = ?
-            AND event_ts BETWEEN ? AND ?
+            AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
        ) ret ON base.uk = ret.uk`,
-      [gameKey, SESSION_START, baseFrom, baseTo, gameKey, SESSION_START, retainFrom, retainTo],
+      [
+        gameKey,
+        SESSION_START,
+        ...platformParams,
+        baseFrom,
+        baseTo,
+        gameKey,
+        SESSION_START,
+        retainFrom,
+        retainTo,
+        ...platformParams,
+      ],
     );
     const row = (rows as Array<{ base_cnt: number; retain_cnt: number }>)[0];
     const cohort = Number(row?.base_cnt || 0);
@@ -252,11 +273,11 @@ async function cohortRetention(
       `SELECT ${USER_KEY_SQL_SQLITE} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
         WHERE game_key = ?
-          AND event_name = ?
+          AND event_name = ?${PLATFORM_SQL}
         GROUP BY ${USER_KEY_SQL_SQLITE}
        HAVING first_ts BETWEEN ? AND ?`,
     )
-    .all(gameKey, SESSION_START, baseFrom, baseTo) as Array<{ uk: string }>;
+    .all(gameKey, SESSION_START, ...platformParams, baseFrom, baseTo) as Array<{ uk: string }>;
   if (baseRows.length === 0) return empty;
   const baseSet = new Set(baseRows.map((r) => r.uk));
   const retainRows = db
@@ -265,9 +286,9 @@ async function cohortRetention(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
     )
-    .all(gameKey, SESSION_START, retainFrom, retainTo) as Array<{ uk: string }>;
+    .all(gameKey, SESSION_START, retainFrom, retainTo, ...platformParams) as Array<{ uk: string }>;
   let hit = 0;
   for (const r of retainRows) {
     if (baseSet.has(r.uk)) hit++;
@@ -286,12 +307,13 @@ async function getActiveSeries(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<OverviewSeriesPoint[]> {
   if (toTs < fromTs) return [];
   // 1) 拉窗口内 session_start 事件，按桶去重
-  const sessionRows = await listSessionStarts(gameKey, fromTs, toTs);
+  const sessionRows = await listSessionStarts(gameKey, fromTs, toTs, platform);
   // 2) 拉每个用户的全表首次 session_start 时间，给 new_users 计算用
-  const firstSeenMap = await getFirstSeenMap(gameKey);
+  const firstSeenMap = await getFirstSeenMap(gameKey, platform);
 
   // 桶 -> Set<uk>
   const activeBuckets = new Map<string, Set<string>>();
@@ -328,7 +350,9 @@ async function listSessionStarts(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<Array<{ uk: string; event_ts: number }>> {
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
@@ -336,8 +360,8 @@ async function listSessionStarts(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
-      [gameKey, SESSION_START, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, SESSION_START, fromTs, toTs, ...platformParams],
     );
     return rows as Array<{ uk: string; event_ts: number }>;
   }
@@ -347,26 +371,27 @@ async function listSessionStarts(
          FROM analytics_events
         WHERE game_key = ?
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
     )
-    .all(gameKey, SESSION_START, fromTs, toTs) as Array<{ uk: string; event_ts: number }>;
+    .all(gameKey, SESSION_START, fromTs, toTs, ...platformParams) as Array<{ uk: string; event_ts: number }>;
 }
 
 /**
  * 拉「每个用户的全表最早 session_start」，用于新增用户判定。
  * 用户量小时（数千～几万），全量扫一次完全够用；用户量上 10 万级时再考虑加索引/汇总表。
  */
-async function getFirstSeenMap(gameKey: string): Promise<Map<string, number>> {
+async function getFirstSeenMap(gameKey: string, platform?: string): Promise<Map<string, number>> {
   const map = new Map<string, number>();
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
         WHERE game_key = ?
-          AND event_name = ?
+          AND event_name = ?${PLATFORM_SQL}
         GROUP BY ${USER_KEY_SQL_MYSQL}`,
-      [gameKey, SESSION_START],
+      [gameKey, SESSION_START, ...platformParams],
     );
     for (const r of rows as Array<{ uk: string; first_ts: number }>) {
       map.set(r.uk, Number(r.first_ts));
@@ -378,10 +403,10 @@ async function getFirstSeenMap(gameKey: string): Promise<Map<string, number>> {
       `SELECT ${USER_KEY_SQL_SQLITE} AS uk, MIN(event_ts) AS first_ts
          FROM analytics_events
         WHERE game_key = ?
-          AND event_name = ?
+          AND event_name = ?${PLATFORM_SQL}
         GROUP BY ${USER_KEY_SQL_SQLITE}`,
     )
-    .all(gameKey, SESSION_START) as Array<{ uk: string; first_ts: number }>;
+    .all(gameKey, SESSION_START, ...platformParams) as Array<{ uk: string; first_ts: number }>;
   for (const r of rows) {
     map.set(r.uk, Number(r.first_ts));
   }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
@@ -47,14 +48,15 @@ function bucketShort(bucket: string): string {
 }
 
 export function HotpotDailyLimitedPanel() {
-  const { gameKey, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [data, setData] = useState<DailyLimitedResponse | null>(null);
   const requestSeqRef = useRef(0);
 
   const load = useCallback(async (nextGameKey: string, nextWindow: WindowValue) => {
     const seq = ++requestSeqRef.current;
     try {
-      const res = await fetch(`/api/realtime/hotpot-daily-limited?game=${encodeURIComponent(nextGameKey)}&${buildWindowQuery(nextWindow)}`);
+      const queryStr = appendPlatformQuery(buildWindowQuery(nextWindow), platform);
+      const res = await fetch(`/api/realtime/hotpot-daily-limited?game=${encodeURIComponent(nextGameKey)}&${queryStr}`);
       const json = (await res.json()) as DailyLimitedResponse;
       if (seq !== requestSeqRef.current) return;
       if (!json.ok) message.error(`获取每日限定数据失败: ${json.error || json.code}`);
@@ -64,11 +66,11 @@ export function HotpotDailyLimitedPanel() {
       if (seq !== requestSeqRef.current) return;
       message.error(`加载每日限定数据失败: ${String(error)}`);
     }
-  }, [setLastRefreshedAt]);
+  }, [platform, setLastRefreshedAt]);
 
   useEffect(() => {
     void load(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, load]);
+  }, [gameKey, platform, windowSel, refreshToken, load]);
 
   const trendOption = useMemo(() => {
     const series = data?.series || [];

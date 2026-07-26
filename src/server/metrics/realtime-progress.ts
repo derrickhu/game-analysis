@@ -1,5 +1,6 @@
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
+import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
 
 /**
  * 关卡进度看板（hot-pot 专属）
@@ -64,20 +65,21 @@ export async function getProgressOverview(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<ProgressResult> {
   // KPI / 分布 / 趋势统一按 [fromTs, toTs] 窗口算，避免 KPI 用历史累计、趋势用当日窗口的"口径打架"
   const [kpi, distribution, series] = await Promise.all([
-    computeKpi(gameKey, fromTs, toTs),
-    computeDistribution(gameKey, fromTs, toTs),
-    computeSeries(gameKey, fromTs, toTs),
+    computeKpi(gameKey, fromTs, toTs, platform),
+    computeDistribution(gameKey, fromTs, toTs, platform),
+    computeSeries(gameKey, fromTs, toTs, platform),
   ]);
   return { kpi, distribution, series };
 }
 
-async function computeKpi(gameKey: string, fromTs: number, toTs: number): Promise<ProgressKpi> {
-  const counts = await countLevelEvents(gameKey, fromTs, toTs);
-  const maxLevel = await getMaxClearedLevel(gameKey, fromTs, toTs);
-  const avgDuration = await getAvgClearDuration(gameKey, fromTs, toTs);
+async function computeKpi(gameKey: string, fromTs: number, toTs: number, platform?: string): Promise<ProgressKpi> {
+  const counts = await countLevelEvents(gameKey, fromTs, toTs, platform);
+  const maxLevel = await getMaxClearedLevel(gameKey, fromTs, toTs, platform);
+  const avgDuration = await getAvgClearDuration(gameKey, fromTs, toTs, platform);
   const totalStarts = counts.level_start;
   const totalClears = counts.level_clear;
   const totalFails = counts.level_fail;
@@ -96,21 +98,23 @@ async function countLevelEvents(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<Record<LevelEventName, number>> {
   const out: Record<LevelEventName, number> = {
     level_start: 0,
     level_clear: 0,
     level_fail: 0,
   };
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT event_name, COUNT(*) AS c
          FROM analytics_events
         WHERE game_key = ? AND event_name IN ('level_start','level_clear','level_fail')
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         GROUP BY event_name`,
-      [gameKey, fromTs, toTs],
+      [gameKey, fromTs, toTs, ...platformParams],
     );
     for (const r of rows as Array<{ event_name: LevelEventName; c: number }>) {
       out[r.event_name] = Number(r.c);
@@ -122,10 +126,10 @@ async function countLevelEvents(
       `SELECT event_name, COUNT(*) AS c
          FROM analytics_events
         WHERE game_key = ? AND event_name IN ('level_start','level_clear','level_fail')
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         GROUP BY event_name`,
     )
-    .all(gameKey, fromTs, toTs) as Array<{ event_name: LevelEventName; c: number }>;
+    .all(gameKey, fromTs, toTs, ...platformParams) as Array<{ event_name: LevelEventName; c: number }>;
   for (const r of rows) {
     out[r.event_name] = Number(r.c);
   }
@@ -136,15 +140,17 @@ async function getMaxClearedLevel(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<number> {
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT MAX(CAST(JSON_EXTRACT(params_json, '$.level_id') AS UNSIGNED)) AS max_lv
          FROM analytics_events
         WHERE game_key = ? AND event_name = 'level_clear'
-          AND event_ts BETWEEN ? AND ?`,
-      [gameKey, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, fromTs, toTs, ...platformParams],
     );
     const v = (rows as Array<{ max_lv: number | null }>)[0]?.max_lv;
     return Number(v || 0);
@@ -155,9 +161,9 @@ async function getMaxClearedLevel(
       `SELECT MAX(CAST(json_extract(params_json, '$.level_id') AS INTEGER)) AS max_lv
          FROM analytics_events
         WHERE game_key = ? AND event_name = 'level_clear'
-          AND event_ts BETWEEN ? AND ?`,
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
     )
-    .get(gameKey, fromTs, toTs) as { max_lv: number | null };
+    .get(gameKey, fromTs, toTs, ...platformParams) as { max_lv: number | null };
   return Number(r?.max_lv || 0);
 }
 
@@ -165,15 +171,17 @@ async function getAvgClearDuration(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<number> {
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT AVG(CAST(JSON_EXTRACT(params_json, '$.duration_ms') AS UNSIGNED)) AS avg_d
          FROM analytics_events
         WHERE game_key = ? AND event_name = 'level_clear'
-          AND event_ts BETWEEN ? AND ?`,
-      [gameKey, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, fromTs, toTs, ...platformParams],
     );
     const v = (rows as Array<{ avg_d: number | null }>)[0]?.avg_d;
     return Math.round(Number(v || 0));
@@ -183,9 +191,9 @@ async function getAvgClearDuration(
       `SELECT AVG(CAST(json_extract(params_json, '$.duration_ms') AS INTEGER)) AS avg_d
          FROM analytics_events
         WHERE game_key = ? AND event_name = 'level_clear'
-          AND event_ts BETWEEN ? AND ?`,
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
     )
-    .get(gameKey, fromTs, toTs) as { avg_d: number | null };
+    .get(gameKey, fromTs, toTs, ...platformParams) as { avg_d: number | null };
   return Math.round(Number(r?.avg_d || 0));
 }
 
@@ -198,11 +206,12 @@ async function computeDistribution(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<LevelDistributionRow[]> {
   const [startMap, clearMap, failMap] = await Promise.all([
-    listLevelUserSet(gameKey, 'level_start', fromTs, toTs),
-    listLevelUserSet(gameKey, 'level_clear', fromTs, toTs),
-    listLevelUserSet(gameKey, 'level_fail', fromTs, toTs),
+    listLevelUserSet(gameKey, 'level_start', fromTs, toTs, platform),
+    listLevelUserSet(gameKey, 'level_clear', fromTs, toTs, platform),
+    listLevelUserSet(gameKey, 'level_fail', fromTs, toTs, platform),
   ]);
   const allLevels = new Set<number>();
   for (const m of [startMap, clearMap, failMap]) {
@@ -229,8 +238,10 @@ async function listLevelUserSet(
   eventName: LevelEventName,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<Map<number, Set<string>>> {
   const map = new Map<number, Set<string>>();
+  const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
@@ -239,8 +250,8 @@ async function listLevelUserSet(
          ${USER_KEY_SQL} AS uk
        FROM analytics_events
        WHERE game_key = ? AND event_name = ?
-         AND event_ts BETWEEN ? AND ?`,
-      [gameKey, eventName, fromTs, toTs],
+         AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, eventName, fromTs, toTs, ...platformParams],
     );
     for (const r of rows as Array<{ level_id: number; uk: string }>) {
       const lv = Number(r.level_id);
@@ -257,9 +268,9 @@ async function listLevelUserSet(
          ${USER_KEY_SQL} AS uk
        FROM analytics_events
        WHERE game_key = ? AND event_name = ?
-         AND event_ts BETWEEN ? AND ?`,
+         AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
     )
-    .all(gameKey, eventName, fromTs, toTs) as Array<{ level_id: number | null; uk: string }>;
+    .all(gameKey, eventName, fromTs, toTs, ...platformParams) as Array<{ level_id: number | null; uk: string }>;
   for (const r of rows) {
     const lv = Number(r.level_id);
     if (!Number.isFinite(lv) || lv <= 0) continue;
@@ -273,11 +284,12 @@ async function computeSeries(
   gameKey: string,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<ProgressSeriesPoint[]> {
   if (toTs < fromTs) return [];
-  const startCounts = await countByBucket(gameKey, 'level_start', fromTs, toTs);
-  const clearCounts = await countByBucket(gameKey, 'level_clear', fromTs, toTs);
-  const failCounts = await countByBucket(gameKey, 'level_fail', fromTs, toTs);
+  const startCounts = await countByBucket(gameKey, 'level_start', fromTs, toTs, platform);
+  const clearCounts = await countByBucket(gameKey, 'level_clear', fromTs, toTs, platform);
+  const failCounts = await countByBucket(gameKey, 'level_fail', fromTs, toTs, platform);
   const startBucketTs = bucketToTs(tsToBucket(fromTs));
   const endBucketTs = bucketToTs(tsToBucket(toTs));
   const out: ProgressSeriesPoint[] = [];
@@ -299,16 +311,18 @@ async function countByBucket(
   eventName: LevelEventName,
   fromTs: number,
   toTs: number,
+  platform?: string,
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
+  const platformParams = platformSqlParams(platform);
   let rows: Array<{ event_ts: number }>;
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [r] = await pool.query(
       `SELECT event_ts FROM analytics_events
         WHERE game_key = ? AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
-      [gameKey, eventName, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+      [gameKey, eventName, fromTs, toTs, ...platformParams],
     );
     rows = r as Array<{ event_ts: number }>;
   } else {
@@ -316,9 +330,9 @@ async function countByBucket(
       .prepare(
         `SELECT event_ts FROM analytics_events
           WHERE game_key = ? AND event_name = ?
-            AND event_ts BETWEEN ? AND ?`,
+            AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
       )
-      .all(gameKey, eventName, fromTs, toTs) as Array<{ event_ts: number }>;
+      .all(gameKey, eventName, fromTs, toTs, ...platformParams) as Array<{ event_ts: number }>;
   }
   for (const r of rows) {
     const bucket = tsToBucket(Number(r.event_ts));

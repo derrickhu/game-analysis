@@ -2,10 +2,12 @@
  * 别捞水果（hotpot）玩家档案快照聚合查询
  */
 
+import { platformToSnapshotPrefix, playerDataCollection } from '../../shared/platforms';
 import { getMysqlPool, isMysqlMode } from '../db';
 import { getLatestSnapshotMeta, type PlayerSnapshotRun } from '../snapshot-db';
 
 const SUPPORTED_GAMES = new Set(['hotpot']);
+const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'h5', 'anon']);
 
 function ensureSupported(gameKey: string): void {
   if (!SUPPORTED_GAMES.has(gameKey)) {
@@ -22,6 +24,21 @@ function ensureMysql(): void {
   if (!isMysqlMode()) {
     throw new Error('snapshot 看板只支持 MySQL');
   }
+}
+
+/** 埋点 platform（wechat/douyin）或档案前缀（wx/dy）→ 稳定的 user_id 前缀 */
+function resolveSnapshotUserPrefix(platform?: string): string {
+  const raw = (platform || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (SNAPSHOT_PREFIXES.has(raw)) return raw;
+  return platformToSnapshotPrefix(raw);
+}
+
+/** WHERE 追加：按 user_id 前缀过滤（比 platform 列稳定，兼容老档 platform 字段不一致） */
+function platformWhere(platform?: string): { sql: string; params: string[] } {
+  const prefix = resolveSnapshotUserPrefix(platform);
+  if (!prefix) return { sql: '', params: [] };
+  return { sql: ' AND user_id LIKE ?', params: [`${prefix}:%`] };
 }
 
 export interface HotpotSnapshotKpi {
@@ -90,8 +107,13 @@ function round1(n: number): number {
   return Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
 }
 
-async function computeKpi(gameKey: string, snapshotDate: string): Promise<HotpotSnapshotKpi | null> {
+async function computeKpi(
+  gameKey: string,
+  snapshotDate: string,
+  platform?: string,
+): Promise<HotpotSnapshotKpi | null> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
     `SELECT
        COUNT(*) AS user_count,
@@ -106,15 +128,15 @@ async function computeKpi(gameKey: string, snapshotDate: string): Promise<Hotpot
        AVG(gacha_total_pulls) AS avg_gacha_pulls,
        AVG(bowl_tool_total) AS avg_bowl_tool_total
      FROM ${snapshotTable(gameKey)}
-     WHERE snapshot_date = ?`,
-    [snapshotDate],
+     WHERE snapshot_date = ?${pf.sql}`,
+    [snapshotDate, ...pf.params],
   );
   const r = (rows as Array<Record<string, unknown>>)[0];
   if (!r || Number(r.user_count) === 0) return null;
 
   const [medianRows] = await pool.query(
-    `SELECT coins AS v FROM ${snapshotTable(gameKey)} WHERE snapshot_date = ? ORDER BY coins`,
-    [snapshotDate],
+    `SELECT coins AS v FROM ${snapshotTable(gameKey)} WHERE snapshot_date = ?${pf.sql} ORDER BY coins`,
+    [snapshotDate, ...pf.params],
   );
   const coinList = (medianRows as Array<{ v: number }>).map((row) => Number(row.v));
   let medianCoins = 0;
@@ -141,15 +163,20 @@ async function computeKpi(gameKey: string, snapshotDate: string): Promise<Hotpot
   };
 }
 
-async function computeBowlLevelDistribution(gameKey: string, snapshotDate: string): Promise<LevelBucket[]> {
+async function computeBowlLevelDistribution(
+  gameKey: string,
+  snapshotDate: string,
+  platform?: string,
+): Promise<LevelBucket[]> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
     `SELECT bowl_badge_level AS level, COUNT(*) AS cnt
        FROM ${snapshotTable(gameKey)}
-      WHERE snapshot_date = ?
+      WHERE snapshot_date = ?${pf.sql}
       GROUP BY bowl_badge_level
       ORDER BY bowl_badge_level ASC`,
-    [snapshotDate],
+    [snapshotDate, ...pf.params],
   );
   return (rows as Array<{ level: number; cnt: number }>).map((r) => ({
     level: Number(r.level),
@@ -157,11 +184,16 @@ async function computeBowlLevelDistribution(gameKey: string, snapshotDate: strin
   }));
 }
 
-async function computeCoinsBuckets(gameKey: string, snapshotDate: string): Promise<ValueBucket[]> {
+async function computeCoinsBuckets(
+  gameKey: string,
+  snapshotDate: string,
+  platform?: string,
+): Promise<ValueBucket[]> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
-    `SELECT coins AS v FROM ${snapshotTable(gameKey)} WHERE snapshot_date = ?`,
-    [snapshotDate],
+    `SELECT coins AS v FROM ${snapshotTable(gameKey)} WHERE snapshot_date = ?${pf.sql}`,
+    [snapshotDate, ...pf.params],
   );
   const counts = new Map<string, { cnt: number; min: number }>();
   for (const r of rows as Array<{ v: number }>) {
@@ -175,8 +207,13 @@ async function computeCoinsBuckets(gameKey: string, snapshotDate: string): Promi
     .sort((a, b) => a.min_value - b.min_value);
 }
 
-async function computeDailyTrend(gameKey: string, snapshotDate: string): Promise<DailyTrendPoint[]> {
+async function computeDailyTrend(
+  gameKey: string,
+  snapshotDate: string,
+  platform?: string,
+): Promise<DailyTrendPoint[]> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
     `SELECT
        snapshot_date,
@@ -184,11 +221,11 @@ async function computeDailyTrend(gameKey: string, snapshotDate: string): Promise
        AVG(coins) AS avg_coins,
        AVG(bowl_badge_level) AS avg_bowl_badge_level
      FROM ${snapshotTable(gameKey)}
-     WHERE snapshot_date <= ?
+     WHERE snapshot_date <= ?${pf.sql}
      GROUP BY snapshot_date
      ORDER BY snapshot_date DESC
      LIMIT 30`,
-    [snapshotDate],
+    [snapshotDate, ...pf.params],
   );
   return (rows as Array<Record<string, unknown>>)
     .map((r) => ({
@@ -350,13 +387,20 @@ export async function listHotpotPlayerSnapshots(
 export async function getHotpotSnapshotOverview(
   gameKey: string,
   snapshotDate?: string,
+  platform?: string,
 ): Promise<HotpotSnapshotResult> {
   ensureMysql();
   ensureSupported(gameKey);
 
+  const userPrefix = resolveSnapshotUserPrefix(platform);
+  const collectionName = playerDataCollection(gameKey, platform);
+
   let date = snapshotDate || '';
   if (!date) {
-    const meta = await getLatestSnapshotMeta(gameKey);
+    const meta = await getLatestSnapshotMeta(gameKey, {
+      userIdPrefix: userPrefix || undefined,
+      collectionName,
+    });
     if (!meta) {
       return {
         query: { game_key: gameKey, snapshot_date: '', has_data: false },
@@ -371,12 +415,15 @@ export async function getHotpotSnapshotOverview(
   }
 
   const [kpi, bowlLevels, coinsBuckets, trend] = await Promise.all([
-    computeKpi(gameKey, date),
-    computeBowlLevelDistribution(gameKey, date),
-    computeCoinsBuckets(gameKey, date),
-    computeDailyTrend(gameKey, date),
+    computeKpi(gameKey, date, platform),
+    computeBowlLevelDistribution(gameKey, date, platform),
+    computeCoinsBuckets(gameKey, date, platform),
+    computeDailyTrend(gameKey, date, platform),
   ]);
-  const meta = await getLatestSnapshotMeta(gameKey);
+  const meta = await getLatestSnapshotMeta(gameKey, {
+    userIdPrefix: userPrefix || undefined,
+    collectionName,
+  });
 
   return {
     query: {

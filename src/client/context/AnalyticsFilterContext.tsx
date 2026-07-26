@@ -5,6 +5,11 @@ import { message } from 'antd';
 
 import { getDefaultGameKey, getGameDescriptor } from '../../shared/games';
 import {
+  DEFAULT_PLATFORM,
+  parsePlatformFromUrl,
+  type PlatformFilter,
+} from '../../shared/platforms';
+import {
   parseWindowFromUrl,
   windowToUrlValue,
   type WindowValue,
@@ -14,8 +19,8 @@ import {
  * 业务分析 Tab 下的全局过滤器上下文。
  *
  * 职责：
- *   - 维护 gameKey / windowSel / refreshToken 三个面板共享状态
- *   - 与 URL 双向同步：state → ?game=&window=（replace，不污染 history）；
+ *   - 维护 gameKey / platform / windowSel / refreshToken 面板共享状态
+ *   - 与 URL 双向同步：state → ?game=&platform=&window=（replace，不污染 history）；
  *     URL → state（支持浏览器后退/前进、链接粘贴）
  *   - 提供 5 分钟自动刷新定时器
  *   - 提供 `triggerIngestNow`：手动绕过 cron 拉一次 CloudBase 增量并自动刷新所有面板
@@ -30,6 +35,8 @@ const AUTO_REFRESH_MS = 5 * 60_000;
 
 interface AnalyticsFilterValue {
   gameKey: string;
+  /** 渠道平台：默认微信；all=不按平台过滤 */
+  platform: PlatformFilter;
   windowSel: WindowValue;
   refreshToken: number;
   /** 当前是否有面板在 fetch（由 Page 通过 setLoading 通知，仅用于 Header 刷新按钮的 loading 态） */
@@ -38,6 +45,7 @@ interface AnalyticsFilterValue {
   /** 最近一次任一面板成功完成 fetch 的时间戳（用于 Header 上的"自动 5 分钟 · xxx"显示） */
   lastRefreshedAt: number;
   setGameKey: (next: string) => void;
+  setPlatform: (next: PlatformFilter) => void;
   setWindowSel: (next: WindowValue) => void;
   setLoading: (next: boolean) => void;
   setLastRefreshedAt: (ts: number) => void;
@@ -58,6 +66,9 @@ export function AnalyticsFilterProvider({ children }: { children: ReactNode }) {
     const fromUrl = searchParams.get('game');
     return fromUrl && getGameDescriptor(fromUrl) ? fromUrl : getDefaultGameKey();
   });
+  const [platform, setPlatformState] = useState<PlatformFilter>(() =>
+    parsePlatformFromUrl(searchParams.get('platform')),
+  );
   const [windowSel, setWindowSelState] = useState<WindowValue>(() =>
     parseWindowFromUrl(searchParams.get('window')),
   );
@@ -66,38 +77,50 @@ export function AnalyticsFilterProvider({ children }: { children: ReactNode }) {
   const [ingestingNow, setIngestingNow] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(0);
 
-  // 用 ref 跟踪当前 game/window 的 URL 字符串形式，用于检测"上次写入 URL 的值"，
+  // 用 ref 跟踪当前 game/platform/window 的 URL 字符串形式，用于检测"上次写入 URL 的值"，
   // 避免 effect 写入 URL 后被 URL → state 反向监听误以为是用户改了 URL，造成抖动
-  const lastSyncedRef = useRef<{ game: string; window: string }>({ game: '', window: '' });
+  const lastSyncedRef = useRef<{ game: string; platform: string; window: string }>({
+    game: '',
+    platform: '',
+    window: '',
+  });
 
-  // state → URL 同步：用 replace 避免每次切游戏/时间窗口都新增一条 history entry
+  // state → URL 同步：用 replace 避免每次切游戏/平台/时间窗口都新增一条 history entry
   useEffect(() => {
     const nextGame = gameKey;
+    const nextPlatform = platform;
     const nextWindow = windowToUrlValue(windowSel);
-    if (lastSyncedRef.current.game === nextGame && lastSyncedRef.current.window === nextWindow) {
+    if (
+      lastSyncedRef.current.game === nextGame &&
+      lastSyncedRef.current.platform === nextPlatform &&
+      lastSyncedRef.current.window === nextWindow
+    ) {
       return;
     }
-    lastSyncedRef.current = { game: nextGame, window: nextWindow };
+    lastSyncedRef.current = { game: nextGame, platform: nextPlatform, window: nextWindow };
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('game', nextGame);
+        next.set('platform', nextPlatform);
         next.set('window', nextWindow);
         return next;
       },
       { replace: true },
     );
-  }, [gameKey, windowSel, setSearchParams]);
+  }, [gameKey, platform, windowSel, setSearchParams]);
 
   // URL → state 同步（浏览器后退/前进、外部粘贴 URL）：
   // 用 functional setState 避免把 gameKey/windowSel 放进依赖造成循环
   useEffect(() => {
     const urlGame = searchParams.get('game');
+    const urlPlatform = parsePlatformFromUrl(searchParams.get('platform'));
     const urlWindowRaw = searchParams.get('window');
     const urlWindow = parseWindowFromUrl(urlWindowRaw);
     if (urlGame && getGameDescriptor(urlGame)) {
       setGameKeyState((cur) => (urlGame !== cur ? urlGame : cur));
     }
+    setPlatformState((cur) => (urlPlatform !== cur ? urlPlatform : cur));
     setWindowSelState((cur) =>
       windowToUrlValue(urlWindow) !== windowToUrlValue(cur) ? urlWindow : cur,
     );
@@ -105,6 +128,9 @@ export function AnalyticsFilterProvider({ children }: { children: ReactNode }) {
 
   const setGameKey = useCallback((next: string) => {
     setGameKeyState(next);
+  }, []);
+  const setPlatform = useCallback((next: PlatformFilter) => {
+    setPlatformState(next || DEFAULT_PLATFORM);
   }, []);
   const setWindowSel = useCallback((next: WindowValue) => {
     setWindowSelState(next);
@@ -150,12 +176,14 @@ export function AnalyticsFilterProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AnalyticsFilterValue>(
     () => ({
       gameKey,
+      platform,
       windowSel,
       refreshToken,
       loading,
       ingestingNow,
       lastRefreshedAt,
       setGameKey,
+      setPlatform,
       setWindowSel,
       setLoading,
       setLastRefreshedAt,
@@ -164,12 +192,14 @@ export function AnalyticsFilterProvider({ children }: { children: ReactNode }) {
     }),
     [
       gameKey,
+      platform,
       windowSel,
       refreshToken,
       loading,
       ingestingNow,
       lastRefreshedAt,
       setGameKey,
+      setPlatform,
       setWindowSel,
       triggerRefresh,
       triggerIngestNow,

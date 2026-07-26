@@ -6,6 +6,8 @@ import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
  * EventsExplorer 已设计为受控组件（无内部时间窗口状态），这里不做额外加工。
  */
 export function EventsPage() {
-  const { gameKey, windowSel, refreshToken } = useAnalyticsFilter();
-  return <EventsExplorer fixedGameKey={gameKey} windowSel={windowSel} refreshToken={refreshToken} />;
+  const { gameKey, platform, windowSel, refreshToken } = useAnalyticsFilter();
+  return (
+    <EventsExplorer fixedGameKey={gameKey} platform={platform} windowSel={windowSel} refreshToken={refreshToken} />
+  );
 }

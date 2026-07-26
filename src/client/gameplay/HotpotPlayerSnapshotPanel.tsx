@@ -16,6 +16,7 @@ import {
 import { ReloadOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 
+import { playerDataCollection } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 
 import { HotpotPlayerSnapshotTable } from './HotpotPlayerSnapshotTable';
@@ -78,6 +79,8 @@ interface SnapshotResponse {
   coins_buckets?: ValueBucket[];
   daily_trend?: DailyTrendPoint[];
   latest_run?: LatestRun | null;
+  /** 当前平台对应的云存档集合名 */
+  source_collection?: string;
   code?: string;
   error?: string;
 }
@@ -86,7 +89,7 @@ interface SnapshotResponse {
  * 别捞水果玩家档案快照面板：每日全量 hotpot_playerData → hotpot_player_snapshots。
  */
 export function HotpotPlayerSnapshotPanel() {
-  const { refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { platform, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const gameKey = 'hotpot';
   const [data, setData] = useState<SnapshotResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -94,29 +97,33 @@ export function HotpotPlayerSnapshotPanel() {
   const [tableRefreshNonce, setTableRefreshNonce] = useState(0);
   const requestSeqRef = useRef(0);
 
-  const load = useCallback(async () => {
-    const seq = ++requestSeqRef.current;
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/realtime/huahua-snapshot?game=${gameKey}`);
-      const json = (await res.json()) as SnapshotResponse;
-      if (seq !== requestSeqRef.current) return;
-      if (!json.ok) {
-        message.error(`获取玩家快照失败：${json.error || json.code}`);
+  const load = useCallback(
+    async (nextPlatform: string) => {
+      const seq = ++requestSeqRef.current;
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ game: gameKey, platform: nextPlatform });
+        const res = await fetch(`/api/realtime/huahua-snapshot?${params.toString()}`);
+        const json = (await res.json()) as SnapshotResponse;
+        if (seq !== requestSeqRef.current) return;
+        if (!json.ok) {
+          message.error(`获取玩家快照失败：${json.error || json.code}`);
+        }
+        setData(json);
+        setLastRefreshedAt(Date.now());
+      } catch (error) {
+        if (seq !== requestSeqRef.current) return;
+        message.error(`加载玩家快照失败：${String(error)}`);
+      } finally {
+        if (seq === requestSeqRef.current) setLoading(false);
       }
-      setData(json);
-      setLastRefreshedAt(Date.now());
-    } catch (error) {
-      if (seq !== requestSeqRef.current) return;
-      message.error(`加载玩家快照失败：${String(error)}`);
-    } finally {
-      if (seq === requestSeqRef.current) setLoading(false);
-    }
-  }, [setLastRefreshedAt]);
+    },
+    [setLastRefreshedAt],
+  );
 
   useEffect(() => {
-    void load();
-  }, [refreshToken, load]);
+    void load(platform);
+  }, [platform, refreshToken, load]);
 
   const handleManualPull = useCallback(async () => {
     if (pulling) return;
@@ -125,7 +132,7 @@ export function HotpotPlayerSnapshotPanel() {
       const res = await fetch(`/api/realtime/snapshot-now`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game: gameKey }),
+        body: JSON.stringify({ game: gameKey, platform }),
       });
       const json = (await res.json()) as {
         ok: boolean;
@@ -133,23 +140,24 @@ export function HotpotPlayerSnapshotPanel() {
         fetched?: number;
         inserted?: number;
         duration_ms?: number;
+        collection_name?: string;
         error?: string;
       };
       if (json.ok) {
         message.success(
-          `拉取完成 ${json.snapshot_date || ''}：${json.fetched || 0} 条 / ${json.duration_ms || 0}ms`,
+          `拉取完成 ${json.collection_name || ''} ${json.snapshot_date || ''}：${json.fetched || 0} 条 / ${json.duration_ms || 0}ms`,
         );
       } else {
         message.error(`拉取失败：${json.error || '未知错误'}`);
       }
-      await load();
+      await load(platform);
       setTableRefreshNonce((v) => v + 1);
     } catch (error) {
       message.error(`拉取请求失败：${String(error)}`);
     } finally {
       setPulling(false);
     }
-  }, [load, pulling]);
+  }, [platform, load, pulling]);
 
   const kpi = data?.kpi;
   const hasData = !!data?.query?.has_data && !!kpi && kpi.user_count > 0;
@@ -283,7 +291,10 @@ export function HotpotPlayerSnapshotPanel() {
       }
       extra={
         <Space>
-          <Text type="secondary">数据源：每日 04:00 全量拉取 {`hotpot_playerData`} 集合</Text>
+          <Text type="secondary">
+            数据源：每日 04:00 全量拉取{' '}
+            {data?.source_collection || playerDataCollection('hotpot', platform)} 集合
+          </Text>
           <Button
             icon={<ReloadOutlined />}
             type="primary"
@@ -408,7 +419,11 @@ export function HotpotPlayerSnapshotPanel() {
               </Col>
             </Row>
 
-            <HotpotPlayerSnapshotTable snapshotDate={snapshotDate} refreshNonce={tableRefreshNonce} />
+            <HotpotPlayerSnapshotTable
+              snapshotDate={snapshotDate}
+              globalPlatform={platform}
+              refreshNonce={tableRefreshNonce}
+            />
           </>
         )}
       </Space>

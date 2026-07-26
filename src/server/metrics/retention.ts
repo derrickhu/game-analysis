@@ -1,5 +1,6 @@
 import { getMysqlPool } from '../db';
 import { toLocalDateKey } from './ltv';
+import { PLATFORM_SQL, isPlatformFilterActive, platformSqlParams } from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
@@ -154,24 +155,26 @@ function buildSegment(
   return { device_type: deviceType, cohort_size: users.size, points };
 }
 
-async function listCohortUsers(gameKey: string, cohortDate: string): Promise<CohortUserRow[]> {
+async function listCohortUsers(gameKey: string, cohortDate: string, platform?: string): Promise<CohortUserRow[]> {
   const pool = await getMysqlPool();
   const fromTs = dateKeyToStartTs(cohortDate);
   const toTs = dateKeyToStartTs(addDays(cohortDate, 1)) - 1;
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
        FROM analytics_events
       WHERE game_key = ?
-        AND event_name = ?
+        AND event_name = ?${PLATFORM_SQL}
       GROUP BY ${USER_KEY_SQL}
      HAVING first_ts BETWEEN ? AND ?`,
-    [gameKey, SESSION_START, fromTs, toTs],
+    [gameKey, SESSION_START, ...platformParams, fromTs, toTs],
   );
   return (rows as CohortUserRow[]).filter((row) => row.user_key);
 }
 
-export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7): Promise<string | null> {
+export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7, platform?: string): Promise<string | null> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const latestCompleteDate = addDays(toLocalDateKey(Date.now()), -Math.max(1, maxAge + 1));
   const cutoffTs = dateKeyToStartTs(addDays(latestCompleteDate, 1)) - 1;
   const [completeRows] = await pool.query(
@@ -180,14 +183,14 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7)
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name = ?
+            AND event_name = ?${PLATFORM_SQL}
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, SESSION_START, cutoffTs],
+    [gameKey, SESSION_START, ...platformParams, cutoffTs],
   );
   const completeDate = (completeRows as Array<{ cohort_date: string | null }>)[0]?.cohort_date;
   if (completeDate) return completeDate;
@@ -200,14 +203,14 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7)
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name = ?
+            AND event_name = ?${PLATFORM_SQL}
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, SESSION_START, d1CutoffTs],
+    [gameKey, SESSION_START, ...platformParams, d1CutoffTs],
   );
   const d1Date = (d1Rows as Array<{ cohort_date: string | null }>)[0]?.cohort_date;
   if (d1Date) return d1Date;
@@ -219,14 +222,14 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7)
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name = ?
+            AND event_name = ?${PLATFORM_SQL}
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, SESSION_START, yesterdayCutoffTs],
+    [gameKey, SESSION_START, ...platformParams, yesterdayCutoffTs],
   );
   return (latestRows as Array<{ cohort_date: string | null }>)[0]?.cohort_date || null;
 }
@@ -249,9 +252,15 @@ async function queryByUserBatches<T>(
   return out;
 }
 
-async function listFirstDeviceEvents(gameKey: string, cohortDate: string, userKeys: string[]): Promise<DeviceEventRow[]> {
+async function listFirstDeviceEvents(
+  gameKey: string,
+  cohortDate: string,
+  userKeys: string[],
+  platform?: string,
+): Promise<DeviceEventRow[]> {
   const fromTs = dateKeyToStartTs(cohortDate);
   const toTs = dateKeyToStartTs(addDays(cohortDate, 1)) - 1;
+  const platformParams = platformSqlParams(platform);
   return queryByUserBatches<DeviceEventRow>(
     gameKey,
     userKeys,
@@ -260,9 +269,9 @@ async function listFirstDeviceEvents(gameKey: string, cohortDate: string, userKe
          FROM analytics_events
         WHERE game_key = ?
           AND ${USER_KEY_SQL} IN (${placeholders})
-          AND event_ts BETWEEN ? AND ?
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
         ORDER BY event_ts ASC`,
-    (batch) => [...batch, fromTs, toTs],
+    (batch) => [...batch, fromTs, toTs, ...platformParams],
   );
 }
 
@@ -271,9 +280,11 @@ async function listActiveEvents(
   cohortDate: string,
   maxAge: number,
   userKeys: string[],
+  platform?: string,
 ): Promise<ActiveEventRow[]> {
   const fromTs = dateKeyToStartTs(cohortDate);
   const toTs = dateKeyToStartTs(addDays(cohortDate, maxAge + 1)) - 1;
+  const platformParams = platformSqlParams(platform);
   return queryByUserBatches<ActiveEventRow>(
     gameKey,
     userKeys,
@@ -283,18 +294,19 @@ async function listActiveEvents(
         WHERE game_key = ?
           AND ${USER_KEY_SQL} IN (${placeholders})
           AND event_name = ?
-          AND event_ts BETWEEN ? AND ?`,
-    (batch) => [...batch, SESSION_START, fromTs, toTs],
+          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    (batch) => [...batch, SESSION_START, fromTs, toTs, ...platformParams],
   );
 }
 
 export async function getRetentionCohortOverview(
   gameKey: string,
   cohortDate: string,
-  options: { maxAge?: number } = {},
+  options: { maxAge?: number; platform?: string } = {},
 ): Promise<RetentionCohortResult> {
   const maxAge = Math.max(1, Math.min(30, Number(options.maxAge) || 30));
-  const cohortUsers = await listCohortUsers(gameKey, cohortDate);
+  const platform = options.platform;
+  const cohortUsers = await listCohortUsers(gameKey, cohortDate, platform);
   const userKeys = cohortUsers.map((row) => row.user_key);
   const allUsers = new Set(userKeys);
   if (userKeys.length === 0) {
@@ -310,8 +322,8 @@ export async function getRetentionCohortOverview(
   }
 
   const [deviceEvents, activeEvents] = await Promise.all([
-    listFirstDeviceEvents(gameKey, cohortDate, userKeys),
-    listActiveEvents(gameKey, cohortDate, maxAge, userKeys),
+    listFirstDeviceEvents(gameKey, cohortDate, userKeys, platform),
+    listActiveEvents(gameKey, cohortDate, maxAge, userKeys, platform),
   ]);
 
   const deviceByUser = new Map<string, RetentionDeviceType>();
@@ -496,23 +508,24 @@ function buildCohortsFromRows(
   });
 }
 
-async function listCohortDatesInRange(gameKey: string, fromDate: string, toDate: string): Promise<string[]> {
+async function listCohortDatesInRange(gameKey: string, fromDate: string, toDate: string, platform?: string): Promise<string[]> {
   const pool = await getMysqlPool();
   const fromTs = dateKeyToStartTs(fromDate);
   const toTs = dateKeyToStartTs(addDays(toDate, 1)) - 1;
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT DATE_FORMAT(FROM_UNIXTIME(first_ts / 1000), '%Y-%m-%d') AS cohort_date, COUNT(*) AS users
        FROM (
          SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
            FROM analytics_events
           WHERE game_key = ?
-            AND event_name = ?
+            AND event_name = ?${PLATFORM_SQL}
           GROUP BY ${USER_KEY_SQL}
        ) first_seen
       WHERE first_ts BETWEEN ? AND ?
       GROUP BY cohort_date
       ORDER BY cohort_date ASC`,
-    [gameKey, SESSION_START, fromTs, toTs],
+    [gameKey, SESSION_START, ...platformParams, fromTs, toTs],
   );
   return (rows as Array<{ cohort_date: string | null }>).map((row) => row.cohort_date).filter(Boolean) as string[];
 }
@@ -534,9 +547,29 @@ export async function getRetentionCohortRangeOverview(
   gameKey: string,
   fromDate: string,
   toDate: string,
-  options: { maxAge?: number } = {},
+  options: { maxAge?: number; platform?: string } = {},
 ): Promise<RetentionCohortRangeResult> {
   const maxAge = Math.max(1, Math.min(30, Number(options.maxAge) || 30));
+  const platform = options.platform;
+
+  // 预聚合表 analytics_cohort_retention_daily 不区分平台；选定具体平台时改为对范围内每个
+  // cohort 日期实时调用 getRetentionCohortOverview 并汇总，不落库。
+  if (isPlatformFilterActive(platform)) {
+    const cohortDates = await listCohortDatesInRange(gameKey, fromDate, toDate, platform);
+    const cohorts = await mapWithConcurrency(cohortDates, 4, (cohortDate) =>
+      getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform }),
+    );
+    return {
+      game_key: gameKey,
+      from_date: fromDate,
+      to_date: toDate,
+      max_age: maxAge,
+      updated_at: Date.now(),
+      notice: '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。已按平台实时重算，未落库。',
+      cohorts,
+    };
+  }
+
   const rows = await listRetentionRows(gameKey, fromDate, toDate, maxAge);
   const cohorts = buildCohortsFromRows(gameKey, rows, maxAge);
   return {

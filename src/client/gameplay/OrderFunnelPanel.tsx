@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { buildWindowQuery, type WindowValue } from '../timeWindow';
 
@@ -68,7 +69,7 @@ interface OrderResponse {
  * 数据源：/api/realtime/huahua-order
  */
 export function OrderFunnelPanel() {
-  const { gameKey, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, windowSel, refreshToken, setLastRefreshedAt } = useAnalyticsFilter();
   const [data, setData] = useState<OrderResponse | null>(null);
   const requestSeqRef = useRef(0);
 
@@ -76,7 +77,7 @@ export function OrderFunnelPanel() {
     async (nextGameKey: string, nextWindow: WindowValue) => {
       const seq = ++requestSeqRef.current;
       try {
-        const queryStr = buildWindowQuery(nextWindow);
+        const queryStr = appendPlatformQuery(buildWindowQuery(nextWindow), platform);
         const res = await fetch(
           `/api/realtime/huahua-order?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
         );
@@ -92,12 +93,12 @@ export function OrderFunnelPanel() {
         message.error(`加载订单数据失败：${String(error)}`);
       }
     },
-    [setLastRefreshedAt],
+    [platform, setLastRefreshedAt],
   );
 
   useEffect(() => {
     void load(gameKey, windowSel);
-  }, [gameKey, windowSel, refreshToken, load]);
+  }, [gameKey, platform, windowSel, refreshToken, load]);
 
   const series = data?.series || [];
   const byTier = data?.by_tier || [];

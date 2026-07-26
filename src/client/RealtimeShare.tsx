@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd';
 import ReactECharts from 'echarts-for-react';
 
+import { appendPlatformQuery, type PlatformFilter } from '../shared/platforms';
 import { type WindowValue, buildWindowQuery } from './timeWindow';
 
 const { Text } = Typography;
@@ -41,6 +42,7 @@ interface ShareResponse {
 
 interface RealtimeShareProps {
   fixedGameKey: string;
+  platform: PlatformFilter;
   windowSel: WindowValue;
   refreshToken: number;
 }
@@ -91,18 +93,18 @@ function getEntryLabel(gameKey: string, entryPoint: string): string {
 }
 
 export function RealtimeShare(props: RealtimeShareProps): ReactElement {
-  const { fixedGameKey: gameKey, windowSel, refreshToken } = props;
+  const { fixedGameKey: gameKey, platform, windowSel, refreshToken } = props;
   const [data, setData] = useState<ShareResponse | null>(null);
 
   const loadData = useCallback(async () => {
-    const queryStr = buildWindowQuery(windowSel);
+    const queryStr = appendPlatformQuery(buildWindowQuery(windowSel), platform);
     const url = `/api/realtime/share?game=${encodeURIComponent(gameKey)}&${queryStr}`;
     const res = await fetch(url);
     const json = (await res.json()) as ShareResponse | { ok: false };
     if ('ok' in json && json.ok) {
       setData(json);
     }
-  }, [gameKey, windowSel]);
+  }, [gameKey, platform, windowSel]);
 
   useEffect(() => {
     void loadData();

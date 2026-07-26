@@ -14,6 +14,10 @@
  * 全部走 MySQL，按 snapshot_date 聚合。索引 idx_date / idx_date_level 已建好，单次 30k 行查询毫秒级。
  */
 
+import {
+  platformToSnapshotPrefix,
+  playerDataCollection,
+} from '../../shared/platforms';
 import { getMysqlPool, isMysqlMode } from '../db';
 import {
   getLatestSnapshotMeta,
@@ -21,6 +25,7 @@ import {
 } from '../snapshot-db';
 
 const SUPPORTED_GAMES = new Set(['huahua']);
+const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'h5', 'anon']);
 
 function ensureSupported(gameKey: string): void {
   if (!SUPPORTED_GAMES.has(gameKey)) {
@@ -36,6 +41,21 @@ function ensureMysql(): void {
   if (!isMysqlMode()) {
     throw new Error('snapshot 看板只支持 MySQL');
   }
+}
+
+/** 埋点 platform（wechat/douyin）或档案前缀（wx/dy）→ 稳定的 user_id 前缀 */
+function resolveSnapshotUserPrefix(platform?: string): string {
+  const raw = (platform || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (SNAPSHOT_PREFIXES.has(raw)) return raw;
+  return platformToSnapshotPrefix(raw);
+}
+
+/** WHERE 追加：按 user_id 前缀过滤（比 platform 列稳定） */
+function platformWhere(platform?: string): { sql: string; params: string[] } {
+  const prefix = resolveSnapshotUserPrefix(platform);
+  if (!prefix) return { sql: '', params: [] };
+  return { sql: ' AND user_id LIKE ?', params: [`${prefix}:%`] };
 }
 
 // ============================================================
@@ -137,8 +157,13 @@ const DECO_BOUNDARIES = [0, 5, 15, 30, 60];
 // 查询函数
 // ============================================================
 
-async function computeKpi(gameKey: string, snapshotDate: string): Promise<SnapshotKpi | null> {
+async function computeKpi(
+  gameKey: string,
+  snapshotDate: string,
+  platform?: string,
+): Promise<SnapshotKpi | null> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
     `SELECT
        COUNT(*) AS user_count,
@@ -160,8 +185,8 @@ async function computeKpi(gameKey: string, snapshotDate: string): Promise<Snapsh
        AVG(collection_discovered_count) AS avg_collection_discovered,
        AVG(active_customer_count) AS avg_active_customers
      FROM ${snapshotTable(gameKey)}
-     WHERE snapshot_date = ?`,
-    [snapshotDate],
+     WHERE snapshot_date = ?${pf.sql}`,
+    [snapshotDate, ...pf.params],
   );
   const r = (rows as Array<Record<string, any>>)[0];
   if (!r || Number(r.user_count) === 0) return null;
@@ -198,15 +223,17 @@ function round1(n: number): number {
 async function computeLevelDistribution(
   gameKey: string,
   snapshotDate: string,
+  platform?: string,
 ): Promise<LevelBucket[]> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
     `SELECT level, COUNT(*) AS cnt
        FROM ${snapshotTable(gameKey)}
-      WHERE snapshot_date = ?
+      WHERE snapshot_date = ?${pf.sql}
       GROUP BY level
       ORDER BY level ASC`,
-    [snapshotDate],
+    [snapshotDate, ...pf.params],
   );
   return (rows as Array<{ level: number; cnt: number }>).map((r) => ({
     level: Number(r.level),
@@ -223,13 +250,15 @@ async function computeValueBuckets(
   snapshotDate: string,
   column: 'huayuan' | 'diamond' | 'unlocked_deco_count',
   boundaries: number[],
+  platform?: string,
 ): Promise<ValueBucket[]> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
     `SELECT \`${column}\` AS v
        FROM ${snapshotTable(gameKey)}
-      WHERE snapshot_date = ?`,
-    [snapshotDate],
+      WHERE snapshot_date = ?${pf.sql}`,
+    [snapshotDate, ...pf.params],
   );
   const counts = new Map<string, { cnt: number; min: number }>();
   for (const r of rows as Array<{ v: number }>) {
@@ -246,15 +275,17 @@ async function computeValueBuckets(
 async function computeTutorialSteps(
   gameKey: string,
   snapshotDate: string,
+  platform?: string,
 ): Promise<TutorialStepBucket[]> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   const [rows] = await pool.query(
     `SELECT tutorial_step, tutorial_completed, COUNT(*) AS cnt
        FROM ${snapshotTable(gameKey)}
-      WHERE snapshot_date = ?
+      WHERE snapshot_date = ?${pf.sql}
       GROUP BY tutorial_step, tutorial_completed
       ORDER BY tutorial_step ASC`,
-    [snapshotDate],
+    [snapshotDate, ...pf.params],
   );
   return (rows as Array<{ tutorial_step: number; tutorial_completed: number; cnt: number }>).map((r) => ({
     step: Number(r.tutorial_step),
@@ -267,8 +298,10 @@ async function computeTutorialSteps(
 async function computeDailyTrend(
   gameKey: string,
   snapshotDate: string,
+  platform?: string,
 ): Promise<DailyTrendPoint[]> {
   const pool = await getMysqlPool();
+  const pf = platformWhere(platform);
   // 取最近 30 个 snapshot_date（含当天），按日期升序
   const [rows] = await pool.query(
     `SELECT
@@ -279,11 +312,11 @@ async function computeDailyTrend(
        AVG(diamond)  AS avg_diamond,
        SUM(tutorial_completed) AS done_cnt
      FROM ${snapshotTable(gameKey)}
-     WHERE snapshot_date <= ?
+     WHERE snapshot_date <= ?${pf.sql}
      GROUP BY snapshot_date
      ORDER BY snapshot_date DESC
      LIMIT 30`,
-    [snapshotDate],
+    [snapshotDate, ...pf.params],
   );
   const list = (rows as Array<Record<string, any>>).map((r) => {
     const userCount = Number(r.user_count);
@@ -553,15 +586,22 @@ export async function listHuahuaPlayerSnapshots(
 export async function getHuahuaSnapshotOverview(
   gameKey: string,
   snapshotDate?: string,
+  platform?: string,
 ): Promise<SnapshotResult> {
   ensureMysql();
   ensureSupported(gameKey);
+
+  const userPrefix = resolveSnapshotUserPrefix(platform);
+  const collectionName = playerDataCollection(gameKey, platform);
 
   // 没传 date：默认最新一次拉到的日期；表空时返回 null kpi（前端按"没有数据"处理）
   let date = snapshotDate || '';
   let userCount = 0;
   if (!date) {
-    const meta = await getLatestSnapshotMeta(gameKey);
+    const meta = await getLatestSnapshotMeta(gameKey, {
+      userIdPrefix: userPrefix || undefined,
+      collectionName,
+    });
     if (!meta) {
       return {
         query: { game_key: gameKey, snapshot_date: '', has_data: false },
@@ -580,15 +620,18 @@ export async function getHuahuaSnapshotOverview(
   }
 
   const [kpi, levels, huayuanB, diamondB, decoB, tutorial, trend] = await Promise.all([
-    computeKpi(gameKey, date),
-    computeLevelDistribution(gameKey, date),
-    computeValueBuckets(gameKey, date, 'huayuan', HUAYUAN_BOUNDARIES),
-    computeValueBuckets(gameKey, date, 'diamond', DIAMOND_BOUNDARIES),
-    computeValueBuckets(gameKey, date, 'unlocked_deco_count', DECO_BOUNDARIES),
-    computeTutorialSteps(gameKey, date),
-    computeDailyTrend(gameKey, date),
+    computeKpi(gameKey, date, platform),
+    computeLevelDistribution(gameKey, date, platform),
+    computeValueBuckets(gameKey, date, 'huayuan', HUAYUAN_BOUNDARIES, platform),
+    computeValueBuckets(gameKey, date, 'diamond', DIAMOND_BOUNDARIES, platform),
+    computeValueBuckets(gameKey, date, 'unlocked_deco_count', DECO_BOUNDARIES, platform),
+    computeTutorialSteps(gameKey, date, platform),
+    computeDailyTrend(gameKey, date, platform),
   ]);
-  const meta = await getLatestSnapshotMeta(gameKey);
+  const meta = await getLatestSnapshotMeta(gameKey, {
+    userIdPrefix: userPrefix || undefined,
+    collectionName,
+  });
 
   return {
     query: {

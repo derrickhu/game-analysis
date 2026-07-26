@@ -9,6 +9,28 @@ import {
   type CohortLtvDailyRow,
   type UserDailyRow,
 } from '../ltv-db';
+import { buildCohortLtvRows, listPlatformUserKeys } from './ltv';
+import { isPlatformFilterActive } from './platform-filter';
+
+async function loadUserDailyRows(gameKey: string, platform?: string): Promise<UserDailyRow[]> {
+  const rows = await listUserDailyRows(gameKey);
+  if (!isPlatformFilterActive(platform)) return rows;
+  const platformUserKeys = await listPlatformUserKeys(gameKey, platform as string);
+  return rows.filter((r) => platformUserKeys.has(r.user_key));
+}
+
+async function loadCohortLtvRows(
+  gameKey: string,
+  userDailyRows: UserDailyRow[],
+  fromDate: string,
+  toDate: string,
+  platform?: string,
+): Promise<CohortLtvDailyRow[]> {
+  if (!isPlatformFilterActive(platform)) return listCohortLtvRows(gameKey, fromDate, toDate);
+  // 预聚合表 analytics_cohort_ltv_daily 不区分平台；选定具体平台时基于该平台的 user_daily 子集
+  // 在内存里重算 cohort LTV，不落库。
+  return buildCohortLtvRows(gameKey, userDailyRows, fromDate, toDate);
+}
 
 export interface BusinessRoiRow {
   id: number;
@@ -565,12 +587,13 @@ export async function getBusinessRoiOverview(
   gameKey: string,
   fromDate: string,
   toDate: string,
+  platform?: string,
 ): Promise<BusinessRoiResult> {
-  const [inputs, userDailyRows, ltvRows] = await Promise.all([
+  const [inputs, userDailyRows] = await Promise.all([
     listBusinessDailyInputs(gameKey, fromDate, toDate),
-    listUserDailyRows(gameKey),
-    listCohortLtvRows(gameKey, fromDate, toDate),
+    loadUserDailyRows(gameKey, platform),
   ]);
+  const ltvRows = await loadCohortLtvRows(gameKey, userDailyRows, fromDate, toDate, platform);
   const userDailyByDate = sumUserDailyByDate(userDailyRows);
   const ltvProjectionByDate = buildLtvProjectionMap(ltvRows);
   const d3LtvByDate = buildLtvAgeMap(ltvRows, 3);
@@ -652,18 +675,17 @@ export async function getBusinessRoiOverview(
 
 export async function getBusinessRoiDecision(
   gameKey: string,
-  options: { targetDate: string; baselineDays?: number; maturityDay?: 3 | 7 },
+  options: { targetDate: string; baselineDays?: number; maturityDay?: 3 | 7; platform?: string },
 ): Promise<BusinessRoiDecisionResult> {
   const targetDate = options.targetDate;
   const baselineDays = Math.max(3, Math.min(30, Number(options.baselineDays) || 7));
   const maturityDay = options.maturityDay || 3;
+  const platform = options.platform;
   const baselineFromDate = addDays(targetDate, -baselineDays);
-  const overview = await getBusinessRoiOverview(gameKey, baselineFromDate, targetDate);
+  const overview = await getBusinessRoiOverview(gameKey, baselineFromDate, targetDate, platform);
   const rowsAsc = [...overview.rows].sort((a, b) => dateKeyToStartTs(a.date_key) - dateKeyToStartTs(b.date_key));
-  const [ltvRows, userDailyRows] = await Promise.all([
-    listCohortLtvRows(gameKey, baselineFromDate, targetDate),
-    listUserDailyRows(gameKey),
-  ]);
+  const userDailyRows = await loadUserDailyRows(gameKey, platform);
+  const ltvRows = await loadCohortLtvRows(gameKey, userDailyRows, baselineFromDate, targetDate, platform);
   // 投放决策只能使用已完整结束的 D3/D7。比如 5/09 cohort 的 D7 是 5/16，
   // 如果 5/16 当天还没结束，就不能把它当作 D7 成熟样本。
   const completeObservedAgeByDate = buildCompleteObservedAgeMap(ltvRows);

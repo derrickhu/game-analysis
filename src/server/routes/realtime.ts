@@ -22,6 +22,7 @@ import { ingestTencentAdsInsights } from '../jobs/ingest-tencent-ads-insights';
 import { ingestWechatPublisherBusinessInputs } from '../jobs/ingest-wechat-publisher';
 import { getConfig } from '../config';
 import {
+  aggregateAdMinuteFromEvents,
   getAdUserMetrics,
   listAdErrorTopN,
   listSeriesUserBuckets,
@@ -60,6 +61,7 @@ import {
 } from '../metrics/ltv';
 import {
   findLatestRetentionCohortDate,
+  getRetentionCohortOverview,
   getRetentionCohortRangeOverview,
   getPrecomputedRetentionCohortOverview,
 } from '../metrics/retention';
@@ -86,6 +88,11 @@ import {
   tsToDayBucket,
   tsToHourBucket,
 } from '../metrics/bucket';
+import {
+  isPlatformFilterActive,
+  platformToSnapshotPrefix,
+  playerDataCollection,
+} from '../../shared/platforms';
 
 const DEFAULT_WINDOW_MINUTES = 60;
 
@@ -117,6 +124,8 @@ interface AdRevenueQuery {
   from?: string;
   to?: string;
   window?: string;
+  /** 埋点渠道平台过滤：wechat/douyin/h5，空或 all 表示不过滤 */
+  platform?: string;
 }
 
 interface LtvQuery extends AdRevenueQuery {
@@ -130,6 +139,7 @@ interface RetentionCohortQuery {
   from_date?: string;
   to_date?: string;
   max_age?: string;
+  platform?: string;
 }
 
 interface BusinessInputBody {
@@ -150,12 +160,14 @@ interface BusinessRoiDecisionQuery {
   target_date?: string;
   baseline_days?: string;
   maturity_day?: string;
+  platform?: string;
 }
 
 interface BusinessRoiAiBody {
   game?: string;
   baseline_days?: number;
   maturity_day?: number;
+  platform?: string;
 }
 
 interface AcquisitionCostQuery {
@@ -507,18 +519,23 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     }
 
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const platform = query.platform;
     // bucket 字符串严格落在 5 分钟整点；前端 X 轴据此渲染，不会再出现 1 分钟假刻度
     const fromMinute = tsToBucket(fromTs);
     const toMinute = tsToBucket(toTs);
 
-    const rawRows = await listAdMinute(gameKey, fromMinute, toMinute);
+    // analytics_ad_minute 是全平台混算的预聚合表；选定具体平台时改为从 events 即时聚合，
+    // 保留下方真实 eCPM 覆盖逻辑不变（ecpm_used/ad_revenue 在这里先是 0，随后统一被覆盖）。
+    const rawRows = isPlatformFilterActive(platform)
+      ? await aggregateAdMinuteFromEvents(gameKey, fromMinute, toMinute, platform)
+      : await listAdMinute(gameKey, fromMinute, toMinute);
     const ecpmContext = await getRealEcpmContext(gameKey, fromTs, toTs);
     const revenueRows = applyRealEcpmRevenue(rawRows, ecpmContext);
     const rows = revenueRows.rows;
     const series = buildContinuousSeries(rows, fromMinute, toMinute);
     const breakdown = buildBreakdown(gameKey, rows);
     // 一次 SQL 同时折 5 分钟桶 + 1 小时桶用户集合，避免分别扫两遍
-    const seriesUserBuckets = await listSeriesUserBuckets(gameKey, fromTs, toTs);
+    const seriesUserBuckets = await listSeriesUserBuckets(gameKey, fromTs, toTs, platform);
     patchSeriesUserMetrics(series, seriesUserBuckets);
     // 小时桶 series 给「关键变现指标趋势」长尺度对比图用，单独保留 5 分钟 series 给主图（曝光/收益）
     const seriesHourly = foldHourlySeries(series, fromMinute, toMinute);
@@ -554,7 +571,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const fillRate = totalRequest > 0 ? Math.round((totalShow / totalRequest) * 10000) / 100 : 0;
     const errorRate = totalRequest > 0 ? Math.round((totalError / totalRequest) * 10000) / 100 : 0;
     // 用户维度指标：与 ad-revenue 共用 [fromTs, toTs] 窗口口径，避免按自然日跨窗口漂移
-    const userMetrics = await getAdUserMetrics(gameKey, fromTs, toTs, totalShow, totalRevenue);
+    const userMetrics = await getAdUserMetrics(gameKey, fromTs, toTs, totalShow, totalRevenue, platform);
 
     const response: AdRevenueResponse = {
       ok: true,
@@ -725,14 +742,14 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
 
   // 游戏端同源快照：展示当前每天发布给 hot-pot 的近 30 天各关通关数据，便于人工核对。
   app.get('/api/realtime/level-pass-rates', async (request) => {
-    const query = (request.query || {}) as { game?: string; window_days?: string | number };
+    const query = (request.query || {}) as { game?: string; window_days?: string | number; platform?: string };
     const gameKey = query.game || 'hotpot';
     if (gameKey !== 'hotpot') {
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'level-pass-rates 当前只支持 hotpot' };
     }
     const windowDays = Number(query.window_days) || 30;
     try {
-      const snapshot = await getLatestLevelPassRateOverview(gameKey, windowDays);
+      const snapshot = await getLatestLevelPassRateOverview(gameKey, windowDays, query.platform);
       return { ok: true, snapshot };
     } catch (error) {
       return {
@@ -755,7 +772,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const fromBucket = tsToBucket(fromTs);
     const toBucket = tsToBucket(toTs);
 
-    const result = await getOverview(gameKey, fromTs, toTs);
+    const result = await getOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from: fromBucket, to: toBucket, window_minutes: windowMinutes },
@@ -774,7 +791,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromDate = query.from_date || toLocalDateKey(fromTs);
     const toDate = query.to_date || toLocalDateKey(toTs);
-    const result = await getLtvOverview(gameKey, fromDate, toDate);
+    const result = await getLtvOverview(gameKey, fromDate, toDate, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
@@ -792,7 +809,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromDate = query.from_date || toLocalDateKey(fromTs);
     const toDate = query.to_date || toLocalDateKey(toTs);
-    const result = await getMonetizationOverview(gameKey, fromDate, toDate);
+    const result = await getMonetizationOverview(gameKey, fromDate, toDate, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
@@ -810,7 +827,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const { fromTs, toTs } = parseTimeRange(query);
     const fromDate = query.from_date || toLocalDateKey(fromTs);
     const toDate = query.to_date || toLocalDateKey(toTs);
-    const result = await getAttributionOverview(gameKey, fromDate, toDate);
+    const result = await getAttributionOverview(gameKey, fromDate, toDate, query.platform);
     return { ok: true, ...result };
   });
 
@@ -844,15 +861,19 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
     const maxAge = Number(query.max_age) || 30;
+    const platform = query.platform;
     const defaultCohortDate =
-      query.cohort_date || (await findLatestRetentionCohortDate(gameKey, Math.min(maxAge, 7))) || toLocalDateKey(Date.now() - 86_400_000);
+      query.cohort_date ||
+      (await findLatestRetentionCohortDate(gameKey, Math.min(maxAge, 7), platform)) ||
+      toLocalDateKey(Date.now() - 86_400_000);
     const cohortDate = String(defaultCohortDate).trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(cohortDate)) {
       return { ok: false, code: 'INVALID_DATE', error: 'cohort_date 必须是 YYYY-MM-DD' };
     }
-    const result = await getPrecomputedRetentionCohortOverview(gameKey, cohortDate, {
-      maxAge,
-    });
+    // 预聚合表 analytics_cohort_retention_daily 不区分平台；选定具体平台时改为实时重算，不落库。
+    const result = isPlatformFilterActive(platform)
+      ? await getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform })
+      : await getPrecomputedRetentionCohortOverview(gameKey, cohortDate, { maxAge });
     return { ok: true, ...result };
   });
 
@@ -881,6 +902,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     }
     const result = await getRetentionCohortRangeOverview(gameKey, fromDate, toDate, {
       maxAge: Number(query.max_age) || 30,
+      platform: query.platform,
     });
     return { ok: true, ...result };
   });
@@ -896,7 +918,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromDate = query.from_date || toLocalDateKey(fromTs);
     const toDate = query.to_date || toLocalDateKey(toTs);
-    const result = await getBusinessRoiOverview(gameKey, fromDate, toDate);
+    const result = await getBusinessRoiOverview(gameKey, fromDate, toDate, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
@@ -917,7 +939,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
       return { ok: false, code: 'INVALID_DATE', error: 'from_date/to_date 必须是 YYYY-MM-DD' };
     }
-    const result = await getAcquisitionIntelligenceOverview(gameKey, fromDate, toDate);
+    const result = await getAcquisitionIntelligenceOverview(gameKey, fromDate, toDate, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
@@ -980,6 +1002,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       targetDate,
       baselineDays: Number(query.baseline_days) || 7,
       maturityDay,
+      platform: query.platform,
     });
     return { ok: true, ...result };
   });
@@ -995,6 +1018,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       const result = await analyzeRoiWithDeepSeek(gameKey, {
         baselineDays: Number(body.baseline_days) || 7,
         maturityDay: Number(body.maturity_day) === 7 ? 7 : 3,
+        platform: body.platform,
       });
       return { ok: true, ...result };
     } catch (error) {
@@ -1115,7 +1139,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const limit = Math.max(1, Math.min(100, Number(query.limit) || 20));
-    const rows = await listAdErrorTopN(gameKey, fromTs, toTs, limit);
+    const rows = await listAdErrorTopN(gameKey, fromTs, toTs, limit, query.platform);
     const totalErrors = rows.reduce((s, r) => s + r.count, 0);
     return {
       ok: true,
@@ -1141,7 +1165,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
     const fromBucket = tsToBucket(fromTs);
     const toBucket = tsToBucket(toTs);
-    const result = await getShareOverview(gameKey, fromTs, toTs);
+    const result = await getShareOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from: fromBucket, to: toBucket, window_minutes: windowMinutes },
@@ -1176,6 +1200,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       toTs,
       eventName,
       userQuery,
+      platform: query.platform,
       limit,
       offset,
     });
@@ -1203,7 +1228,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
     }
     const { fromTs, toTs } = parseTimeRange(query);
-    const names = await listEventNames(gameKey, fromTs, toTs);
+    const names = await listEventNames(gameKey, fromTs, toTs, query.platform);
     return { ok: true, names };
   });
 
@@ -1216,7 +1241,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const fromBucket = tsToBucket(fromTs);
     const toBucket = tsToBucket(toTs);
 
-    const result = await getProgressOverview(gameKey, fromTs, toTs);
+    const result = await getProgressOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from: fromBucket, to: toBucket, window_minutes: windowMinutes },
@@ -1245,7 +1270,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'caizhu-gameplay 当前只服务 caizhu' };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
-    const result = await getCaizhuGameplayOverview(gameKey, fromTs, toTs);
+    const result = await getCaizhuGameplayOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
@@ -1261,7 +1286,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'hotpot-fruit-slice 当前只服务 hotpot' };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
-    const result = await getHotpotFruitSliceOverview(gameKey, fromTs, toTs);
+    const result = await getHotpotFruitSliceOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
@@ -1277,7 +1302,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'hotpot-daily-limited 当前只服务 hotpot' };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
-    const result = await getHotpotDailyLimitedOverview(gameKey, fromTs, toTs);
+    const result = await getHotpotDailyLimitedOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
@@ -1298,7 +1323,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-economy 当前只服务 huahua' };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
-    const result = await getHuahuaEconomyOverview(gameKey, fromTs, toTs);
+    const result = await getHuahuaEconomyOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: {
@@ -1319,7 +1344,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-order 当前只服务 huahua' };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
-    const result = await getHuahuaOrderOverview(gameKey, fromTs, toTs);
+    const result = await getHuahuaOrderOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: {
@@ -1340,7 +1365,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-growth 当前只服务 huahua' };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
-    const result = await getHuahuaGrowthOverview(gameKey, fromTs, toTs);
+    const result = await getHuahuaGrowthOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: {
@@ -1361,7 +1386,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'huahua-engagement 当前只服务 huahua' };
     }
     const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
-    const result = await getHuahuaEngagementOverview(gameKey, fromTs, toTs);
+    const result = await getHuahuaEngagementOverview(gameKey, fromTs, toTs, query.platform);
     return {
       ok: true,
       query: {
@@ -1384,17 +1409,24 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
    * 与 5 分钟事件流互补：事件流看"做了什么"，快照看"现在是什么状态"。
    */
   const SNAPSHOT_OVERVIEW_GAMES = new Set(['huahua', 'hotpot']);
+  /** 玩家档案 user_id 前缀白名单，区别于埋点 platform（wechat/douyin/h5/all） */
+  const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'h5', 'anon']);
 
   app.get('/api/realtime/huahua-snapshot', async (request) => {
-    const query = (request.query || {}) as { game?: string; date?: string };
+    const query = (request.query || {}) as { game?: string; date?: string; platform?: string };
     const gameKey = query.game || 'huahua';
     if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot 当前支持 huahua / hotpot' };
     }
     const result = gameKey === 'hotpot'
-      ? await getHotpotSnapshotOverview(gameKey, query.date)
-      : await getHuahuaSnapshotOverview(gameKey, query.date);
-    return { ok: true, ...result };
+      ? await getHotpotSnapshotOverview(gameKey, query.date, query.platform)
+      : await getHuahuaSnapshotOverview(gameKey, query.date, query.platform);
+    return {
+      ok: true,
+      ...result,
+      // 前端展示数据源集合名：微信 {game}_playerData / 抖音 {game}_tt_playerData
+      source_collection: playerDataCollection(gameKey, query.platform),
+    };
   });
 
   /**
@@ -1434,6 +1466,13 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot/players 当前支持 huahua / hotpot' };
     }
+    // query.platform 这里语义是玩家档案 user_id 前缀（wx/dy/h5/anon），跟顶部全局筛选的埋点
+    // platform（wechat/douyin/h5/all）不是一套编码。前端表格自身的平台筛选下拉已经传前缀值，
+    // 但如果调用方直接传了埋点 platform（比如复用顶部全局筛选值、或未来的直连调用），这里做
+    // 一次归一化：非法/非前缀值一律按埋点 platform 处理并映射成对应前缀。
+    const snapshotPlatform = SNAPSHOT_PREFIXES.has(query.platform || '')
+      ? query.platform
+      : platformToSnapshotPrefix(query.platform) || undefined;
     if (gameKey === 'hotpot') {
       const result = await listHotpotPlayerSnapshots(gameKey, {
         snapshot_date: query.date,
@@ -1442,7 +1481,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
         page: query.page ? Number(query.page) : undefined,
         page_size: query.pageSize ? Number(query.pageSize) : undefined,
         user_id_search: query.q,
-        platform: query.platform,
+        platform: snapshotPlatform,
         min_coins: query.minCoins ? Number(query.minCoins) : undefined,
         max_coins: query.maxCoins ? Number(query.maxCoins) : undefined,
         min_bowl_level: query.minBowlLevel ? Number(query.minBowlLevel) : undefined,
@@ -1457,7 +1496,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       page: query.page ? Number(query.page) : undefined,
       page_size: query.pageSize ? Number(query.pageSize) : undefined,
       user_id_search: query.q,
-      platform: query.platform,
+      platform: snapshotPlatform,
       tutorial_completed:
         tutorialCompletedNum === 0 || tutorialCompletedNum === 1 ? (tutorialCompletedNum as 0 | 1) : undefined,
       min_level: query.minLevel ? Number(query.minLevel) : undefined,
@@ -1469,10 +1508,11 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
 
   /**
    * 手动触发一次全量快照拉取（联调和数据修正用）；正常生产由 cron 每天 04:00 自动跑。
-   * body: { game: 'huahua', retentionDays?: 30 }
+   * body: { game: 'huahua', platform?: 'wechat'|'douyin', retentionDays?: 30 }
+   * huahua 传 platform 时只拉对应云集合；不传则两端都拉（与 cron 一致）。
    */
   app.post('/api/realtime/snapshot-now', async (request) => {
-    const body = (request.body || {}) as { game?: string; retentionDays?: number };
+    const body = (request.body || {}) as { game?: string; platform?: string; retentionDays?: number };
     const gameKey = body.game || 'huahua';
     if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
       return { ok: false, code: 'UNSUPPORTED_GAME', error: 'snapshot-now 当前支持 huahua / hotpot' };
@@ -1480,8 +1520,16 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const retentionDays =
       typeof body.retentionDays === 'number' && body.retentionDays > 0 ? body.retentionDays : undefined;
     const result = gameKey === 'hotpot'
-      ? await ingestHotpotSnapshots({ triggerSource: 'manual', retentionDays })
-      : await ingestHuahuaSnapshots({ triggerSource: 'manual', retentionDays });
+      ? await ingestHotpotSnapshots({
+          triggerSource: 'manual',
+          retentionDays,
+          platform: body.platform,
+        })
+      : await ingestHuahuaSnapshots({
+          triggerSource: 'manual',
+          retentionDays,
+          platform: body.platform,
+        });
     return result;
   });
 }

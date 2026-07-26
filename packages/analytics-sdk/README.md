@@ -2,6 +2,18 @@
 
 标准化游戏经分埋点 SDK，跨小游戏 / H5 / 引擎桥通用，零运行时依赖。
 
+## 怎么读这份文档
+
+| 你要做的事 | 去哪看 |
+| --- | --- |
+| 30 分钟把新游戏接上经分 | [新游戏接入步骤](#新游戏接入步骤约-30-分钟) |
+| 微信 + 抖音双端怎么拆数据 | [多平台接入规范](#多平台接入规范微信--抖音)（必读，最容易踩坑） |
+| 该打哪些事件、字段叫什么 | [SOP 标准事件清单](#sop-标准事件清单) + [字段命名规范](#字段命名规范) |
+| 上线前对一遍 | [接入自检清单](#接入自检清单联调上线前对一遍) |
+| 出了问题对照现象 | [故障排查](#故障排查) |
+
+**一句话原则：** `gameKey` 用基础名区分游戏，`platform` 区分微信/抖音，存档集合用 `{gameKey}_tt_*` 隔离抖音——三套名字不要混。
+
 ## 特性
 
 - 三层 Adapter 抽象（Transport / Storage / Lifecycle），SDK 包代码完全不出现 `wx` / `tt` / `document`，保证跨平台
@@ -175,11 +187,14 @@ Analytics.setUserId('openid_xxx');
 - [ ] 业务货币（体力 / 票券 / 心愿等）沿用 `xxx_change` 命名，并在 init 时加 0.1 采样
 - [ ] 朋友圈分享按 `share_timeline` 上报（不是混进 `share_app_message`）
 
-#### 双平台（同时发微信 + 抖音）
+#### 双平台（同时发微信 + 抖音）— 详见下文「多平台接入规范」
 
-- [ ] `Analytics.init({ platform })` 按当前宿主正确设置 `'wechat'` / `'douyin'`
-- [ ] 抖音激励广告 `onClose` 不一定带 `isEnded`，`is_ended` 字段已用 `res?.isEnded === true` 兜底
-- [ ] 抖音 `tt.shareAppMessage` 不支持 `query` 字段，已在分享层做平台分支
+- [ ] `Analytics.init({ gameKey })` 用**基础名**（`huahua` / `hotpot` / `petTower`），**不要**写成 `huahua_tt` / `petTower_tt`
+- [ ] `Analytics.init({ platform })` 按宿主设为 `'wechat'` 或 `'douyin'`（经分大盘靠这个字段分流）
+- [ ] 云存档集合按约定隔离：微信 `{gameKey}_playerData`，抖音 `{gameKey}_tt_playerData`
+- [ ] 登录 `userId` 带平台前缀：`wx:openid` / `dy:openid`（与集合隔离配套）
+- [ ] 抖音激励广告 `is_ended: res?.isEnded === true`（勿把 undefined 当完看）
+- [ ] 抖音分享不依赖 `query`；朋友圈事件仅微信打 `share_timeline`
 
 ## 数据流
 
@@ -207,7 +222,7 @@ client track() -> EventQueue -> Batcher (15s / 20 条) -> Sender (HTTP)
 | 健康检查路径 | `POST /analytics-ingest/health` |
 | 云函数名 | `analytics-ingest`（Nodejs18.15，handler `index.main`） |
 | CloudDB 集合 | `analytics_events`（已建索引：`game_key+event_ts`、`ingest_ts`、`game_key+user_id+event_ts`、`game_key+event_name+event_ts`） |
-| 已注册 game_key 白名单 | `hotpot`,`huahua`,`caizhu`（云函数环境变量 `ANALYTICS_GAME_KEYS`） |
+| 已注册 game_key 白名单 | `hotpot`,`huahua`,`caizhu`,`petTower`,`xiaochu`（云函数环境变量 `ANALYTICS_GAME_KEYS`；以线上实际配置为准） |
 
 **重要架构特性：**
 
@@ -242,12 +257,19 @@ import { Platform } from '@/core/PlatformService'; // 或者自己游戏的等�
 
 const ENDPOINT = 'https://rosa-env-d7grf78r5dbd37323.service.tcloudbase.com/analytics-ingest/track';
 
+function mapPlatform(): 'wechat' | 'douyin' | 'h5' {
+  if (Platform.isDouyin) return 'douyin';
+  if (Platform.isWechat) return 'wechat';
+  return 'h5';
+}
+
 export function initAnalytics() {
   Analytics.init({
     endpoint: ENDPOINT,
-    gameKey: 'gameX',           // 必须先在白名单里注册（见步骤 3）
-    appVersion: '1.0.0',
-    platform: 'wechat',         // 'wechat' | 'douyin' | 'h5'...
+    // 必须用基础名（先在白名单注册，见步骤 3）。双端也不要改成 gameX_tt。
+    gameKey: 'gameX',
+    appVersion: typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '1.0.0',
+    platform: mapPlatform(),    // 经分靠这个字段拆微信/抖音，禁止写死 'wechat'
     deviceInfo: { /* 同 hot-pot 写法 */ },
     transport: { request: Platform.request.bind(Platform) },
     storage:   { get: Platform.getStorageSync.bind(Platform), set: ..., remove: ... },
@@ -296,13 +318,13 @@ Platform.onHide(() => {
 ```
 manageFunctions updateFunctionConfig
   functionName: analytics-ingest
-  envVariables: { ANALYTICS_GAME_KEYS: "hotpot,huahua,caizhu,gameX" }
+  envVariables: { ANALYTICS_GAME_KEYS: "hotpot,huahua,caizhu,petTower,xiaochu,gameX" }
 ```
 
 或者 CloudBase CLI：
 
 ```bash
-tcb fn config update analytics-ingest --envVariables ANALYTICS_GAME_KEYS=hotpot,huahua,caizhu,gameX
+tcb fn config update analytics-ingest --envVariables ANALYTICS_GAME_KEYS=hotpot,huahua,caizhu,petTower,xiaochu,gameX
 ```
 
 **方式 B：CloudBase 控制台手工改**
@@ -400,20 +422,94 @@ const APP_VERSION = import.meta.env.VITE_APP_VERSION || pkg.version;
 - `session_end` 在 `onHide` 触发；不需要在 `onShow` 时打"session_resume"，留存形态用 `app_show` 自带的 `background_ms` 字段还原即可
 - 如果产品强需"30 分钟后切回算新会话"，应在数据层（dashboard）按 session_id + event_ts 间隔自行切分，**不**改 SDK，避免每个游戏对会话定义不一致
 
-### 微信 + 抖音双平台接入须知
+### 多平台接入规范（微信 + 抖音）
 
-花花、彩珠均规划微信 + 抖音同时上线。SDK 内核已平台无关，但平台 API 差异需要在游戏接入层兜住：
+> 经分大盘顶部有「微信 / 抖音」切换，默认微信。  
+> **同一游戏两端数据必须能分开算**；混在一起会把 DAU、留存、玩家档案全部算歪。  
+> 参考实现：`game2D_huahua`（完整闭环）、`xiaochu2`（存档已分集合）。
+
+#### 先分清三套名字（最容易搞错）
+
+| 概念 | 微信示例 | 抖音示例 | 谁用 |
+| --- | --- | --- | --- |
+| **经分 `gameKey`** | `huahua` | `huahua`（**不变**） | SDK `Analytics.init`、云函数白名单、dashboard 游戏下拉 |
+| **埋点 `platform`** | `wechat` | `douyin` | SDK 每条事件字段；dashboard 平台下拉靠它过滤 |
+| **云存档集合 / 本地 key 命名空间** | `huahua_playerData` / `huahua_*` | `huahua_tt_playerData` / `huahua_tt_*` | 云函数 `getCollectionName`、客户端 `gameKeyScope` |
+| **登录 `userId` 前缀** | `wx:openid` | `dy:openid` | JWT / 存档主键 / 玩家档案筛选 |
+
+**铁律：**
+
+1. 经分 `gameKey` **永远是基础名**，禁止 `huahua_tt` / `petTower_tt` 当 gameKey 上报（会被白名单拒，或拆成两个「假游戏」）。
+2. 端差异只走 `platform` 字段 + 存档集合 / `userId` 前缀，**不要**靠改 gameKey 区分端。
+3. 存档集合命名固定为：`{gameKey}_playerData`（微信）与 `{gameKey}_tt_playerData`（抖音）。
+
+```ts
+// ✅ 正确
+Analytics.init({
+  gameKey: 'huahua',                 // 或 BASE_GAME_KEY，不要用 getScopedGameKey()
+  platform: Platform.isDouyin ? 'douyin' : 'wechat',
+  // ...
+});
+
+// ❌ 错误：抖音把 scoped key 写进 gameKey
+Analytics.init({
+  gameKey: getScopedGameKey(),       // 抖音会变成 huahua_tt / petTower_tt → 经分对不上
+  platform: 'douyin',
+});
+```
+
+#### 云函数 / 存档侧要做的事
+
+与 `huahua-api/lib/config.js` 同模式：
+
+```js
+// PLATFORM_SCOPE: 后端 platform 码 → 集合命名段
+const PLATFORM_SCOPE = { dy: 'tt' };
+
+function getScopedGameKey(platform) {
+  const scope = PLATFORM_SCOPE[String(platform || '').toLowerCase()] || '';
+  return scope ? `${GAME_KEY}_${scope}` : GAME_KEY;
+}
+
+function getCollectionName(suffix, platform) {
+  // 微信: huahua_playerData
+  // 抖音: huahua_tt_playerData
+  return `${getScopedGameKey(platform)}_${suffix}`;
+}
+```
+
+登录签发的 `userId` 必须是 `` `${platform}:${openid}` ``（`wx:` / `dy:`），这样即使历史数据曾进同一集合，经分也能按前缀切开。
+
+#### 经分 dashboard 怎么读
+
+| 页面 | 过滤依据 |
+| --- | --- |
+| 大盘 / 留存 / 商业化 / 玩法 / 原始事件 | `analytics_events.platform = wechat\|douyin` |
+| 玩家档案 | 拉取对应云集合 + MySQL 里 `user_id LIKE 'wx:%'\|'dy:%'` |
+| 投放消耗 / 微信流量主收入 | 仍是微信投放/流量主口径；看抖音时不要拿它当抖音真实收入 |
+
+玩家档案「立即拉取」会按当前平台拉集合：微信拉 `{game}_playerData`，抖音拉 `{game}_tt_playerData`（若抖音集合尚未建好，部分游戏会回退扫主集合里的 `dy:` 用户，但**目标态仍是独立 `_tt_` 集合**）。
+
+#### 宿主 API 差异（接入层兜底）
 
 | 维度 | 微信 (wx) | 抖音 (tt) | 接入处理 |
 | --- | --- | --- | --- |
-| 平台标识 | `Analytics.init({ platform: 'wechat' })` | `'douyin'` | 接入层按 `typeof wx !== 'undefined'` / `typeof tt` 切换 |
-| 激励广告 onClose 字段 | 可靠返回 `{ isEnded: true/false }` | 部分版本不返回 `isEnded` | `is_ended: res?.isEnded === true`（只有显式 true 才算完看，避免抖音端虚高完看率） |
-| 朋友圈分享 | 支持 `onShareTimeline` | **不支持**朋友圈，无对等通道 | `share_timeline` 事件**仅微信打**；抖音端 share 全走 `share_app_message` |
-| `shareAppMessage.query` 参数 | 支持 | 部分版本忽略 | 抖音端不要依赖 query 做归因，用业务 entry_point 区分 |
-| 登录 | `wx.login` 返回 code | `tt.login` 返回 code（业务侧再换 openid） | `setAnalyticsUserId` 拿到 openid 后调用即可，SDK 不感知差异 |
-| Storage | `wx.setStorageSync` | `tt.setStorageSync` | StorageAdapter 注入即可 |
+| 平台标识 | `platform: 'wechat'` | `platform: 'douyin'` | `Platform.isWechat` / `isDouyin` 映射，勿写死 |
+| 激励广告 onClose | 可靠 `{ isEnded }` | 部分版本无 `isEnded` | `is_ended: res?.isEnded === true` |
+| 朋友圈 | `onShareTimeline` | 无对等通道 | 仅微信打 `share_timeline` |
+| `shareAppMessage.query` | 支持 | 部分版本忽略 | 抖音勿依赖 query 做归因 |
+| Storage / request | `wx.*` | `tt.*` | Adapter 注入即可，SDK 内核不出现 wx/tt |
 
-抖音激励广告 `onError` 错误码与微信不重合（`tt` 自己的码段），上报时仍走 `err_code` number 透传，dashboard 按 `platform` 维度拆分判读。
+#### 现状对照（接入前先看自己落在哪一档）
+
+| 游戏 | 埋点 platform | 存档 `_tt_` 分集合 | 经分档案双端 |
+| --- | --- | --- | --- |
+| huahua | ✅ | ✅ `huahua_tt_playerData` | ✅ |
+| petTower (xiaochu2) | ✅（gameKey 须用 `petTower`） | ✅ `petTower_tt_playerData` | 暂无档案页（事件流可分） |
+| hotpot | ✅ | ⚠️ 尚未分集合（同表 `dy:` 前缀） | ✅ 按前缀筛；建议后续补 `_tt_` |
+| caizhu / xiaochu | ✅ | ⚠️ 尚未分集合 | 无档案页 |
+
+新开双端游戏：**直接按 huahua 模式做分集合**，不要再走「同集合 + 前缀」的过渡方案。
 
 ### debug 模式自查
 

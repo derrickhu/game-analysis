@@ -24,6 +24,7 @@ import ReactECharts from 'echarts-for-react';
 import type { ReactNode } from 'react';
 
 import { getGameDescriptor } from '../../shared/games';
+import type { PlatformFilter } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 
 const { Text } = Typography;
@@ -142,19 +143,24 @@ function heatColor(value: number | null | undefined): string {
   return '#fff1f0';
 }
 
-async function fetchRetentionRange(gameKey: string, range: [Dayjs, Dayjs]): Promise<RetentionRangeResponse> {
+async function fetchRetentionRange(
+  gameKey: string,
+  range: [Dayjs, Dayjs],
+  platform: PlatformFilter,
+): Promise<RetentionRangeResponse> {
   const query = new URLSearchParams({
     game: gameKey,
     from_date: range[0].format('YYYY-MM-DD'),
     to_date: range[1].format('YYYY-MM-DD'),
     max_age: '30',
+    platform,
   });
   const res = await fetch(`/api/realtime/retention-cohorts?${query.toString()}`);
   return (await res.json()) as RetentionRangeResponse;
 }
 
 export function RetentionPage() {
-  const { gameKey, refreshToken, setLoading, setLastRefreshedAt } = useAnalyticsFilter();
+  const { gameKey, platform, refreshToken, setLoading, setLastRefreshedAt } = useAnalyticsFilter();
   const descriptor = getGameDescriptor(gameKey);
   const isIntegrated = descriptor?.hasAnalyticsSdk === true;
   const [range, setRange] = useState<[Dayjs, Dayjs]>(defaultRange);
@@ -178,7 +184,7 @@ export function RetentionPage() {
       setLoadError(null);
       setLoading(true);
       try {
-        const json = await fetchRetentionRange(nextGameKey, nextRange);
+        const json = await fetchRetentionRange(nextGameKey, nextRange, platform);
         if (lastRequestKeyRef.current !== requestKey) return;
         if (!json.ok) {
           const err = `获取留存数据失败: ${json.error || json.code}`;
@@ -215,12 +221,12 @@ export function RetentionPage() {
         }
       }
     },
-    [setLastRefreshedAt, setLoading],
+    [platform, setLastRefreshedAt, setLoading],
   );
 
   useEffect(() => {
     void loadData(gameKey, range);
-  }, [gameKey, loadData, refreshToken]);
+  }, [gameKey, platform, loadData, refreshToken]);
 
   const cohorts = data?.cohorts || [];
   const selectedCohort = cohorts.find((cohort) => cohort.cohort_date === selectedDate) || cohorts[cohorts.length - 1];

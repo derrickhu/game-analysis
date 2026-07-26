@@ -2,6 +2,7 @@ import tcb from '@cloudbase/node-sdk';
 
 import { getMysqlPool } from '../db';
 import { findAnalyticsGame } from '../config/analytics-games';
+import { PLATFORM_SQL, isPlatformFilterActive, platformSqlParams } from './platform-filter';
 
 const MODE_KEY = 'bowl';
 const WINDOW_DAYS = 30;
@@ -133,7 +134,12 @@ export async function recomputeLevelPassRates(options: RecomputeOptions = {}): P
 export async function getLatestLevelPassRateOverview(
   gameKey = 'hotpot',
   windowDays = WINDOW_DAYS,
+  platform?: string,
 ): Promise<LevelPassRateOverview | null> {
+  // 预聚合表 game_level_pass_rates 不区分平台，选定具体平台时改为实时按窗口重算，不写库
+  if (isPlatformFilterActive(platform)) {
+    return computeLiveLevelPassRateOverview(gameKey, windowDays, platform);
+  }
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `SELECT
@@ -199,6 +205,43 @@ export async function getLatestLevelPassRateOverview(
   };
 }
 
+/**
+ * 按平台过滤时不读预聚合表，实时用当前窗口重算通关率（不落库，避免污染全平台聚合数据）。
+ */
+async function computeLiveLevelPassRateOverview(
+  gameKey: string,
+  windowDays: number,
+  platform?: string,
+): Promise<LevelPassRateOverview> {
+  const boundedWindowDays = Math.max(1, Math.min(30, Math.floor(windowDays || WINDOW_DAYS)));
+  const { fromDate, toDate, fromTs, toTs } = getCompleteDayWindow(boundedWindowDays);
+  const computedAt = Date.now();
+  const rows = buildLevelPassRows(
+    gameKey,
+    await listRawLevelEvents(gameKey, fromTs, toTs, platform),
+    { windowDays: boundedWindowDays, fromDate, toDate, computedAt },
+  );
+  return {
+    game_key: gameKey,
+    mode_key: MODE_KEY,
+    window_days: boundedWindowDays,
+    window_start_date: fromDate,
+    window_end_date: toDate,
+    computed_at: computedAt,
+    levels: rows.map((row) => ({
+      level_id: row.level_id,
+      pass_rate: row.pass_rate,
+      start_users: row.start_users,
+      clear_users: row.clear_users,
+      started_and_cleared_users: row.started_and_cleared_users,
+      start_attempts: row.start_attempts,
+      clear_attempts: row.clear_attempts,
+      fail_attempts: row.fail_attempts,
+      is_sample_low: row.is_sample_low,
+    })),
+  };
+}
+
 function getCompleteDayWindow(windowDays: number): { fromDate: string; toDate: string; fromTs: number; toTs: number } {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -217,8 +260,9 @@ function toLocalDateKey(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-async function listRawLevelEvents(gameKey: string, fromTs: number, toTs: number): Promise<RawLevelEvent[]> {
+async function listRawLevelEvents(gameKey: string, fromTs: number, toTs: number, platform?: string): Promise<RawLevelEvent[]> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT
        event_name,
@@ -227,8 +271,8 @@ async function listRawLevelEvents(gameKey: string, fromTs: number, toTs: number)
      FROM analytics_events
      WHERE game_key = ?
        AND event_name IN ('level_start', 'level_clear', 'level_fail')
-       AND event_ts BETWEEN ? AND ?`,
-    [gameKey, fromTs, toTs],
+       AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
+    [gameKey, fromTs, toTs, ...platformParams],
   );
   return rows as RawLevelEvent[];
 }

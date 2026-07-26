@@ -3,6 +3,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { ALL_GAMES, getGameDescriptor } from '../../shared/games';
+import { PLATFORM_OPTIONS, type PlatformFilter } from '../../shared/platforms';
 import { AnalyticsFilterProvider, useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import {
   WINDOW_OPTIONS,
@@ -43,8 +44,8 @@ function BusinessSubTabs() {
     <Tabs
       activeKey={subKey}
       onChange={(key) => {
-        // 切子 Tab 时保留 URL 上的 ?game=&window= 查询参数（由 Provider 主动写回的真值），
-        // 避免"切到原始事件再切回大盘，时间窗口/游戏被重置成默认值"
+        // 切子 Tab 时保留 URL 上的 ?game=&platform=&window= 查询参数（由 Provider 主动写回的真值），
+        // 避免"切到原始事件再切回大盘，时间窗口/游戏/平台被重置成默认值"
         navigate({ pathname: `/business/${key}`, search: location.search });
       }}
       items={[
@@ -69,6 +70,8 @@ function BusinessHeaderControls() {
   const {
     gameKey,
     setGameKey,
+    platform,
+    setPlatform,
     windowSel,
     setWindowSel,
     triggerRefresh,
@@ -107,6 +110,13 @@ function BusinessHeaderControls() {
             </Space>
           ),
         }))}
+      />
+      <Select
+        value={platform}
+        onChange={(value) => setPlatform(value as PlatformFilter)}
+        style={{ minWidth: 120 }}
+        options={PLATFORM_OPTIONS}
+        disabled={!isIntegrated}
       />
       {usesPageTimeWindow ? (
         <Tag color="blue">本页使用页内时间窗口</Tag>
