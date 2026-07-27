@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -194,14 +194,14 @@ export function LevelProgressPanel() {
           name: '通关',
           type: 'bar',
           barMaxWidth: 18,
-          itemStyle: { color: '#10b981', borderRadius: [4, 4, 0, 0] },
+          itemStyle: { color: '#059669', borderRadius: [4, 4, 0, 0] },
           data: dist.map((d) => d.clear_users),
         },
         {
           name: '放弃',
           type: 'bar',
           barMaxWidth: 18,
-          itemStyle: { color: '#ef4444', borderRadius: [4, 4, 0, 0] },
+          itemStyle: { color: '#e11d48', borderRadius: [4, 4, 0, 0] },
           data: dist.map((d) => d.fail_users),
         },
         {
@@ -243,14 +243,14 @@ export function LevelProgressPanel() {
           name: '通关',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#10b981' },
+          itemStyle: { color: '#059669' },
           data: series.map((p) => p.clear_cnt),
         },
         {
           name: '失败',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#ef4444' },
+          itemStyle: { color: '#e11d48' },
           data: series.map((p) => p.fail_cnt),
         },
       ],
@@ -338,7 +338,7 @@ export function LevelProgressPanel() {
           name: '通关用户',
           type: 'bar',
           barMaxWidth: 18,
-          itemStyle: { color: '#10b981', borderRadius: [4, 4, 0, 0] },
+          itemStyle: { color: '#059669', borderRadius: [4, 4, 0, 0] },
           data: rows.map((row) => row.clear_users),
         },
         {
@@ -354,7 +354,7 @@ export function LevelProgressPanel() {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          itemStyle: { color: '#f59e0b' },
+          itemStyle: { color: '#d97706' },
           data: rows.map((row) => (rows[0]?.start_users ? row.start_users / rows[0].start_users : 0)),
         },
         {
@@ -362,7 +362,7 @@ export function LevelProgressPanel() {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          itemStyle: { color: '#8b5cf6' },
+          itemStyle: { color: '#7c3aed' },
           lineStyle: { type: 'dashed' },
           data: rows.map((row) => (row.start_users ? Math.min(row.start_attempts / row.start_users / 5, 1) : 0)),
         },
@@ -372,8 +372,11 @@ export function LevelProgressPanel() {
 
   return (
     <Card
-      title="关卡通关漏斗"
-      extra={<Text type="secondary">数据源：level_start / level_clear / level_fail</Text>}
+      title={
+        <Tooltip title="数据源：level_start / level_clear / level_fail">
+          <span style={{ cursor: 'help' }}>关卡通关漏斗</span>
+        </Tooltip>
+      }
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <Row gutter={[16, 16]}>

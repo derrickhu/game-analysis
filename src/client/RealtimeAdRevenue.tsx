@@ -1,9 +1,9 @@
 import type { ReactElement } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography,
+  Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from './components/AnalyticsChart';
 
 import { appendPlatformQuery, type PlatformFilter } from '../shared/platforms';
 import {
@@ -161,33 +161,37 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     milk_tea_tool_use: '奶茶店 - 看广告使用道具',
     milk_tea_fail_revive: '奶茶店 - 失败复活清盘',
   },
-  // huahua 的广告位定义见 game2D_huahua/src/managers/AdManager.ts 的 AdScene 枚举
+  // huahua 广告位 = game2D_huahua/src/managers/AdManager.ts AdScene（全量对齐）
   huahua: {
-    // 主玩法激励位
-    stamina_recover: '体力恢复',
-    cd_speedup: '建筑 CD 加速',
-    extra_reward: '额外奖励',
-    revive: '挑战复活',
-    free_chest: '免费宝箱',
-    merch_shop: '商店广告购买',
-    board_cell_unlock: '订单板格子解锁',
-    warehouse_slot_unlock: '仓库格子解锁',
-    special_deco_unlock: '特殊装饰解锁',
-    promo_furniture_unlock: '宣传款家具解锁',
-    merge_bubble_unlock: '合成气泡解锁',
-    // 福利/日常位
-    merch_daily_refresh: '商品每日刷新',
-    flower_sign_daily_draw: '许愿券每日抽',
-    warehouse_organize: '仓库整理',
-    reward_box_organize: '奖励箱整理',
-    checkin_ad_bonus: '签到加餐',
+    // === 主玩法激励位 ===
+    stamina_recover: '体力不足 - 看广告恢复',
+    cd_speedup: '建筑工具 - 看广告加速 CD',
+    extra_reward: '额外奖励 - 看广告领取',
+    free_chest: '免费宝箱 - 看广告开箱',
+    merch_shop: '花店商店 - 广告购商品',
+    board_cell_unlock: '订单棋盘 - 广告解锁格子',
+    warehouse_slot_unlock: '仓库 - 广告解锁格子',
+    special_deco_unlock: '装修/换装 - 特殊装饰解锁',
+    promo_furniture_unlock: '装修 - 宣传款家具解锁',
+    merge_bubble_unlock: '合成气泡 - 广告解锁内容',
+    warehouse_organize: '仓库 - 广告整理加速',
+    reward_box_organize: '奖励箱 - 广告整理',
+    // === 福利 / 活动位 ===
+    merch_daily_refresh: '花店商店 - 每日广告刷新货架',
+    flower_sign_daily_draw: '花签许愿 - 每日广告抽奖',
+    checkin_ad_bonus: '每日签到 - 广告加餐（体力+钻石）',
     newbie_gift_pack: '新手礼包 - 广告领取',
-    weekend_huayuan_boost: '周末订单花愿加成',
-    dressup_outfit_qinglian: '清涟荷影换装解锁',
-    // 历史版本广告位：当前最新源码未再出现，但历史流水仍可能展示。
-    social_gift_pack: '社交礼包 - 广告领取',
-    old_goods_ad: '老商品/旧货广告购买',
-    warehouse_organize_boost: '仓库整理加速',
+    weekend_huayuan_boost: '周末活动 - 订单花愿 +50%',
+    tuesday_stamina_unlimited: '周二活动 - 体力无限进度广告',
+    thursday_magic_time: '周四活动 - 魔法时间工具附魔',
+    dressup_outfit_qinglian: '形象换装 - 清涟荷影解锁',
+    event_progress_echo: '花间珠匣 - 进度回响广告奖励',
+    room_layout_preset_slot3: '装修布局 - 解锁第 3 预设槽',
+    // === 历史版本（源码已下线，流水仍可能出现）===
+    revive: '挑战复活（历史）',
+    social_gift_pack: '社交礼包 - 广告领取（历史）',
+    old_goods_ad: '老商品/旧货广告购买（历史）',
+    warehouse_organize_boost: '仓库整理加速（历史）',
   },
   caizhu: {
     level_prop_colorBlast: '闯关道具 - 同色爆破',
@@ -348,26 +352,26 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         itemGap: 28,
         itemWidth: 18,
         itemHeight: 12,
-        textStyle: { fontSize: 13, color: '#262626', fontWeight: 500 },
+        textStyle: { fontSize: 13, fontWeight: 560 },
       },
-      grid: { left: 64, right: 64, top: 56, bottom: 64 },
+      grid: { left: 16, right: 20, top: 56, bottom: 56, containLabel: true },
       dataZoom: [
         { type: 'inside' as const, start: zoomStart, end: 100 },
-        { type: 'slider' as const, height: 18, bottom: 16, start: zoomStart, end: 100 },
+        { type: 'slider' as const, height: 20, bottom: 10, start: zoomStart, end: 100 },
       ],
       xAxis: {
         type: 'category' as const,
         data: xLabels,
         boundaryGap: true,
-        axisLabel: { fontSize: 11, hideOverlap: true, color: '#595959' },
+        axisLabel: { fontSize: 11, hideOverlap: true },
         axisTick: { alignWithLabel: true },
       },
       yAxis: [
         {
           type: 'value' as const,
           name: '曝光数',
-          nameTextStyle: { fontSize: 12, color: '#595959', padding: [0, 24, 0, 0] },
-          axisLabel: { fontSize: 11, color: '#595959' },
+          nameTextStyle: { fontSize: 12, color: '#2563eb', padding: [0, 24, 0, 0] },
+          axisLabel: { fontSize: 11, color: '#2563eb' },
           minInterval: 1,
           splitLine: { lineStyle: { type: 'dashed' as const, opacity: 0.5 } },
         },
@@ -375,8 +379,8 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           type: 'value' as const,
           name: '广告收益(元)',
           position: 'right' as const,
-          nameTextStyle: { fontSize: 12, color: '#FF8A3D', padding: [0, 0, 0, 24] },
-          axisLabel: { fontSize: 11, color: '#FF8A3D', formatter: (v: number) => v.toFixed(2) },
+          nameTextStyle: { fontSize: 12, color: '#d97706', padding: [0, 0, 0, 24] },
+          axisLabel: { fontSize: 11, color: '#d97706', formatter: (v: number) => v.toFixed(2) },
           splitLine: { show: false },
         },
       ],
@@ -385,34 +389,21 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           name: '曝光数',
           type: 'bar' as const,
           // 给柱子设最大宽度 + 高于 0 的最小高度，避免曝光数为 1 时柱子像头发丝细
-          barMaxWidth: 22,
+          barMaxWidth: 26,
           barMinHeight: 2,
-          itemStyle: { color: '#5B8FF9', borderRadius: [3, 3, 0, 0] },
-          emphasis: { itemStyle: { color: '#3D7BFA' } },
+          itemStyle: { color: '#2563eb', borderRadius: [6, 6, 2, 2] },
           data: series.map((s) => s.ad_show_cnt),
           yAxisIndex: 0,
         },
         {
           name: '广告收益(元)',
           type: 'line' as const,
-          smooth: true,
+          smooth: 0.35,
           symbol: 'circle' as const,
           symbolSize: 7,
-          lineStyle: { width: 2.5, color: '#FF8A3D' },
-          itemStyle: { color: '#FF8A3D' },
-          areaStyle: {
-            color: {
-              type: 'linear' as const,
-              x: 0,
-              y: 0,
-              x2: 0,
-              y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(255, 138, 61, 0.28)' },
-                { offset: 1, color: 'rgba(255, 138, 61, 0)' },
-              ],
-            },
-          },
+          lineStyle: { width: 2.75, color: '#d97706' },
+          itemStyle: { color: '#d97706' },
+          areaStyle: { opacity: 0.25 },
           data: series.map((s) => s.ad_revenue_estimated_cny),
           yAxisIndex: 1,
         },
@@ -443,18 +434,18 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         itemGap: 28,
         itemWidth: 18,
         itemHeight: 12,
-        textStyle: { fontSize: 13, color: '#262626', fontWeight: 500 },
+        textStyle: { fontSize: 13, fontWeight: 560 },
       },
-      grid: { left: 64, right: 124, top: 56, bottom: 64 },
+      grid: { left: 16, right: 28, top: 56, bottom: 56, containLabel: true },
       dataZoom: [
         { type: 'inside' as const, start: zoomStart, end: 100 },
-        { type: 'slider' as const, height: 18, bottom: 16, start: zoomStart, end: 100 },
+        { type: 'slider' as const, height: 20, bottom: 10, start: zoomStart, end: 100 },
       ],
       xAxis: {
         type: 'category' as const,
         data: bucketLabels,
         boundaryGap: false,
-        axisLabel: { fontSize: 11, hideOverlap: true, color: '#595959' },
+        axisLabel: { fontSize: 11, hideOverlap: true },
         axisTick: { alignWithLabel: true },
       },
       yAxis: [
@@ -462,16 +453,16 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           type: 'value' as const,
           name: '次/人',
           position: 'left' as const,
-          nameTextStyle: { fontSize: 12, color: '#5B8FF9', padding: [0, 24, 0, 0] },
-          axisLabel: { fontSize: 11, color: '#5B8FF9', formatter: (v: number) => v.toFixed(2) },
+          nameTextStyle: { fontSize: 12, color: '#2563eb', padding: [0, 24, 0, 0] },
+          axisLabel: { fontSize: 11, color: '#2563eb', formatter: (v: number) => v.toFixed(2) },
           splitLine: { lineStyle: { type: 'dashed' as const, opacity: 0.4 } },
         },
         {
           type: 'value' as const,
           name: '%',
           position: 'right' as const,
-          nameTextStyle: { fontSize: 12, color: '#52C41A', padding: [0, 0, 0, 24] },
-          axisLabel: { fontSize: 11, color: '#52C41A', formatter: (v: number) => v.toFixed(0) },
+          nameTextStyle: { fontSize: 12, color: '#059669', padding: [0, 0, 0, 24] },
+          axisLabel: { fontSize: 11, color: '#059669', formatter: (v: number) => v.toFixed(0) },
           splitLine: { show: false },
           // 渗透率自然落在 0~100，固定上限避免 5 分钟孤峰把另两条线压扁
           min: 0,
@@ -483,8 +474,8 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           position: 'right' as const,
           // offset 让第二个右轴不与第一个重叠，数字读起来才清楚
           offset: 60,
-          nameTextStyle: { fontSize: 12, color: '#FF8A3D', padding: [0, 0, 0, 24] },
-          axisLabel: { fontSize: 11, color: '#FF8A3D', formatter: (v: number) => v.toFixed(2) },
+          nameTextStyle: { fontSize: 12, color: '#d97706', padding: [0, 0, 0, 24] },
+          axisLabel: { fontSize: 11, color: '#d97706', formatter: (v: number) => v.toFixed(2) },
           splitLine: { show: false },
         },
       ],
@@ -492,11 +483,11 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         {
           name: '人均广告次数',
           type: 'line' as const,
-          smooth: true,
+          smooth: 0.35,
           symbol: 'circle' as const,
           symbolSize: 6,
-          lineStyle: { width: 2.5, color: '#5B8FF9' },
-          itemStyle: { color: '#5B8FF9' },
+          lineStyle: { width: 2.75, color: '#2563eb' },
+          itemStyle: { color: '#2563eb' },
           data: series.map((s) => s.ad_show_per_uu),
           yAxisIndex: 0,
           // 桶级分母为 0 时输出 0，发版前后看是否有突变即可
@@ -505,22 +496,22 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
         {
           name: '广告渗透率(%)',
           type: 'line' as const,
-          smooth: true,
+          smooth: 0.35,
           symbol: 'circle' as const,
           symbolSize: 6,
-          lineStyle: { width: 2.5, color: '#52C41A' },
-          itemStyle: { color: '#52C41A' },
+          lineStyle: { width: 2.75, color: '#059669' },
+          itemStyle: { color: '#059669' },
           data: series.map((s) => s.ad_penetration_rate),
           yAxisIndex: 1,
         },
         {
           name: 'ARPDAU(元)',
           type: 'line' as const,
-          smooth: true,
+          smooth: 0.35,
           symbol: 'circle' as const,
           symbolSize: 6,
-          lineStyle: { width: 2.5, color: '#FF8A3D' },
-          itemStyle: { color: '#FF8A3D' },
+          lineStyle: { width: 2.75, color: '#d97706' },
+          itemStyle: { color: '#d97706' },
           data: series.map((s) => s.arpdau_estimated_cny),
           yAxisIndex: 2,
         },
@@ -640,16 +631,26 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert
-        type="warning"
-        showIcon
-        message={data?.estimated ? '广告金额暂按配置 eCPM 估算' : '广告金额使用真实 eCPM 分摊'}
-        description={data?.notice || '广告收益优先使用微信流量主真实 eCPM；缺少真实收入/曝光时回退配置 eCPM。'}
-      />
-
       <Card
         size="small"
-        title={`实时广告收益 · ${gameKey}`}
+        title={
+          <Tooltip
+            title={
+              data?.estimated
+                ? data?.notice || '暂按配置 eCPM 估算；有流量主真实收入/曝光后会自动切真实 eCPM。'
+                : data?.notice || '广告收益优先微信流量主真实 eCPM；缺失时回退配置 eCPM。'
+            }
+          >
+            <span style={{ cursor: 'help' }}>
+              实时广告收益 · {gameKey}{' '}
+              {data?.estimated ? (
+                <Tag color="orange">估算</Tag>
+              ) : (
+                <Tag color="green">真实 eCPM</Tag>
+              )}
+            </span>
+          </Tooltip>
+        }
         extra={
           <Tooltip
             title={

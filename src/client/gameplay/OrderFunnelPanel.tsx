@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -125,9 +125,9 @@ export function OrderFunnelPanel() {
           label: { show: true, position: 'inside', color: '#fff', fontWeight: 600 },
           data: [
             { name: '生成订单', value: total, itemStyle: { color: '#94a3b8' } },
-            { name: '完成订单', value: deliver, itemStyle: { color: '#10b981' } },
-            { name: '超时订单', value: expire, itemStyle: { color: '#f59e0b' } },
-            { name: '撕单订单', value: ditch, itemStyle: { color: '#ef4444' } },
+            { name: '完成订单', value: deliver, itemStyle: { color: '#059669' } },
+            { name: '超时订单', value: expire, itemStyle: { color: '#d97706' } },
+            { name: '撕单订单', value: ditch, itemStyle: { color: '#e11d48' } },
           ].filter((d) => d.value > 0),
         },
       ],
@@ -156,21 +156,21 @@ export function OrderFunnelPanel() {
           name: '完成',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#10b981' },
+          itemStyle: { color: '#059669' },
           data: series.map((p) => p.deliver_cnt),
         },
         {
           name: '超时',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#f59e0b' },
+          itemStyle: { color: '#d97706' },
           data: series.map((p) => p.expire_cnt),
         },
         {
           name: '撕单',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#ef4444' },
+          itemStyle: { color: '#e11d48' },
           data: series.map((p) => p.ditch_cnt),
         },
       ],
@@ -218,8 +218,11 @@ export function OrderFunnelPanel() {
 
   return (
     <Card
-      title="订单转化漏斗"
-      extra={<Text type="secondary">数据源：order_spawn / order_deliver / order_expire / order_ditch</Text>}
+      title={
+        <Tooltip title="数据源：order_spawn / order_deliver / order_expire / order_ditch">
+          <span style={{ cursor: 'help' }}>订单转化漏斗</span>
+        </Tooltip>
+      }
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <Row gutter={[16, 16]}>

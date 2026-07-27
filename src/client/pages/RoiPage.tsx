@@ -12,6 +12,7 @@ import {
   Space,
   Statistic,
   Table,
+  Tag,
   Tooltip,
   Typography,
   message,
@@ -818,32 +819,33 @@ export function RoiPage({ displayRange }: { displayRange?: [Dayjs, Dayjs] } = {}
             </Col>
           </Row>
 
-          <Row gutter={[16, 16]}>
-            <Col xs={24} md={12}>
-              <Card size="small" title="机会清单">
-                <Space orientation="vertical" style={{ width: '100%' }}>
-                  {(acquisitionOpportunities.length > 0 ? acquisitionOpportunities : [{ type: 'data_gap', priority: 'low', title: '暂无投放洞察结论', detail: '等待腾讯广告洞察任务拉取定向标签或创意素材数据。' } as AcquisitionOpportunity]).map((item) => (
-                    <Alert
-                      key={`${item.type}-${item.title}`}
-                      type={item.priority === 'high' ? 'warning' : 'info'}
-                      showIcon
-                      message={`${opportunityPriorityLabel(item.priority)}：${item.title}`}
-                      description={item.detail}
-                    />
-                  ))}
-                </Space>
-              </Card>
-            </Col>
-            <Col xs={24} md={12}>
-              <Card size="small" title="口径说明">
-                <Space orientation="vertical">
-                  {(acquisition?.data_notes || ['当前还没有投放洞察数据；基础 ROI 不受影响。']).map((note) => (
-                    <Text key={note} type="secondary">{note}</Text>
-                  ))}
-                </Space>
-              </Card>
-            </Col>
-          </Row>
+          <Card
+            size="small"
+            title="机会清单"
+            extra={
+              <Tooltip
+                title={
+                  <div style={{ maxWidth: 360 }}>
+                    {(acquisition?.data_notes || ['当前还没有投放洞察数据；基础 ROI 不受影响。']).map((note) => (
+                      <div key={note} style={{ marginBottom: 4 }}>{note}</div>
+                    ))}
+                  </div>
+                }
+              >
+                <Tag style={{ cursor: 'help' }}>口径说明 ⓘ</Tag>
+              </Tooltip>
+            }
+          >
+            <Space orientation="vertical" style={{ width: '100%' }}>
+              {(acquisitionOpportunities.length > 0 ? acquisitionOpportunities : [{ type: 'data_gap', priority: 'low', title: '暂无投放洞察结论', detail: '等待腾讯广告洞察任务拉取定向标签或创意素材数据。' } as AcquisitionOpportunity]).map((item) => (
+                <Tooltip key={`${item.type}-${item.title}`} title={item.detail}>
+                  <Tag color={item.priority === 'high' ? 'orange' : 'blue'} style={{ cursor: 'help', whiteSpace: 'normal', height: 'auto', padding: '4px 8px' }}>
+                    {opportunityPriorityLabel(item.priority)}：{item.title}
+                  </Tag>
+                </Tooltip>
+              ))}
+            </Space>
+          </Card>
 
           <Row gutter={[16, 16]}>
             <Col xs={24} lg={12}>

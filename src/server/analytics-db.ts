@@ -36,6 +36,7 @@ export interface AnalyticsEventRow {
 export interface AdMinuteRow {
   game_key: string;
   minute_bucket: string;
+  platform: string;
   ad_type: string;
   scene: string;
   ad_request_cnt: number;
@@ -142,6 +143,31 @@ function migrateSqlite(database: Database.Database): void {
   `);
 }
 
+
+async function ensureAdMinutePlatform(pool: mysql.Pool): Promise<void> {
+  const [cols] = await pool.query(
+    `SELECT COLUMN_NAME AS name
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'analytics_ad_minute'
+        AND COLUMN_NAME = 'platform'`,
+  );
+  if ((cols as Array<{ name: string }>).length) return;
+  await pool.query(`
+    ALTER TABLE analytics_ad_minute
+      ADD COLUMN platform VARCHAR(16) NOT NULL DEFAULT '' AFTER minute_bucket
+  `);
+  await pool.query(`
+    ALTER TABLE analytics_ad_minute
+      DROP PRIMARY KEY,
+      ADD PRIMARY KEY (game_key, minute_bucket, platform, ad_type, scene)
+  `);
+  await pool.query(`
+    CREATE INDEX idx_game_platform_bucket
+      ON analytics_ad_minute (game_key, platform, minute_bucket)
+  `).catch(() => undefined);
+}
+
 async function migrateMysqlEvents(pool: mysql.Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS analytics_events (
@@ -182,6 +208,7 @@ async function migrateMysqlEvents(pool: mysql.Pool): Promise<void> {
     CREATE TABLE IF NOT EXISTS analytics_ad_minute (
       game_key VARCHAR(32) NOT NULL,
       minute_bucket VARCHAR(32) NOT NULL,
+      platform VARCHAR(16) NOT NULL DEFAULT '',
       ad_type VARCHAR(32) NOT NULL,
       scene VARCHAR(64) NOT NULL,
       ad_request_cnt INT NOT NULL DEFAULT 0,
@@ -192,10 +219,12 @@ async function migrateMysqlEvents(pool: mysql.Pool): Promise<void> {
       ecpm_used DOUBLE NOT NULL DEFAULT 0,
       ad_revenue_estimated_cny DOUBLE NOT NULL DEFAULT 0,
       updated_at BIGINT NOT NULL,
-      PRIMARY KEY (game_key, minute_bucket, ad_type, scene),
-      INDEX idx_game_bucket (game_key, minute_bucket)
+      PRIMARY KEY (game_key, minute_bucket, platform, ad_type, scene),
+      INDEX idx_game_bucket (game_key, minute_bucket),
+      INDEX idx_game_platform_bucket (game_key, platform, minute_bucket)
     )
   `);
+  await ensureAdMinutePlatform(pool);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS analytics_ingest_runs (
       id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -230,6 +259,10 @@ async function migrateMysqlEvents(pool: mysql.Pool): Promise<void> {
       INDEX idx_started_at (started_at)
     )
   `);
+}
+
+export async function ensureAnalyticsSchema(): Promise<void> {
+  await ensureMigrated();
 }
 
 async function ensureMigrated(): Promise<void> {
@@ -384,25 +417,30 @@ export async function listAdMinute(
   gameKey: string,
   fromMinute: string,
   toMinute: string,
+  platform = '',
 ): Promise<AdMinuteRow[]> {
   await ensureMigrated();
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT * FROM analytics_ad_minute
-       WHERE game_key = ? AND minute_bucket >= ? AND minute_bucket <= ?
+       WHERE game_key = ?
+         AND (? = '' OR platform = ?)
+         AND minute_bucket >= ? AND minute_bucket <= ?
        ORDER BY minute_bucket ASC`,
-      [gameKey, fromMinute, toMinute],
+      [gameKey, platform, platform, fromMinute, toMinute],
     );
     return rows as AdMinuteRow[];
   }
   return getDb()
     .prepare(
       `SELECT * FROM analytics_ad_minute
-       WHERE game_key = ? AND minute_bucket >= ? AND minute_bucket <= ?
+       WHERE game_key = ?
+         AND (? = '' OR platform = ?)
+         AND minute_bucket >= ? AND minute_bucket <= ?
        ORDER BY minute_bucket ASC`,
     )
-    .all(gameKey, fromMinute, toMinute) as AdMinuteRow[];
+    .all(gameKey, platform, platform, fromMinute, toMinute) as AdMinuteRow[];
 }
 
 /** 健康度数据：统计某 game 的事件总数、24h 内事件数 */

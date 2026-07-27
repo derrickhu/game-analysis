@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Button,
   Card,
   Col,
@@ -14,7 +13,7 @@ import {
   message,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { huahuaPlayerDataCollection } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -221,7 +220,7 @@ export function PlayerSnapshotPanel() {
         {
           type: 'bar',
           data: levels.map((l) => l.user_cnt),
-          itemStyle: { color: '#3b82f6' },
+          itemStyle: { color: '#2563eb' },
           barMaxWidth: 28,
         },
       ],
@@ -255,15 +254,15 @@ export function PlayerSnapshotPanel() {
   });
 
   const huayuanBucketOption = useMemo(
-    () => buildBucketOption('花愿余额', data?.huayuan_buckets || [], '#10b981'),
+    () => buildBucketOption('花愿余额', data?.huayuan_buckets || [], '#059669'),
     [data?.huayuan_buckets],
   );
   const diamondBucketOption = useMemo(
-    () => buildBucketOption('钻石余额', data?.diamond_buckets || [], '#a855f7'),
+    () => buildBucketOption('钻石余额', data?.diamond_buckets || [], '#7c3aed'),
     [data?.diamond_buckets],
   );
   const decoBucketOption = useMemo(
-    () => buildBucketOption('已解锁家具数', data?.deco_buckets || [], '#f59e0b'),
+    () => buildBucketOption('已解锁家具数', data?.deco_buckets || [], '#d97706'),
     [data?.deco_buckets],
   );
 
@@ -276,7 +275,7 @@ export function PlayerSnapshotPanel() {
       tooltip: { trigger: 'axis' },
       legend: {
         data: ['平均等级', '人均花愿', '教程完成率'],
-        textStyle: { color: '#374151', fontSize: 12, fontWeight: 500 },
+        textStyle: { color: '#475569', fontSize: 12, fontWeight: 500 },
         top: 8,
         left: 'center',
       },
@@ -295,7 +294,7 @@ export function PlayerSnapshotPanel() {
           name: '平均等级',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#3b82f6' },
+          itemStyle: { color: '#2563eb' },
           data: trend.map((p) => p.avg_level),
         },
         {
@@ -303,14 +302,14 @@ export function PlayerSnapshotPanel() {
           type: 'line',
           smooth: true,
           yAxisIndex: 1,
-          itemStyle: { color: '#10b981' },
+          itemStyle: { color: '#059669' },
           data: trend.map((p) => p.avg_huayuan),
         },
         {
           name: '教程完成率',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#f59e0b' },
+          itemStyle: { color: '#d97706' },
           data: trend.map((p) =>
             p.tutorial_completed_rate === null ? null : Number((p.tutorial_completed_rate * 100).toFixed(1)),
           ),
@@ -319,23 +318,39 @@ export function PlayerSnapshotPanel() {
     };
   }, [data?.daily_trend]);
 
+  const snapshotMeta = [
+    `快照日 ${snapshotDate}`,
+    `玩家 ${formatInt(kpi?.user_count)}`,
+    latestRun
+      ? `最近拉取 ${new Date(latestRun.started_at).toLocaleString('zh-CN')}（${latestRun.fetched_count} 条）`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <Card
       title={
         <Space>
-          <span>玩家档案快照</span>
+          <Tooltip title="与 5 分钟事件流互补：事件流看「做了什么」（增量），快照看「现在是什么状态」（存量）。每日 04:00 全量拉取云存档集合。">
+            <span style={{ cursor: 'help' }}>玩家档案快照</span>
+          </Tooltip>
           {runStatusTag}
         </Space>
       }
       extra={
         <Space>
-          <Text type="secondary">
-            数据源：每日 04:00 全量拉取{' '}
-            {data?.source_collection ||
+          <Tooltip
+            title={`集合：${
+              data?.source_collection ||
               data?.latest_run?.collection_name ||
-              huahuaPlayerDataCollection(platform)}{' '}
-            集合
-          </Text>
+              huahuaPlayerDataCollection(platform)
+            }`}
+          >
+            <Text type="secondary" style={{ cursor: 'help' }}>
+              {snapshotMeta}
+            </Text>
+          </Tooltip>
           <Button
             icon={<ReloadOutlined />}
             type="primary"
@@ -350,25 +365,6 @@ export function PlayerSnapshotPanel() {
       loading={loading && !data}
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <Alert
-          showIcon
-          type="info"
-          message={
-            <span>
-              当前快照日期：<strong>{snapshotDate}</strong> / 玩家总数：
-              <strong>{formatInt(kpi?.user_count)}</strong>
-              {latestRun && (
-                <>
-                  {' '}/ 最近一次拉取：{new Date(latestRun.started_at).toLocaleString('zh-CN')}（
-                  {latestRun.fetched_count} 条，
-                  {latestRun.finished_at > 0 ? `${latestRun.finished_at - latestRun.started_at}ms` : '-'}）
-                </>
-              )}
-            </span>
-          }
-          description="本看板与 5 分钟事件流互补：事件流看「做了什么」（增量），快照看「现在是什么状态」（绝对值存量）。"
-        />
-
         {!hasData ? (
           <Empty
             description={

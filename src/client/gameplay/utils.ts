@@ -28,12 +28,11 @@ export function formatInt(n: number | null | undefined): string {
 }
 
 /**
- * series 长度 > threshold 时计算 dataZoom 的初始 start，把视野定在最近的 60 个桶上，
- * 避免长窗口（如 1d）下默认全展示导致刻度密集到看不清。
+ * 趋势图默认 dataZoom 起点：始终展示当前查询窗口全量
+ *（顶部选「今天」= 自然日 00:00 ~ now）。需要局部放大时拖 slider。
  */
-export function defaultZoomStart(seriesLength: number, visibleCount = 60): number {
-  if (seriesLength <= visibleCount) return 0;
-  return Math.max(0, 100 - (visibleCount / seriesLength) * 100);
+export function defaultZoomStart(_seriesLength: number, _visibleCount = 60): number {
+  return 0;
 }
 
 // ─── ECharts 通用布局常量 ─────────────────────────────────────

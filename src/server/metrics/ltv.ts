@@ -9,7 +9,12 @@ import {
   type CohortLtvDailyRow,
   type UserDailyRow,
 } from '../ltv-db';
-import { PLATFORM_SQL, isPlatformFilterActive, platformSqlParams } from './platform-filter';
+import {
+  PLATFORM_SQL,
+  PRECOMPUTE_PLATFORMS,
+  normalizePlatformFilter,
+  platformSqlParams,
+} from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 /** 与 realtime-overview / retention 一致：新增、cohort、CPI 分母都以 session_start 为准 */
@@ -200,15 +205,16 @@ async function getEventDateRange(gameKey: string): Promise<{ fromDate: string; t
   };
 }
 
-async function listFirstSeen(gameKey: string): Promise<Map<string, string>> {
+async function listFirstSeen(gameKey: string, platform: string): Promise<Map<string, string>> {
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
        FROM analytics_events
       WHERE game_key = ?
-        AND event_name = ?
+        AND event_name = ?${PLATFORM_SQL}
       GROUP BY ${USER_KEY_SQL}`,
-    [gameKey, SESSION_START],
+    [gameKey, SESSION_START, ...platformParams],
   );
   const map = new Map<string, string>();
   for (const row of rows as FirstSeenRow[]) {
@@ -218,29 +224,24 @@ async function listFirstSeen(gameKey: string): Promise<Map<string, string>> {
   return map;
 }
 
-export async function recomputeUserDaily(
+async function recomputeUserDailyForPlatform(
   gameKey: string,
-  options: { fromDate?: string; toDate?: string } = {},
-): Promise<RecomputeUserDailyResult> {
-  const eventRange = await getEventDateRange(gameKey);
-  const normalized = eventRange
-    ? {
-        fromDate: options.fromDate || eventRange.fromDate,
-        toDate: options.toDate || eventRange.toDate,
-      }
-    : normalizeDateRange(options.fromDate, options.toDate);
-  const { fromDate, toDate } = normalized;
+  fromDate: string,
+  toDate: string,
+  platform: string,
+  actualEcpmByDate: Map<string, number>,
+): Promise<number> {
   const fromTs = dateKeyToStartTs(fromDate);
   const toTs = dateKeyToStartTs(addDays(toDate, 1)) - 1;
-  const firstSeen = await listFirstSeen(gameKey);
-  const actualEcpmByDate = await buildActualEcpmMap(gameKey, fromDate, toDate);
+  const firstSeen = await listFirstSeen(gameKey, platform);
   const pool = await getMysqlPool();
+  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT event_name, event_ts, ${USER_KEY_SQL} AS user_key, params_json
        FROM analytics_events
-      WHERE game_key = ? AND event_ts BETWEEN ? AND ?
+      WHERE game_key = ? AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
       ORDER BY event_ts ASC`,
-    [gameKey, fromTs, toTs],
+    [gameKey, fromTs, toTs, ...platformParams],
   );
 
   // 是否算"业务活跃"：必须出现至少一个真实用户行为事件，
@@ -274,6 +275,7 @@ export async function recomputeUserDaily(
         game_key: gameKey,
         date_key: dateKey,
         user_key: userKey,
+        platform,
         first_seen_date: firstSeenDate,
         is_new_user: firstSeenDate === dateKey ? 1 : 0,
         is_active: 0,
@@ -342,19 +344,39 @@ export async function recomputeUserDaily(
     ...row,
     ad_revenue_estimated_cny: round4(row.ad_revenue_estimated_cny),
   }));
-  const inserted = await replaceUserDailyRows(gameKey, fromDate, toDate, dailyRows);
+  return replaceUserDailyRows(gameKey, fromDate, toDate, platform, dailyRows);
+}
+
+export async function recomputeUserDaily(
+  gameKey: string,
+  options: { fromDate?: string; toDate?: string } = {},
+): Promise<RecomputeUserDailyResult> {
+  const eventRange = await getEventDateRange(gameKey);
+  const normalized = eventRange
+    ? {
+        fromDate: options.fromDate || eventRange.fromDate,
+        toDate: options.toDate || eventRange.toDate,
+      }
+    : normalizeDateRange(options.fromDate, options.toDate);
+  const { fromDate, toDate } = normalized;
+  const actualEcpmByDate = await buildActualEcpmMap(gameKey, fromDate, toDate);
+  let inserted = 0;
+  for (const platform of PRECOMPUTE_PLATFORMS) {
+    inserted += await recomputeUserDailyForPlatform(gameKey, fromDate, toDate, platform, actualEcpmByDate);
+  }
   return { game_key: gameKey, from_date: fromDate, to_date: toDate, rows: inserted };
 }
 
 /**
  * cohort LTV 核心计算：把 user_daily 行按 first_seen_date 分组重算出 D0..D30 的 cohort 汇总。
- * 纯内存计算，不落库；recomputeCohortLtv（落库）和按平台过滤的实时路径（不落库）共用。
+ * 纯内存计算；recomputeCohortLtv 按平台落库后，读路径直接查表。
  */
 export function buildCohortLtvRows(
   gameKey: string,
   userRows: UserDailyRow[],
   fromCohortDate: string,
   toCohortDate: string,
+  platform = '',
 ): CohortLtvDailyRow[] {
   const eligibleRows = userRows.filter(
     (r) => r.first_seen_date >= fromCohortDate && r.first_seen_date <= toCohortDate,
@@ -398,6 +420,7 @@ export function buildCohortLtvRows(
       out.push({
         game_key: gameKey,
         cohort_date: cohortDate,
+        platform,
         age_day: ageDay,
         cohort_size: cohortSize,
         active_users: activeUsers,
@@ -437,12 +460,21 @@ export async function recomputeCohortLtv(
   gameKey: string,
   options: { fromCohortDate?: string; toCohortDate?: string } = {},
 ): Promise<RecomputeLtvResult> {
-  const userRows = await listUserDailyRows(gameKey);
-  const cohortDates = userRows.map((r) => r.first_seen_date).sort();
-  const fromCohortDate = options.fromCohortDate || cohortDates[0] || toLocalDateKey(Date.now());
-  const toCohortDate = options.toCohortDate || cohortDates[cohortDates.length - 1] || fromCohortDate;
-  const out = buildCohortLtvRows(gameKey, userRows, fromCohortDate, toCohortDate);
-  const inserted = await replaceCohortLtvRows(gameKey, fromCohortDate, toCohortDate, out);
+  let fromCohortDate = options.fromCohortDate || '';
+  let toCohortDate = options.toCohortDate || '';
+  let inserted = 0;
+  for (const platform of PRECOMPUTE_PLATFORMS) {
+    const userRows = await listUserDailyRows(gameKey, platform);
+    const cohortDates = userRows.map((r) => r.first_seen_date).sort();
+    const platformFrom = options.fromCohortDate || cohortDates[0] || toLocalDateKey(Date.now());
+    const platformTo = options.toCohortDate || cohortDates[cohortDates.length - 1] || platformFrom;
+    if (!fromCohortDate || platformFrom < fromCohortDate) fromCohortDate = platformFrom;
+    if (!toCohortDate || platformTo > toCohortDate) toCohortDate = platformTo;
+    const out = buildCohortLtvRows(gameKey, userRows, platformFrom, platformTo, platform);
+    inserted += await replaceCohortLtvRows(gameKey, platformFrom, platformTo, platform, out);
+  }
+  if (!fromCohortDate) fromCohortDate = toLocalDateKey(Date.now());
+  if (!toCohortDate) toCohortDate = fromCohortDate;
   return { game_key: gameKey, from_cohort_date: fromCohortDate, to_cohort_date: toCohortDate, rows: inserted };
 }
 
@@ -477,18 +509,17 @@ export async function getLtvOverview(
   toCohortDate: string,
   platform?: string,
 ): Promise<LtvApiResult> {
-  let rows: CohortLtvDailyRow[];
+  const platformKey = normalizePlatformFilter(platform);
   let notice =
     'LTV 收入优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM，因此仍是按广告展示分摊后的 cohort 收入口径。';
-  if (isPlatformFilterActive(platform)) {
-    // 预聚合表 analytics_cohort_ltv_daily 不区分平台；选定具体平台时基于该平台的 user_daily 子集
-    // 在内存里重算 cohort LTV，不落库，避免污染全平台聚合数据。
-    const platformUserKeys = await listPlatformUserKeys(gameKey, platform as string);
-    const userRows = (await listUserDailyRows(gameKey)).filter((r) => platformUserKeys.has(r.user_key));
-    rows = buildCohortLtvRows(gameKey, userRows, fromCohortDate, toCohortDate);
-    notice += '（已按平台实时重算，未落库）';
-  } else {
-    rows = await listCohortLtvRows(gameKey, fromCohortDate, toCohortDate);
+  let rows = await listCohortLtvRows(gameKey, fromCohortDate, toCohortDate, platformKey);
+  // 冷启动兜底：该平台预聚合尚未回算完时，临时用按平台的 user_daily 内存重算一次。
+  if (rows.length === 0 && platformKey) {
+    const userRows = await listUserDailyRows(gameKey, platformKey);
+    rows = buildCohortLtvRows(gameKey, userRows, fromCohortDate, toCohortDate, platformKey);
+    notice += '（预聚合暂无该平台数据，已实时重算兜底）';
+  } else if (platformKey) {
+    notice += '（数据来自定时预聚合，按平台）';
   }
   const byCohort = new Map<string, CohortLtvDailyRow[]>();
   for (const row of rows) {
@@ -604,13 +635,10 @@ export async function getMonetizationOverview(
   toDate: string,
   platform?: string,
 ): Promise<MonetizationResult> {
-  let allUserDaily = await listUserDailyRows(gameKey);
+  const platformKey = normalizePlatformFilter(platform);
+  const allUserDaily = await listUserDailyRows(gameKey, platformKey);
   let notice = '商业化金额优先使用已录入的微信真实 eCPM 计价；缺少真实收入/曝光的日期回退到预估 eCPM。';
-  if (isPlatformFilterActive(platform)) {
-    const platformUserKeys = await listPlatformUserKeys(gameKey, platform as string);
-    allUserDaily = allUserDaily.filter((r) => platformUserKeys.has(r.user_key));
-    notice += '（已按平台过滤，未落库）';
-  }
+  if (platformKey) notice += '（数据来自定时预聚合，按平台）';
   const rows = allUserDaily.filter((r) => r.date_key >= fromDate && r.date_key <= toDate);
   const activeUsers = new Set(rows.filter((r) => r.is_active).map((r) => r.user_key));
   const newUsers = new Set(rows.filter((r) => r.is_new_user).map((r) => r.user_key));

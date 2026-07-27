@@ -90,6 +90,7 @@ import {
 } from '../metrics/bucket';
 import {
   isPlatformFilterActive,
+  normalizePlatformFilter,
   platformToSnapshotPrefix,
   playerDataCollection,
 } from '../../shared/platforms';
@@ -524,11 +525,12 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const fromMinute = tsToBucket(fromTs);
     const toMinute = tsToBucket(toTs);
 
-    // analytics_ad_minute 是全平台混算的预聚合表；选定具体平台时改为从 events 即时聚合，
-    // 保留下方真实 eCPM 覆盖逻辑不变（ecpm_used/ad_revenue 在这里先是 0，随后统一被覆盖）。
-    const rawRows = isPlatformFilterActive(platform)
-      ? await aggregateAdMinuteFromEvents(gameKey, fromMinute, toMinute, platform)
-      : await listAdMinute(gameKey, fromMinute, toMinute);
+    // analytics_ad_minute 已按 platform 预聚合；优先读表，空窗再实时兜底。
+    const platformKey = normalizePlatformFilter(platform);
+    let rawRows = await listAdMinute(gameKey, fromMinute, toMinute, platformKey);
+    if (rawRows.length === 0 && platformKey) {
+      rawRows = await aggregateAdMinuteFromEvents(gameKey, fromMinute, toMinute, platformKey);
+    }
     const ecpmContext = await getRealEcpmContext(gameKey, fromTs, toTs);
     const revenueRows = applyRealEcpmRevenue(rawRows, ecpmContext);
     const rows = revenueRows.rows;
@@ -870,10 +872,11 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!/^\d{4}-\d{2}-\d{2}$/.test(cohortDate)) {
       return { ok: false, code: 'INVALID_DATE', error: 'cohort_date 必须是 YYYY-MM-DD' };
     }
-    // 预聚合表 analytics_cohort_retention_daily 不区分平台；选定具体平台时改为实时重算，不落库。
-    const result = isPlatformFilterActive(platform)
-      ? await getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform })
-      : await getPrecomputedRetentionCohortOverview(gameKey, cohortDate, { maxAge });
+    // 按平台读预聚合；表里没有该日/该平台时再实时算一次兜底。
+    let result = await getPrecomputedRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform });
+    if (result.overall.cohort_size === 0 && isPlatformFilterActive(platform)) {
+      result = await getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform });
+    }
     return { ok: true, ...result };
   });
 

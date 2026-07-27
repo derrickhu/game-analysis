@@ -1,9 +1,11 @@
 import { getMysqlPool } from '../db';
 import { toLocalDateKey } from './ltv';
-import { PLATFORM_SQL, isPlatformFilterActive, platformSqlParams } from './platform-filter';
+import { PLATFORM_SQL, normalizePlatformFilter, platformSqlParams } from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
+/** 全局筛选只提供微信/抖音，预聚合按这两个平台分别落库，查询直接读表。 */
+const RETENTION_PRECOMPUTE_PLATFORMS = ['wechat', 'douyin'] as const;
 
 export type RetentionDeviceType = 'iOS' | 'Android' | 'HarmonyOS' | 'iPad' | 'Android Pad' | 'Unknown';
 
@@ -43,6 +45,8 @@ export interface RetentionCohortRangeResult {
 interface RetentionAggregateRow {
   game_key: string;
   cohort_date: string;
+  /** wechat / douyin；历史混算数据为 '' */
+  platform: string;
   segment_type: RetentionSegment['device_type'];
   age_day: number;
   cohort_size: number;
@@ -95,6 +99,7 @@ async function ensureRetentionTable(): Promise<void> {
     CREATE TABLE IF NOT EXISTS analytics_cohort_retention_daily (
       game_key VARCHAR(32) NOT NULL,
       cohort_date VARCHAR(10) NOT NULL,
+      platform VARCHAR(16) NOT NULL DEFAULT '',
       segment_type VARCHAR(32) NOT NULL,
       age_day INT NOT NULL,
       cohort_size INT NOT NULL DEFAULT 0,
@@ -102,11 +107,36 @@ async function ensureRetentionTable(): Promise<void> {
       retention_rate DOUBLE NULL,
       is_complete_day TINYINT NOT NULL DEFAULT 0,
       updated_at BIGINT NOT NULL,
-      PRIMARY KEY (game_key, cohort_date, segment_type, age_day),
+      PRIMARY KEY (game_key, cohort_date, platform, segment_type, age_day),
+      INDEX idx_game_platform_cohort (game_key, platform, cohort_date),
       INDEX idx_game_cohort_segment (game_key, cohort_date, segment_type),
       INDEX idx_game_segment_age (game_key, segment_type, age_day)
     )
   `);
+
+  // 旧表无 platform 列：补列并重建主键（CREATE IF NOT EXISTS 不会改已有表结构）
+  const [cols] = await pool.query(
+    `SELECT COLUMN_NAME AS name
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'analytics_cohort_retention_daily'
+        AND COLUMN_NAME = 'platform'`,
+  );
+  if (!(cols as Array<{ name: string }>).length) {
+    await pool.query(`
+      ALTER TABLE analytics_cohort_retention_daily
+        ADD COLUMN platform VARCHAR(16) NOT NULL DEFAULT '' AFTER cohort_date
+    `);
+    await pool.query(`
+      ALTER TABLE analytics_cohort_retention_daily
+        DROP PRIMARY KEY,
+        ADD PRIMARY KEY (game_key, cohort_date, platform, segment_type, age_day)
+    `);
+    await pool.query(`
+      CREATE INDEX idx_game_platform_cohort
+        ON analytics_cohort_retention_daily (game_key, platform, cohort_date)
+    `).catch(() => undefined);
+  }
 }
 
 function normalizeDeviceType(input: {
@@ -366,6 +396,7 @@ async function replaceRetentionRows(
   gameKey: string,
   fromDate: string,
   toDate: string,
+  platform: string,
   rows: RetentionAggregateRow[],
 ): Promise<number> {
   await ensureRetentionTable();
@@ -375,13 +406,14 @@ async function replaceRetentionRows(
     await conn.beginTransaction();
     await conn.query(
       `DELETE FROM analytics_cohort_retention_daily
-        WHERE game_key = ? AND cohort_date BETWEEN ? AND ?`,
-      [gameKey, fromDate, toDate],
+        WHERE game_key = ? AND platform = ? AND cohort_date BETWEEN ? AND ?`,
+      [gameKey, platform, fromDate, toDate],
     );
     if (rows.length > 0) {
       const cols = [
         'game_key',
         'cohort_date',
+        'platform',
         'segment_type',
         'age_day',
         'cohort_size',
@@ -416,21 +448,23 @@ async function listRetentionRows(
   fromDate: string,
   toDate: string,
   maxAge: number,
+  platform = '',
 ): Promise<RetentionAggregateRow[]> {
   await ensureRetentionTable();
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `SELECT * FROM analytics_cohort_retention_daily
       WHERE game_key = ?
+        AND platform = ?
         AND cohort_date BETWEEN ? AND ?
         AND age_day <= ?
       ORDER BY cohort_date ASC, segment_type ASC, age_day ASC`,
-    [gameKey, fromDate, toDate, maxAge],
+    [gameKey, platform, fromDate, toDate, maxAge],
   );
   return rows as RetentionAggregateRow[];
 }
 
-function flattenCohort(result: RetentionCohortResult): RetentionAggregateRow[] {
+function flattenCohort(result: RetentionCohortResult, platform: string): RetentionAggregateRow[] {
   const now = Date.now();
   const segments = [result.overall, ...result.devices];
   const rows: RetentionAggregateRow[] = [];
@@ -439,6 +473,7 @@ function flattenCohort(result: RetentionCohortResult): RetentionAggregateRow[] {
       rows.push({
         game_key: result.game_key,
         cohort_date: result.cohort_date,
+        platform,
         segment_type: segment.device_type,
         age_day: point.age_day,
         cohort_size: segment.cohort_size,
@@ -543,6 +578,19 @@ async function mapWithConcurrency<T, R>(
   return out;
 }
 
+async function computeRetentionCohortRangeRealtime(
+  gameKey: string,
+  fromDate: string,
+  toDate: string,
+  maxAge: number,
+  platform?: string,
+): Promise<RetentionCohortResult[]> {
+  const cohortDates = await listCohortDatesInRange(gameKey, fromDate, toDate, platform);
+  return mapWithConcurrency(cohortDates, 4, (cohortDate) =>
+    getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform }),
+  );
+}
+
 export async function getRetentionCohortRangeOverview(
   gameKey: string,
   fromDate: string,
@@ -550,27 +598,37 @@ export async function getRetentionCohortRangeOverview(
   options: { maxAge?: number; platform?: string } = {},
 ): Promise<RetentionCohortRangeResult> {
   const maxAge = Math.max(1, Math.min(30, Number(options.maxAge) || 30));
-  const platform = options.platform;
+  const platform = normalizePlatformFilter(options.platform);
 
-  // 预聚合表 analytics_cohort_retention_daily 不区分平台；选定具体平台时改为对范围内每个
-  // cohort 日期实时调用 getRetentionCohortOverview 并汇总，不落库。
-  if (isPlatformFilterActive(platform)) {
-    const cohortDates = await listCohortDatesInRange(gameKey, fromDate, toDate, platform);
-    const cohorts = await mapWithConcurrency(cohortDates, 4, (cohortDate) =>
-      getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform }),
-    );
+  // 有平台筛选时优先读按平台预聚合的结果；表为空（刚迁移/尚未回算）时才实时算一次兜底。
+  if (platform) {
+    const rows = await listRetentionRows(gameKey, fromDate, toDate, maxAge, platform);
+    if (rows.length > 0) {
+      return {
+        game_key: gameKey,
+        from_date: fromDate,
+        to_date: toDate,
+        max_age: maxAge,
+        updated_at: Date.now(),
+        notice:
+          '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。数据来自定时预聚合（按平台）。',
+        cohorts: buildCohortsFromRows(gameKey, rows, maxAge),
+      };
+    }
+    const cohorts = await computeRetentionCohortRangeRealtime(gameKey, fromDate, toDate, maxAge, platform);
     return {
       game_key: gameKey,
       from_date: fromDate,
       to_date: toDate,
       max_age: maxAge,
       updated_at: Date.now(),
-      notice: '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。已按平台实时重算，未落库。',
+      notice:
+        '留存为 cohort 口径，按首次 session_start 日期分组；D7/D30 未完整结束前不展示成熟值。预聚合暂无该平台数据，已实时重算兜底。',
       cohorts,
     };
   }
 
-  const rows = await listRetentionRows(gameKey, fromDate, toDate, maxAge);
+  const rows = await listRetentionRows(gameKey, fromDate, toDate, maxAge, '');
   const cohorts = buildCohortsFromRows(gameKey, rows, maxAge);
   return {
     game_key: gameKey,
@@ -586,10 +644,11 @@ export async function getRetentionCohortRangeOverview(
 export async function getPrecomputedRetentionCohortOverview(
   gameKey: string,
   cohortDate: string,
-  options: { maxAge?: number } = {},
+  options: { maxAge?: number; platform?: string } = {},
 ): Promise<RetentionCohortResult> {
   const maxAge = Math.max(1, Math.min(30, Number(options.maxAge) || 30));
-  const rows = await listRetentionRows(gameKey, cohortDate, cohortDate, maxAge);
+  const platform = normalizePlatformFilter(options.platform);
+  const rows = await listRetentionRows(gameKey, cohortDate, cohortDate, maxAge, platform);
   const cohort = buildCohortsFromRows(gameKey, rows, maxAge)[0];
   if (cohort) return cohort;
   return {
@@ -611,11 +670,14 @@ export async function recomputeRetentionCohorts(
   const today = toLocalDateKey(Date.now());
   const toDate = options.toDate || addDays(today, -1);
   const fromDate = options.fromDate || addDays(toDate, -30);
-  const cohortDates = await listCohortDatesInRange(gameKey, fromDate, toDate);
-  const cohorts = await mapWithConcurrency(cohortDates, 4, (cohortDate) =>
-    getRetentionCohortOverview(gameKey, cohortDate, { maxAge }),
-  );
-  const rows = cohorts.flatMap(flattenCohort);
-  const inserted = await replaceRetentionRows(gameKey, fromDate, toDate, rows);
+  let inserted = 0;
+  for (const platform of RETENTION_PRECOMPUTE_PLATFORMS) {
+    const cohortDates = await listCohortDatesInRange(gameKey, fromDate, toDate, platform);
+    const cohorts = await mapWithConcurrency(cohortDates, 4, (cohortDate) =>
+      getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform }),
+    );
+    const rows = cohorts.flatMap((cohort) => flattenCohort(cohort, platform));
+    inserted += await replaceRetentionRows(gameKey, fromDate, toDate, platform, rows);
+  }
   return { game_key: gameKey, from_date: fromDate, to_date: toDate, rows: inserted };
 }

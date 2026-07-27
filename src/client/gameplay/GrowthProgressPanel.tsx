@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import { Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -134,7 +134,7 @@ export function GrowthProgressPanel() {
           name: '到达用户',
           type: 'bar',
           barMaxWidth: 18,
-          itemStyle: { color: '#10b981', borderRadius: [4, 4, 0, 0] },
+          itemStyle: { color: '#059669', borderRadius: [4, 4, 0, 0] },
           data: levelDist.map((d) => d.user_cnt),
         },
         {
@@ -154,10 +154,10 @@ export function GrowthProgressPanel() {
   /** 近 7 天：柱 = 新用户基数，线 = 四项 cohort 转化率 */
   const tutorialDailyOption = useMemo(() => {
     const lineSeries = [
-      { name: '教程完成率', key: 'new_user_tutorial_complete_rate' as const, color: '#1677ff' },
-      { name: '进入引导率', key: 'new_user_tutorial_start_rate' as const, color: '#10b981' },
-      { name: '首单交付率', key: 'new_user_order_deliver_rate' as const, color: '#f59e0b' },
-      { name: '看广告率', key: 'new_user_ad_show_rate' as const, color: '#8b5cf6' },
+      { name: '教程完成率', key: 'new_user_tutorial_complete_rate' as const, color: '#2563eb' },
+      { name: '进入引导率', key: 'new_user_tutorial_start_rate' as const, color: '#059669' },
+      { name: '首单交付率', key: 'new_user_order_deliver_rate' as const, color: '#d97706' },
+      { name: '看广告率', key: 'new_user_ad_show_rate' as const, color: '#7c3aed' },
     ];
     return {
       tooltip: {
@@ -234,22 +234,13 @@ export function GrowthProgressPanel() {
 
   return (
     <Card
-      title="新手引导 + 首日 cohort（优化优先）"
-      extra={<Text type="secondary">数据源：session_start / tutorial_step / order_deliver / ad_show</Text>}
+      title={
+        <Tooltip title="核心分母=窗口内首次进游戏的新用户（不含老用户回访）。优先看「进入引导 → 完成教程 → 首单 → 看广告」；下方等级成长为长期参考。数据源：session_start / tutorial_step / order_deliver / ad_show。">
+          <span style={{ cursor: 'help' }}>新手引导 + 首日 cohort</span>
+        </Tooltip>
+      }
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <Alert
-          type="info"
-          showIcon
-          message="优化游戏先看这里"
-          description={
-            <>
-              核心分母是<strong>窗口内首次进游戏的新用户</strong>（不含老用户回访）。
-              优先提升「进入引导 → 完成教程 → 首单 → 看广告」；下方等级成长为长期参考。
-            </>
-          }
-        />
-
         <Card type="inner" title="新用户 cohort（核心优化指标）" size="small">
           <Row gutter={[16, 16]}>
             <Col xs={12} md={8} lg={6}>
@@ -262,7 +253,7 @@ export function GrowthProgressPanel() {
                 <Statistic
                   title="新用户教程完成率"
                   value={formatPercent(kpi?.new_user_tutorial_complete_rate)}
-                  valueStyle={{ color: '#1677ff', fontWeight: 700 }}
+                  valueStyle={{ color: '#2563eb', fontWeight: 700 }}
                 />
               </Tooltip>
             </Col>

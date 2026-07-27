@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Typography, message } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -93,7 +93,7 @@ export function HotpotFruitSlicePanel() {
       grid: { left: 50, right: 20, top: 20, bottom: 30 },
       xAxis: { type: 'category', data: rows.map((r) => r.bucket) },
       yAxis: { type: 'value', minInterval: 1 },
-      series: [{ type: 'bar', data: rows.map((r) => r.count), itemStyle: { color: '#f97316' } }],
+      series: [{ type: 'bar', data: rows.map((r) => r.count), itemStyle: { color: '#d97706' } }],
     };
   }, [data?.score_buckets]);
 

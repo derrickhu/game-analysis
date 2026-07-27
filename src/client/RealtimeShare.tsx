@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from './components/AnalyticsChart';
 
 import { appendPlatformQuery, type PlatformFilter } from '../shared/platforms';
 import { type WindowValue, buildWindowQuery } from './timeWindow';
@@ -62,20 +62,29 @@ function formatHourLabel(hour: string): string {
 /**
  * 通用分享入口（所有接入 @gp/analytics-sdk 的游戏都会上报）：
  *   - wx_button / wx_menu / wx_other 来自微信小游戏 onShareAppMessage 的 from 字段
- *     （button=页面分享按钮，menu=右上角菜单，其它=兜底）
- *   - api_share_game 是业务侧主动调 wx.shareAppMessage 触发的分享
+ *   - wx_timeline 来自 onShareTimeline（仅微信）
+ *   - dy_* 为抖音被动分享兜底
+ *   - api_share_game 是未业务化命名时的通用主动分享
  */
 const COMMON_ENTRY_LABELS: Record<string, string> = {
   api_share_game: '业务主动分享接口',
   wx_button: '微信原生分享按钮',
   wx_menu: '微信右上角菜单转发',
   wx_other: '微信其它来源分享',
+  wx_timeline: '微信朋友圈分享',
+  dy_button: '抖音原生分享按钮',
+  dy_menu: '抖音右上角菜单转发',
+  dy_other: '抖音其它来源分享',
   unknown: '未知入口',
+  default_share: '默认分享（右上角菜单素材）',
 };
 
 /**
  * 游戏专属分享入口语义：当某款游戏在通用入口之外又上报了业务化的入口名时，
  * 在这里按 gameKey 单独标注，命中时优先于通用层的中文说明。
+ *
+ * huahua 入口定义见 game2D_huahua/src/utils/wechatShare.ts ShareEntryPoint
+ * 与 ShareConfig.ts 各 create*Share 工厂。
  */
 const GAME_ENTRY_LABELS: Record<string, Record<string, string>> = {
   hotpot: {
@@ -83,6 +92,30 @@ const GAME_ENTRY_LABELS: Record<string, Record<string, string>> = {
     api_share_game: '通关炫耀分享',
     // BowlBadgeUnlockOverlay 解锁徽章成就后的「分享送 remove 道具」奖励入口
     badge_unlock_reward: '徽章解锁分享送道具',
+  },
+  huahua: {
+    // SocialManager / setupWechatShare 默认菜单素材
+    default_share: '默认分享 - 花花一合停不下来',
+    // SocialManager.shareShopInvite
+    shop_invite: '花店邀请好友来玩',
+    // FlowerCardManager / SocialManager 送花卡
+    flower_card: '花卡图鉴 - 分享送花',
+    // BoardView 棋盘解锁格（分享成功才解锁）
+    unlock_cell: '订单棋盘 - 分享解锁格子',
+    // WarehousePanel 仓库扩容
+    warehouse_slot: '仓库 - 分享解锁格子',
+    // AffinityCardDropPopup 熟客卡掉落炫耀
+    affinity_card: '熟客卡 - 分享抽卡结果',
+    // FlowerSignGachaPanel 花签许愿十连/好运
+    wish_lucky: '花签许愿 - 分享欧气结果',
+    // 被动分享（右上角等）在花花侧也走业务默认文案
+    wx_button: '微信分享按钮 - 默认花店素材',
+    wx_menu: '微信右上角菜单 - 默认花店素材',
+    wx_other: '微信其它来源 - 默认花店素材',
+    wx_timeline: '微信朋友圈 - 默认花店素材',
+    dy_button: '抖音分享按钮 - 默认花店素材',
+    dy_menu: '抖音右上角菜单 - 默认花店素材',
+    dy_other: '抖音其它来源 - 默认花店素材',
   },
 };
 
@@ -118,13 +151,14 @@ export function RealtimeShare(props: RealtimeShareProps): ReactElement {
       legend: {
         data: ['分享次数', '分享人数'],
         top: 6,
-        textStyle: { fontSize: 13, color: '#262626', fontWeight: 500 },
+        textStyle: { fontSize: 13, fontWeight: 560 },
       },
-      grid: { left: 56, right: 40, top: 52, bottom: 58 },
-      dataZoom: series.length > 48
+      grid: { left: 16, right: 20, top: 52, bottom: 52, containLabel: true },
+      // 默认展示整个时间窗口（今天 = 0 点起），不截最近几小时
+      dataZoom: series.length > 24
         ? [
-          { type: 'inside' as const, start: Math.max(0, 100 - (48 / series.length) * 100), end: 100 },
-          { type: 'slider' as const, height: 18, bottom: 12, start: Math.max(0, 100 - (48 / series.length) * 100), end: 100 },
+          { type: 'inside' as const, start: 0, end: 100 },
+          { type: 'slider' as const, height: 20, bottom: 8, start: 0, end: 100 },
         ]
         : [],
       xAxis: {
@@ -137,18 +171,19 @@ export function RealtimeShare(props: RealtimeShareProps): ReactElement {
         {
           name: '分享次数',
           type: 'bar' as const,
-          barMaxWidth: 22,
-          itemStyle: { color: '#722ED1', borderRadius: [3, 3, 0, 0] },
+          barMaxWidth: 26,
+          itemStyle: { color: '#7c3aed', borderRadius: [6, 6, 2, 2] },
           data: series.map((item) => item.share_count),
         },
         {
           name: '分享人数',
           type: 'line' as const,
-          smooth: true,
+          smooth: 0.35,
           symbol: 'circle' as const,
-          symbolSize: 6,
-          lineStyle: { width: 2.5, color: '#13C2C2' },
-          itemStyle: { color: '#13C2C2' },
+          symbolSize: 7,
+          lineStyle: { width: 2.75, color: '#0d9488' },
+          itemStyle: { color: '#0d9488' },
+          areaStyle: { opacity: 0.2 },
           data: series.map((item) => item.share_users),
         },
       ],

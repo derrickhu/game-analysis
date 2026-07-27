@@ -17,24 +17,16 @@ import { buildTencentAdsDryRunPayload } from '../postbacks/tencent-ads';
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 
 /**
- * attribution 相关表（attributed_user_daily / attribution_touchpoints）没有埋点 platform 列，
- * 这里的 platform 字段是广告商 provider，不能用来过滤。改用 EXISTS 关联 analytics_events 的
- * session_start 记录，按 user_key 判断该用户是否属于指定埋点平台。
- * 注意：这里的 platform 是渠道筛选（wechat/douyin/all），不要跟归因表自己的 provider/platform 字段混淆。
+ * 埋点渠道筛选：用表上落好的 analytics_platform 列（wechat/douyin），
+ * 不要跟归因表自己的广告商 provider / postback platform 字段混淆。
  */
-function platformExistsFilter(userKeyExpr: string): string {
-  return ` AND (? = '' OR EXISTS (
-        SELECT 1 FROM analytics_events pfe
-         WHERE pfe.game_key = ?
-           AND ${USER_KEY_SQL.replace(/\buser_id\b/g, 'pfe.user_id').replace(/\banonymous_id\b/g, 'pfe.anonymous_id')} = ${userKeyExpr}
-           AND pfe.event_name = 'session_start'
-           AND pfe.platform = ?
-      ))`;
+function analyticsPlatformFilter(columnExpr: string): string {
+  return ` AND (? = '' OR ${columnExpr} = ?)`;
 }
 
-function platformExistsParams(gameKey: string, platform?: string): unknown[] {
+function analyticsPlatformParams(platform?: string): unknown[] {
   const normalized = isPlatformFilterActive(platform) ? String(platform) : '';
-  return [normalized, gameKey, normalized];
+  return [normalized, normalized];
 }
 
 interface RawEventRow {
@@ -52,6 +44,7 @@ interface FirstSeenRow {
   user_key: string;
   user_id: string;
   anonymous_id: string;
+  analytics_platform: string;
   first_seen_ts: number;
 }
 
@@ -326,10 +319,27 @@ async function listFirstSeen(gameKey: string): Promise<FirstSeenRow[]> {
             MIN(event_ts) AS first_seen_ts
        FROM analytics_events
       WHERE game_key = ?
+        AND event_name = 'session_start'
       GROUP BY ${USER_KEY_SQL}`,
     [gameKey],
   );
-  return rows as FirstSeenRow[];
+  // 埋点渠道从已按平台预聚合的 user_daily 取，避免再扫 events
+  const [platRows] = await pool.query(
+    `SELECT user_key, MIN(platform) AS analytics_platform
+       FROM analytics_user_daily
+      WHERE game_key = ?
+        AND platform <> ''
+      GROUP BY user_key`,
+    [gameKey],
+  );
+  const platMap = new Map<string, string>();
+  for (const row of platRows as Array<{ user_key: string; analytics_platform: string }>) {
+    if (row.user_key) platMap.set(row.user_key, str(row.analytics_platform));
+  }
+  return (rows as Array<Omit<FirstSeenRow, 'analytics_platform'>>).map((row) => ({
+    ...row,
+    analytics_platform: platMap.get(row.user_key) || '',
+  }));
 }
 
 async function listTouchpointsByUser(gameKey: string): Promise<Map<string, AttributionTouchpointRow[]>> {
@@ -382,6 +392,7 @@ export async function resolveUserAttribution(gameKey: string): Promise<number> {
       user_key: user.user_key,
       user_id: user.user_id || '',
       anonymous_id: user.anonymous_id || '',
+      analytics_platform: str(user.analytics_platform),
       first_seen_ts: Number(user.first_seen_ts || 0),
       attributed_at: touch?.event_ts || Number(user.first_seen_ts || 0),
       attribution_type: type,
@@ -413,7 +424,8 @@ export async function recomputeAttributedUserDaily(
   const pool = await getMysqlPool();
   const [userRows] = await pool.query(
     `SELECT
-       ud.game_key, ud.date_key, ud.user_key, ud.first_seen_date, ud.is_new_user, ud.is_active,
+       ud.game_key, ud.date_key, ud.user_key, ud.platform AS analytics_platform,
+       ud.first_seen_date, ud.is_new_user, ud.is_active,
        ud.session_cnt, ud.ad_show_cnt, ud.ad_revenue_estimated_cny,
        ua.user_id, ua.anonymous_id, ua.provider, ua.channel, ua.campaign_id, ua.adgroup_id,
        ua.creative_id, ua.attribution_type, ua.match_type, ua.confidence
@@ -464,6 +476,7 @@ export async function recomputeAttributedUserDaily(
       user_key: str(row.user_key),
       user_id: str(row.user_id),
       anonymous_id: str(row.anonymous_id),
+      analytics_platform: str(row.analytics_platform),
       first_seen_date: str(row.first_seen_date),
       is_new_user: num(row.is_new_user),
       is_active: num(row.is_active),
@@ -615,8 +628,8 @@ async function computeReengagementMetrics(
        INNER JOIN user_attribution ua
          ON t.game_key = ua.game_key AND t.user_key = ua.user_key
       WHERE t.game_key = ?
-        AND t.event_ts BETWEEN ? AND ?${platformExistsFilter('t.user_key')}`,
-    [gameKey, dateStartTs(from), dateEndTs(to), ...platformExistsParams(gameKey, platform)],
+        AND t.event_ts BETWEEN ? AND ?${analyticsPlatformFilter('ua.analytics_platform')}`,
+    [gameKey, dateStartTs(from), dateEndTs(to), ...analyticsPlatformParams(platform)],
   );
 
   const dailyMap = new Map<string, {
@@ -749,11 +762,11 @@ export async function getAttributionOverview(
        COUNT(DISTINCT CASE WHEN ad_show_cnt > 0 THEN user_key END) AS first_ad_show_users,
        MAX(max_star_level) AS max_star_level
      FROM attributed_user_daily
-     WHERE game_key = ? AND first_seen_date BETWEEN ? AND ?${platformExistsFilter('user_key')}
+     WHERE game_key = ? AND first_seen_date BETWEEN ? AND ?${analyticsPlatformFilter('analytics_platform')}
      GROUP BY provider, channel, campaign_id, adgroup_id, creative_id
      ORDER BY new_users DESC, users DESC
      LIMIT 200`,
-    [gameKey, from, to, ...platformExistsParams(gameKey, platform)],
+    [gameKey, from, to, ...analyticsPlatformParams(platform)],
   );
   const rankings: AttributionOverviewRow[] = (rankingRows as Array<Record<string, unknown>>).map((row) => {
     const newUsers = num(row.new_users);
@@ -794,8 +807,8 @@ export async function getAttributionOverview(
        SUM(CASE WHEN match_type IN ('fallback', 'parameter') THEN 1 ELSE 0 END) AS fallback_users
      FROM user_attribution
      WHERE game_key = ?
-       AND first_seen_ts >= ? AND first_seen_ts <= ?${platformExistsFilter('user_key')}`,
-    [gameKey, fromTs, toTs, ...platformExistsParams(gameKey, platform)],
+       AND first_seen_ts >= ? AND first_seen_ts <= ?${analyticsPlatformFilter('analytics_platform')}`,
+    [gameKey, fromTs, toTs, ...analyticsPlatformParams(platform)],
   );
   const summary = (summaryRows as Array<Record<string, unknown>>)[0] || {};
   const [dailyCohortRows] = await pool.query(
@@ -810,10 +823,10 @@ export async function getAttributionOverview(
      LEFT JOIN user_attribution ua ON d.game_key = ua.game_key AND d.user_key = ua.user_key
      WHERE d.game_key = ?
        AND d.first_seen_date BETWEEN ? AND ?
-       AND d.date_key = d.first_seen_date${platformExistsFilter('d.user_key')}
+       AND d.date_key = d.first_seen_date${analyticsPlatformFilter('d.analytics_platform')}
      GROUP BY d.first_seen_date
      ORDER BY d.first_seen_date DESC`,
-    [gameKey, from, to, ...platformExistsParams(gameKey, platform)],
+    [gameKey, from, to, ...analyticsPlatformParams(platform)],
   );
   const daily_cohorts: AttributionDailyCohortRow[] = (dailyCohortRows as Array<Record<string, unknown>>).map((row) => ({
     cohort_date: str(row.cohort_date),

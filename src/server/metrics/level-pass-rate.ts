@@ -2,7 +2,12 @@ import tcb from '@cloudbase/node-sdk';
 
 import { getMysqlPool } from '../db';
 import { findAnalyticsGame } from '../config/analytics-games';
-import { PLATFORM_SQL, isPlatformFilterActive, platformSqlParams } from './platform-filter';
+import {
+  PLATFORM_SQL,
+  PRECOMPUTE_PLATFORMS,
+  normalizePlatformFilter,
+  platformSqlParams,
+} from './platform-filter';
 
 const MODE_KEY = 'bowl';
 const WINDOW_DAYS = 30;
@@ -22,6 +27,7 @@ interface RawLevelEvent {
 export interface LevelPassRateRow {
   game_key: string;
   mode_key: string;
+  platform: string;
   level_id: number;
   window_days: number;
   window_start_date: string;
@@ -99,19 +105,27 @@ export async function recomputeLevelPassRates(options: RecomputeOptions = {}): P
   const publish = options.publish !== false;
   const { fromDate, toDate, fromTs, toTs } = getCompleteDayWindow(windowDays);
   const computedAt = Date.now();
-  const rows = buildLevelPassRows(
-    gameKey,
-    await listRawLevelEvents(gameKey, fromTs, toTs),
-    {
-      windowDays,
-      fromDate,
-      toDate,
-      computedAt,
-    },
-  );
-  await replaceLevelPassRows(gameKey, MODE_KEY, windowDays, rows);
+  await ensureLevelPassPlatformColumn();
+  let totalRows = 0;
+  let publishRows: LevelPassRateRow[] = [];
+  for (const platform of PRECOMPUTE_PLATFORMS) {
+    const rows = buildLevelPassRows(
+      gameKey,
+      await listRawLevelEvents(gameKey, fromTs, toTs, platform),
+      {
+        windowDays,
+        fromDate,
+        toDate,
+        computedAt,
+        platform,
+      },
+    );
+    await replaceLevelPassRows(gameKey, MODE_KEY, windowDays, platform, rows);
+    totalRows += rows.length;
+    if (platform === 'wechat') publishRows = rows;
+  }
   if (publish && gameKey === 'hotpot' && windowDays === WINDOW_DAYS) {
-    await publishLevelPassRateSnapshot(rows, {
+    await publishLevelPassRateSnapshot(publishRows, {
       gameKey,
       windowDays,
       fromDate,
@@ -125,7 +139,7 @@ export async function recomputeLevelPassRates(options: RecomputeOptions = {}): P
     window_days: windowDays,
     window_start_date: fromDate,
     window_end_date: toDate,
-    rows: rows.length,
+    rows: totalRows,
     published: publish && gameKey === 'hotpot' && windowDays === WINDOW_DAYS,
     computed_at: computedAt,
   };
@@ -136,10 +150,8 @@ export async function getLatestLevelPassRateOverview(
   windowDays = WINDOW_DAYS,
   platform?: string,
 ): Promise<LevelPassRateOverview | null> {
-  // 预聚合表 game_level_pass_rates 不区分平台，选定具体平台时改为实时按窗口重算，不写库
-  if (isPlatformFilterActive(platform)) {
-    return computeLiveLevelPassRateOverview(gameKey, windowDays, platform);
-  }
+  const platformKey = normalizePlatformFilter(platform) || 'wechat';
+  await ensureLevelPassPlatformColumn();
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `SELECT
@@ -159,9 +171,9 @@ export async function getLatestLevelPassRateOverview(
        is_sample_low,
        computed_at
      FROM game_level_pass_rates
-     WHERE game_key = ? AND mode_key = ? AND window_days = ?
+     WHERE game_key = ? AND mode_key = ? AND window_days = ? AND platform = ?
      ORDER BY level_id ASC`,
-    [gameKey, MODE_KEY, windowDays],
+    [gameKey, MODE_KEY, windowDays, platformKey],
   );
   const list = rows as Array<{
     game_key: string;
@@ -182,7 +194,8 @@ export async function getLatestLevelPassRateOverview(
   }>;
   const first = list[0];
   if (!first) {
-    return null;
+    // 冷启动兜底：预聚合尚未回算完时临时实时算一次
+    return computeLiveLevelPassRateOverview(gameKey, windowDays, platformKey);
   }
   return {
     game_key: first.game_key,
@@ -205,9 +218,7 @@ export async function getLatestLevelPassRateOverview(
   };
 }
 
-/**
- * 按平台过滤时不读预聚合表，实时用当前窗口重算通关率（不落库，避免污染全平台聚合数据）。
- */
+/** 预聚合暂无该平台数据时的实时兜底（不落库）。 */
 async function computeLiveLevelPassRateOverview(
   gameKey: string,
   windowDays: number,
@@ -216,10 +227,11 @@ async function computeLiveLevelPassRateOverview(
   const boundedWindowDays = Math.max(1, Math.min(30, Math.floor(windowDays || WINDOW_DAYS)));
   const { fromDate, toDate, fromTs, toTs } = getCompleteDayWindow(boundedWindowDays);
   const computedAt = Date.now();
+  const platformKey = normalizePlatformFilter(platform) || 'wechat';
   const rows = buildLevelPassRows(
     gameKey,
-    await listRawLevelEvents(gameKey, fromTs, toTs, platform),
-    { windowDays: boundedWindowDays, fromDate, toDate, computedAt },
+    await listRawLevelEvents(gameKey, fromTs, toTs, platformKey),
+    { windowDays: boundedWindowDays, fromDate, toDate, computedAt, platform: platformKey },
   );
   return {
     game_key: gameKey,
@@ -240,6 +252,27 @@ async function computeLiveLevelPassRateOverview(
       is_sample_low: row.is_sample_low,
     })),
   };
+}
+
+async function ensureLevelPassPlatformColumn(): Promise<void> {
+  const pool = await getMysqlPool();
+  const [cols] = await pool.query(
+    `SELECT COLUMN_NAME AS name
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'game_level_pass_rates'
+        AND COLUMN_NAME = 'platform'`,
+  );
+  if ((cols as Array<{ name: string }>).length) return;
+  await pool.query(`
+    ALTER TABLE game_level_pass_rates
+      ADD COLUMN platform VARCHAR(16) NOT NULL DEFAULT '' AFTER mode_key
+  `);
+  await pool.query(`
+    ALTER TABLE game_level_pass_rates
+      DROP PRIMARY KEY,
+      ADD PRIMARY KEY (game_key, mode_key, platform, level_id, window_days)
+  `);
 }
 
 function getCompleteDayWindow(windowDays: number): { fromDate: string; toDate: string; fromTs: number; toTs: number } {
@@ -280,7 +313,7 @@ async function listRawLevelEvents(gameKey: string, fromTs: number, toTs: number,
 function buildLevelPassRows(
   gameKey: string,
   events: RawLevelEvent[],
-  opts: { windowDays: number; fromDate: string; toDate: string; computedAt: number },
+  opts: { windowDays: number; fromDate: string; toDate: string; computedAt: number; platform: string },
 ): LevelPassRateRow[] {
   const byLevel = new Map<number, {
     startUsers: Set<string>;
@@ -323,6 +356,7 @@ function buildLevelPassRows(
       return {
         game_key: gameKey,
         mode_key: MODE_KEY,
+        platform: opts.platform,
         level_id: levelId,
         window_days: opts.windowDays,
         window_start_date: opts.fromDate,
@@ -346,6 +380,7 @@ async function replaceLevelPassRows(
   gameKey: string,
   modeKey: string,
   windowDays: number,
+  platform: string,
   rows: LevelPassRateRow[],
 ): Promise<void> {
   const pool = await getMysqlPool();
@@ -353,20 +388,21 @@ async function replaceLevelPassRows(
   try {
     await conn.beginTransaction();
     await conn.execute(
-      'DELETE FROM game_level_pass_rates WHERE game_key = ? AND mode_key = ? AND window_days = ?',
-      [gameKey, modeKey, windowDays],
+      'DELETE FROM game_level_pass_rates WHERE game_key = ? AND mode_key = ? AND window_days = ? AND platform = ?',
+      [gameKey, modeKey, windowDays, platform],
     );
     for (const row of rows) {
       await conn.execute(
         `INSERT INTO game_level_pass_rates (
-          game_key, mode_key, level_id, window_days, window_start_date, window_end_date,
+          game_key, mode_key, platform, level_id, window_days, window_start_date, window_end_date,
           start_users, clear_users, fail_users, started_and_cleared_users,
           start_attempts, clear_attempts, fail_attempts, pass_rate, is_sample_low,
           computed_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           row.game_key,
           row.mode_key,
+          row.platform,
           row.level_id,
           row.window_days,
           row.window_start_date,

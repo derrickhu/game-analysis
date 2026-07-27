@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Table, Tag, Tooltip, Typography, message } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -134,35 +134,35 @@ export function EngagementPanel() {
           name: '日常任务',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#10b981' },
+          itemStyle: { color: '#059669' },
           data: series.map((p) => p.daily_quest_cnt),
         },
         {
           name: '周里程碑',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#22c55e' },
+          itemStyle: { color: '#10b981' },
           data: series.map((p) => p.weekly_milestone_cnt),
         },
         {
           name: '签到',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#3b82f6' },
+          itemStyle: { color: '#2563eb' },
           data: series.map((p) => p.checkin_cnt),
         },
         {
           name: '许愿喷泉',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#a855f7' },
+          itemStyle: { color: '#7c3aed' },
           data: series.map((p) => p.fountain_draw_cnt),
         },
         {
           name: '熟客卡掉落',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#f59e0b' },
+          itemStyle: { color: '#d97706' },
           data: series.map((p) => p.affinity_card_cnt),
         },
         {
@@ -180,7 +180,7 @@ export function EngagementPanel() {
     if (drawBreakdown.length === 0) return null;
     return {
       tooltip: { trigger: 'item', formatter: '{b}: {c} 次 ({d}%)' },
-      legend: { bottom: 0, textStyle: { color: '#374151' } },
+      legend: { bottom: 0, textStyle: { color: '#475569' } },
       series: [
         {
           type: 'pie',
@@ -210,12 +210,10 @@ export function EngagementPanel() {
 
   return (
     <Card
-      title="玩法参与度"
-      extra={
-        <Text type="secondary">
-          数据源：daily_quest_claim / weekly_milestone_claim / checkin_sign / fountain_draw /
-          affinity_card_drop / merge_success / collection_discover
-        </Text>
+      title={
+        <Tooltip title="数据源：daily_quest_claim / weekly_milestone_claim / checkin_sign / fountain_draw / affinity_card_drop / merge_success / collection_discover">
+          <span style={{ cursor: 'help' }}>玩法参与度</span>
+        </Tooltip>
       }
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
@@ -293,7 +291,7 @@ export function EngagementPanel() {
                   value={formatPercent(kpi?.affinity_duplicate_rate)}
                   valueStyle={{
                     color:
-                      (kpi?.affinity_duplicate_rate ?? 0) > 0.7 ? '#ef4444' : undefined,
+                      (kpi?.affinity_duplicate_rate ?? 0) > 0.7 ? '#e11d48' : undefined,
                   }}
                 />
               </Tooltip>

@@ -41,7 +41,11 @@ export function formatSeriesBucketLabel(bucket: string, granularity: SeriesGranu
   return `${day} ${pad(utcDate.getHours())}:${pad(utcDate.getMinutes())}`;
 }
 
-export function defaultSeriesZoomStart(length: number, granularity: SeriesGranularity): number {
-  const visible = granularity === 'five_min' ? 60 : granularity === 'hour' ? 96 : 60;
-  return length > visible ? Math.max(0, 100 - (visible / length) * 100) : 0;
+/**
+ * 趋势图默认 dataZoom 起点。
+ * 统一从 0 开始：与顶部时间窗口一致（选「今天」即自然日 00:00 ~ now），
+ * 不再截成「最近 N 桶」。需要细看局部时用户可拖底部 slider。
+ */
+export function defaultSeriesZoomStart(_length: number, _granularity: SeriesGranularity): number {
+  return 0;
 }

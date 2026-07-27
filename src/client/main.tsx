@@ -15,7 +15,10 @@ import { GameplayPage } from './pages/GameplayPage';
 import { OpsPage } from './pages/OpsPage';
 import { PlayerSnapshotPage } from './pages/PlayerSnapshotPage';
 import { RetentionPage } from './pages/RetentionPage';
+import { antdTheme, registerAnalyticsChartTheme } from './theme';
 import './styles.css';
+
+registerAnalyticsChartTheme();
 
 /**
  * 路由结构（v7 createBrowserRouter）：
@@ -67,7 +70,7 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider locale={zhCN} theme={antdTheme}>
       <RouterProvider router={router} />
     </ConfigProvider>
   </React.StrictMode>,

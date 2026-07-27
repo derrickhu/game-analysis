@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Button,
   Card,
   Col,
@@ -11,6 +10,7 @@ import {
   Statistic,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -340,20 +340,17 @@ export function AttributionPage() {
           </Space>
         }
       >
-        <Alert
-          showIcon
-          type="info"
-          message="当前页用于验证归因采集、用户绑定和深层事件回传候选；真实广告平台回传默认不开启。"
-          description={
-            includesToday
-              ? '范围含今天：适合投流当天看新增来源与「带点击标识」是否正常；请先顶部「立即拉取」再点「回算归因」。下方「最近启动触点」不依赖日期，可实时看 campaign/click_id。'
-              : '上方 KPI 与下表均按「分析范围」内的注册 cohort 统计，不是全游戏历史存量。'
-          }
-          style={{ marginBottom: 16 }}
-        />
         <Row gutter={[16, 16]}>
           <Col xs={12} md={4}>
-            <Statistic title="期间新增（拉新）" value={summary?.attributed_users || 0} />
+            <Tooltip
+              title={
+                includesToday
+                  ? '验证归因采集与回传候选（真实回传默认关闭）。含今天时：先「立即拉取」再「回算归因」；下方最近启动触点不依赖日期。'
+                  : '验证归因采集与回传候选（真实回传默认关闭）。KPI/表按分析范围内注册 cohort，非全量历史。'
+              }
+            >
+              <Statistic title="期间新增（拉新）" value={summary?.attributed_users || 0} />
+            </Tooltip>
           </Col>
           <Col xs={12} md={4}><Statistic title="非自然量" value={summary?.paid_or_known_users || 0} /></Col>
           <Col xs={12} md={4}><Statistic title="自然量" value={summary?.organic_users || 0} /></Col>
@@ -378,16 +375,13 @@ export function AttributionPage() {
       </Card>
 
       <Card
-        title="回流归因（按广告触达日 · 老用户再营销）"
+        title={
+          <Tooltip title="回流≠拉新：仅注册日之前的老用户，在触达日经腾讯广告参数（gdt_vid/click_id）再次启动。不含分享/小程序跳转。需先回算归因。">
+            <span style={{ cursor: 'help' }}>回流归因（按广告触达日 · 老用户再营销）</span>
+          </Tooltip>
+        }
         loading={loading && !data}
       >
-        <Alert
-          showIcon
-          type="warning"
-          message="回流 ≠ 拉新：仅统计注册日之前的老用户，在触达日当天经腾讯广告参数（gdt_vid/click_id）再次启动。"
-          description="不含 referrer_app、分享等小程序跳转。6/4 若只有跳转无广告参数，修正后不会出现在此表。需先回算归因。"
-          style={{ marginBottom: 16 }}
-        />
         <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
           <Col xs={12} md={6}><Statistic title="期间回流用户" value={reSummary?.reengaged_users || 0} /></Col>
           <Col xs={12} md={6}><Statistic title="腾讯广告触达" value={reSummary?.paid_or_known_users || 0} /></Col>

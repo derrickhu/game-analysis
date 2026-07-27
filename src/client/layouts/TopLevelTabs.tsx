@@ -15,6 +15,7 @@ export function TopLevelTabs() {
   return (
     <Tabs
       type="card"
+      className="app-nav-primary"
       activeKey={activeKey}
       onChange={(key) => {
         if (key === 'business') navigate('/business/dashboard');

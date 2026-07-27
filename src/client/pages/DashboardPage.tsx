@@ -13,7 +13,7 @@ import {
   Typography,
   message,
 } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { getGameDescriptor } from '../../shared/games';
 import { appendPlatformQuery } from '../../shared/platforms';
@@ -21,6 +21,7 @@ import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { fetchJson } from '../fetchJson';
 import { RealtimeAdRevenue } from '../RealtimeAdRevenue';
 import { RealtimeShare } from '../RealtimeShare';
+import { chartColors } from '../theme/chartPalette';
 import { buildWindowQuery, resolveWindow, tsToUtcBucketStr, type WindowValue } from '../timeWindow';
 
 const { Text } = Typography;
@@ -329,19 +330,17 @@ export function DashboardPage() {
   }, [gameKey, platform, windowSel, refreshToken, loadAll]);
 
   // 活跃 / 新增双线（5 分钟桶）
+  // 默认展示当前时间窗口全量（选「今天」= 自然日 00:00 ~ now），不截最近几小时。
   const activeChartOption = useMemo(() => {
     const series = overview?.series || [];
     const xAxis = series.map((p) => bucketShort(p.bucket));
-    // 5 分钟桶 1 小时 = 12 桶；今日窗口最多 ~288 桶。
-    // 默认 zoom 到最近 60 桶（约 5 小时）避免标签过密；用户拖 slider 查看全天
-    const zoomStart = series.length > 60 ? Math.max(0, 100 - (60 / series.length) * 100) : 0;
     return {
       tooltip: { trigger: 'axis' },
       legend: {
         data: ['活跃用户', '新增用户'],
-        textStyle: { color: '#374151', fontSize: 13, fontWeight: 500 },
+        textStyle: { fontSize: 13, fontWeight: 560 },
       },
-      grid: { left: 50, right: 30, top: 50, bottom: 60 },
+      grid: { left: 16, right: 20, top: 52, bottom: 56, containLabel: true },
       xAxis: {
         type: 'category',
         data: xAxis,
@@ -353,24 +352,25 @@ export function DashboardPage() {
         minInterval: 1,
       },
       dataZoom: [
-        { type: 'inside', start: zoomStart, end: 100 },
-        { type: 'slider', height: 18, bottom: 10, start: zoomStart, end: 100 },
+        { type: 'inside', start: 0, end: 100 },
+        { type: 'slider', height: 20, bottom: 8, start: 0, end: 100 },
       ],
       series: [
         {
           name: '活跃用户',
           type: 'bar',
-          barMaxWidth: 18,
-          itemStyle: { color: '#3b82f6', borderRadius: [4, 4, 0, 0] },
+          barMaxWidth: 22,
+          itemStyle: { color: chartColors.secondary, borderRadius: [6, 6, 2, 2] },
           data: series.map((p) => p.active_users),
         },
         {
           name: '新增用户',
           type: 'line',
-          smooth: true,
-          symbolSize: 6,
-          itemStyle: { color: '#f59e0b' },
-          areaStyle: { opacity: 0.15 },
+          smooth: 0.35,
+          symbolSize: 7,
+          itemStyle: { color: chartColors.quaternary },
+          lineStyle: { width: 2.75, color: chartColors.quaternary },
+          areaStyle: { opacity: 0.22 },
           data: series.map((p) => p.new_users),
         },
       ],
@@ -436,38 +436,35 @@ export function DashboardPage() {
       ? previousSpend / previousKpi.new_users_today
       : null;
 
+  const hasLoadedOverview = overview?.ok === true;
+  const isEmptyKpi =
+    hasLoadedOverview &&
+    (overviewKpi?.dau ?? 0) === 0 &&
+    (overviewKpi?.new_users_today ?? 0) === 0 &&
+    (overviewKpi?.active_users_1h ?? 0) === 0;
+
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert
-        type="info"
-        showIcon
-        title="实时趋势 · 5 分钟粒度"
-        description={
-          <Space orientation="vertical" size={0}>
-            <Text>
-              数据来源：@gp/analytics-sdk 打点流水（analytics_events），cron 每 5 分钟增量拉取并聚合。
-            </Text>
-            <Text type="secondary">
-              用户身份：优先 user_id（业务 openid），未登录时降级到 anonymous_id；活跃、新增、留存回访都用
-              session_start 去重；本页展示的是新增留存：cohort=锚点日前 1/7 日首次 session_start 的新用户，
-              retain=cohort 中锚点日再次进入游戏的去重数。活跃次留另指“前一日活跃用户次日仍活跃”，不等同新增次留。
-            </Text>
-          </Space>
-        }
-      />
+      {isEmptyKpi && (
+        <Alert
+          type="warning"
+          showIcon
+          title={`当前筛选暂无活跃（${gameDescriptor?.displayName ?? gameKey} · ${platform}），可换游戏/渠道或点「立即拉取并刷新」`}
+        />
+      )}
 
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
-          <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="当前时间窗口内有 session_start 事件的去重用户数。窗口=今日时即为今日 DAU；选历史日时即为该日 DAU；多日窗口为窗口内活跃合计。">
+          <Card className="kpi-card" style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="窗口内有 session_start 的去重用户数。选「今天」= 今日 DAU；多日窗口 = 窗口内活跃合计。身份优先 user_id，未登录用 anonymous_id。">
               <Statistic title="窗口活跃" value={overviewKpi?.dau ?? 0} suffix="人" />
             </Tooltip>
             <KpiDeltaText delta={deltaText(overviewKpi?.dau, previousKpi?.dau, { digits: 1 })} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
-          <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="窗口结束时刻向前 1 小时内任意事件的去重用户数。窗口=today 时与“现在”重合；历史窗口看的是该窗口结束前最后 1 小时。">
+          <Card className="kpi-card" style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="窗口结束时刻往前 1 小时内、任意事件的去重用户。选「今天」时约等于当前近 1 小时在线。">
               <Statistic
                 title="近 1 小时活跃"
                 value={overviewKpi?.active_users_1h ?? 0}
@@ -478,16 +475,16 @@ export function DashboardPage() {
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
-          <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="在全表中首次 session_start 于当前时间窗口内的去重用户数。">
+          <Card className="kpi-card" style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="全库首次 session_start 落在当前窗口内的去重用户数（窗口内新增）。">
               <Statistic title="窗口内新增" value={overviewKpi?.new_users_today ?? 0} suffix="人" />
             </Tooltip>
             <KpiDeltaText delta={deltaText(overviewKpi?.new_users_today, previousKpi?.new_users_today, { digits: 1 })} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
-          <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="锚点日 = 当前时间窗口结束日所在自然日。D1 新增次留 = 锚点日前 1 日新增 cohort 中、在锚点日仍有 session_start 的比例。活跃次留是“前一日活跃用户次日仍活跃”，这里不展示。窗口切到 5/8 一整天时即为 5/7 新用户 → 5/8 回访。">
+          <Card className="kpi-card" style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="新增次留：锚点日前 1 日首次进入的新用户中，锚点日再次 session_start 的比例。≠ 活跃次留。">
               <Statistic
                 title="D1 新增次留"
                 value={formatRetentionRate(overviewKpi?.retention_d1_rate)}
@@ -506,8 +503,8 @@ export function DashboardPage() {
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
-          <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Tooltip title="7 留 D7 = 锚点日前 7 日新增 cohort 中、在锚点日仍有 session_start 的比例。打点不足 7 天时 cohort 为 0。">
+          <Card className="kpi-card" style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="锚点日前 7 日新增 cohort 中，锚点日仍有 session_start 的比例。打点不足 7 天时为 0。">
               <Statistic
                 title="7 留 D7"
                 value={formatRetentionRate(overviewKpi?.retention_d7_rate)}
@@ -526,46 +523,63 @@ export function DashboardPage() {
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
-          <Card style={kpiCardStyle} styles={kpiCardStyles}>
-            <Statistic
-              title="计算时刻"
-              value={
-                overviewKpi?.computed_at
-                  ? new Date(overviewKpi.computed_at).toLocaleTimeString('zh-CN')
-                  : '-'
-              }
-            />
+          <Card className="kpi-card" style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="本页 overview 指标最近一次服务端计算完成时间；下方为查询窗口起始日。数据约每 5 分钟增量聚合。">
+              <Statistic
+                title="计算时刻"
+                value={
+                  overviewKpi?.computed_at
+                    ? new Date(overviewKpi.computed_at).toLocaleTimeString('zh-CN')
+                    : '-'
+                }
+              />
+            </Tooltip>
             <Text type="secondary">{overview?.query?.from?.slice(0, 10) || '-'}</Text>
           </Card>
         </Col>
         <Col span={24}>
           <Card
-            title="投放与商业化波动（同时间段 vs 昨日）"
-            extra={<Text type="secondary">投放消耗优先走腾讯广告实时接口；接口未生效时回退到已补录经营数据。</Text>}
+            title={
+              <Tooltip title="同比昨日同一时间段。投放消耗优先腾讯广告实时接口，失败时回退已补录经营数据。">
+                <span>投放与商业化波动（同时间段 vs 昨日）</span>
+              </Tooltip>
+            }
           >
             <Row gutter={[16, 16]}>
               <Col xs={12} md={4}>
-                <Statistic title="投放消耗" value={currentSpend ?? '-'} suffix={currentSpend === undefined ? undefined : '元'} precision={2} />
+                <Tooltip title="窗口内投放消耗（元）。优先腾讯广告实时；接口失败见下方对比文案。">
+                  <Statistic title="投放消耗" value={currentSpend ?? '-'} suffix={currentSpend === undefined ? undefined : '元'} precision={2} />
+                </Tooltip>
                 <KpiDeltaText delta={deltaText(currentSpend, previousSpend, { digits: 1, unavailableText: acquisitionSource })} />
               </Col>
               <Col xs={12} md={4}>
-                <Statistic title="投放 CPI" value={currentCpi ?? '-'} suffix={currentCpi === null ? undefined : '元'} precision={4} />
+                <Tooltip title="投放消耗 ÷ 窗口内新增用户。越低获客越便宜（对比箭头反向解读）。">
+                  <Statistic title="投放 CPI" value={currentCpi ?? '-'} suffix={currentCpi === null ? undefined : '元'} precision={4} />
+                </Tooltip>
                 <KpiDeltaText delta={deltaText(currentCpi, previousCpi, { digits: 1, reverseGood: true, unavailableText: acquisitionSource })} />
               </Col>
               <Col xs={12} md={4}>
-                <Statistic title="广告渗透" value={currentAd?.ad_penetration_rate ?? 0} suffix="%" precision={1} />
+                <Tooltip title="窗口内看过广告的去重用户 ÷ 活跃用户。">
+                  <Statistic title="广告渗透" value={currentAd?.ad_penetration_rate ?? 0} suffix="%" precision={1} />
+                </Tooltip>
                 <KpiDeltaText delta={deltaText(currentAd?.ad_penetration_rate, previousAd?.ad_penetration_rate, { digits: 1 })} />
               </Col>
               <Col xs={12} md={4}>
-                <Statistic title="人均广告展示" value={currentAd?.ad_show_per_uu ?? 0} suffix="次" precision={2} />
+                <Tooltip title="窗口内广告展示次数 ÷ 活跃用户。">
+                  <Statistic title="人均广告展示" value={currentAd?.ad_show_per_uu ?? 0} suffix="次" precision={2} />
+                </Tooltip>
                 <KpiDeltaText delta={deltaText(currentAd?.ad_show_per_uu, previousAd?.ad_show_per_uu, { digits: 1 })} />
               </Col>
               <Col xs={12} md={4}>
-                <Statistic title="填充率" value={currentAd?.fill_rate ?? 0} suffix="%" precision={1} />
+                <Tooltip title="广告填充成功次数 ÷ 请求次数。">
+                  <Statistic title="填充率" value={currentAd?.fill_rate ?? 0} suffix="%" precision={1} />
+                </Tooltip>
                 <KpiDeltaText delta={deltaText(currentAd?.fill_rate, previousAd?.fill_rate, { digits: 1 })} />
               </Col>
               <Col xs={12} md={4}>
-                <Statistic title="广告收益" value={currentAd?.total_revenue_estimated_cny ?? 0} suffix="元" precision={2} />
+                <Tooltip title="窗口内广告预估收益（元）。优先流量主真实 eCPM，缺失时用配置 eCPM。">
+                  <Statistic title="广告收益" value={currentAd?.total_revenue_estimated_cny ?? 0} suffix="元" precision={2} />
+                </Tooltip>
                 <KpiDeltaText
                   delta={deltaText(currentAd?.total_revenue_estimated_cny, previousAd?.total_revenue_estimated_cny, {
                     digits: 1,
@@ -574,8 +588,9 @@ export function DashboardPage() {
               </Col>
             </Row>
             <div style={{ marginTop: 16, marginBottom: 8 }}>
-              <Text strong>最近 3 个已出数投放日 D3 ROI</Text>
-              <Text type="secondary" style={{ marginLeft: 8 }}>未成熟日期不展示</Text>
+              <Tooltip title="只展示 D3 已完整出数的投放日；未成熟日期不展示。">
+                <Text strong style={{ cursor: 'help' }}>最近 3 个已出数投放日 D3 ROI</Text>
+              </Tooltip>
             </div>
             <Row gutter={[12, 12]}>
               {recentD3RoiRows.length > 0 ? recentD3RoiRows.map((row) => (
@@ -604,8 +619,9 @@ export function DashboardPage() {
               )}
             </Row>
             <div style={{ marginTop: 16, marginBottom: 8 }}>
-              <Text strong>最近 3 个已出数日期 D7 ROI</Text>
-              <Text type="secondary" style={{ marginLeft: 8 }}>未成熟日期不展示</Text>
+              <Tooltip title="只展示 D7 已完整出数的日期；未成熟日期不展示。">
+                <Text strong style={{ cursor: 'help' }}>最近 3 个已出数日期 D7 ROI</Text>
+              </Tooltip>
             </div>
             <Row gutter={[12, 12]}>
               {recentD7RoiRows.length > 0 ? recentD7RoiRows.map((row) => (
@@ -636,7 +652,13 @@ export function DashboardPage() {
           </Card>
         </Col>
         <Col span={24}>
-          <Card title="活跃 / 新增趋势（5 分钟桶 · 当日）">
+          <Card
+            title={
+              <Tooltip title="按 5 分钟桶聚合的活跃 / 新增趋势；数据来自 analytics_events，约每 5 分钟增量刷新。">
+                <span>活跃 / 新增趋势</span>
+              </Tooltip>
+            }
+          >
             {(overview?.series?.length || 0) > 0 ? (
               <ReactECharts option={activeChartOption} style={{ height: 320 }} />
             ) : (

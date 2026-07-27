@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Tooltip, Typography, message } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -99,7 +99,7 @@ export function HotpotDailyLimitedPanel() {
         right: 8,
         itemWidth: 14,
         itemHeight: 10,
-        textStyle: { color: '#374151', fontSize: 12, fontWeight: 500 },
+        textStyle: { color: '#475569', fontSize: 12, fontWeight: 500 },
       },
       grid: { left: 50, right: 20, top: 48, bottom: 64 },
       xAxis: {
@@ -108,7 +108,7 @@ export function HotpotDailyLimitedPanel() {
         axisLabel: {
           interval: 0,
           hideOverlap: false,
-          color: '#374151',
+          color: '#475569',
           fontSize: 12,
           lineHeight: 16,
         },

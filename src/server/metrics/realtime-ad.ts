@@ -1,8 +1,8 @@
 import { isMysqlMode, getDb, getMysqlPool } from '../db';
 import { estimateRevenueCny, getEstimatedEcpm } from '../config/ecpm';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket, tsToDayBucket, tsToHourBucket } from './bucket';
-import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
-import type { AdMinuteRow } from '../analytics-db';
+import { PLATFORM_SQL, PRECOMPUTE_PLATFORMS, normalizePlatformFilter, platformSqlParams } from './platform-filter';
+import { ensureAnalyticsSchema, type AdMinuteRow } from '../analytics-db';
 
 const AD_EVENT_NAMES = ['ad_request', 'ad_show', 'ad_click', 'ad_close', 'ad_error'] as const;
 type AdEventName = (typeof AD_EVENT_NAMES)[number];
@@ -13,11 +13,13 @@ type AdEventName = (typeof AD_EVENT_NAMES)[number];
  * - 实时性：客户端 batcher 默认 15s flush + 云函数 + cron 5min，端到端最坏 ~5 分钟延迟，对广告业务足够细
  * - 容量：1 小时 12 个 bucket，30 天 8640 行/游戏，比 1 分钟粒度小 5 倍
  * - 表名仍然叫 analytics_ad_minute（保留 schema 兼容性），minute_bucket 字符串严格落在 5 分钟整点
+ * - 按 platform（wechat/douyin）分别落桶，查询直接读表
  */
 
 interface AdAggregateBucket {
   game_key: string;
   minute_bucket: string;
+  platform: string;
   ad_type: string;
   scene: string;
   ad_request_cnt: number;
@@ -49,11 +51,13 @@ export async function recomputeRealtimeAdMinute(
   // 仅当 toTs 明显小于 fromTs（明显的逆序异常输入）或 fromTs 非法时才跳过；
   // 单条事件时 fromTs===toTs 是合法场景，需要继续走完聚合逻辑生成那一桶的数据
   if (fromTs <= 0 || toTs < fromTs) return 0;
+  await ensureAnalyticsSchema();
   // 涉及的 bucket 范围（前后再各扩 1 个桶宽避免边界丢漏）
   const minuteFrom = toMinuteBucket(Math.max(0, fromTs - BUCKET_SIZE_MS));
   const minuteTo = toMinuteBucket(toTs + BUCKET_SIZE_MS);
 
-  const buckets = await aggregateBuckets(gameKey, minuteFrom, minuteTo);
+  // 一次扫 events，按 platform 拆桶后整窗替换，避免查询侧再实时聚合。
+  const buckets = await aggregateBucketsAllPlatforms(gameKey, minuteFrom, minuteTo);
   await replaceBuckets(gameKey, minuteFrom, minuteTo, buckets);
   return buckets.length;
 }
@@ -261,7 +265,11 @@ async function aggregateBuckets(
           AND event_ts >= ? AND event_ts <= ?${PLATFORM_SQL}`,
       [gameKey, ...AD_EVENT_NAMES, fromTs, toTs, ...platformParams],
     );
-    return reduceRowsToBuckets(gameKey, rows as Array<{ event_name: string; event_ts: number; params_json: string | Record<string, unknown> }>);
+    return reduceRowsToBuckets(
+      gameKey,
+      normalizePlatformFilter(platform) || 'unknown',
+      rows as Array<{ event_name: string; event_ts: number; params_json: string | Record<string, unknown> }>,
+    );
   }
   const db = getDb();
   const placeholders = AD_EVENT_NAMES.map(() => '?').join(',');
@@ -278,13 +286,11 @@ async function aggregateBuckets(
       event_ts: number;
       params_json: string;
     }>;
-  return reduceRowsToBuckets(gameKey, rows);
+  return reduceRowsToBuckets(gameKey, normalizePlatformFilter(platform) || 'unknown', rows);
 }
 
 /**
- * 当需要按平台过滤广告桶时，不读混算的 analytics_ad_minute（该表不区分平台），
- * 而是从 analytics_events 即时聚合出与 listAdMinute 行形状兼容的结果。
- * ecpm_used / ad_revenue_estimated_cny 先填 0，路由层会用真实 eCPM 结合 ad_show_cnt 重新估算覆盖。
+ * @deprecated 预聚合已按平台落库；保留给冷启动兜底。
  */
 export async function aggregateAdMinuteFromEvents(
   gameKey: string,
@@ -292,12 +298,16 @@ export async function aggregateAdMinuteFromEvents(
   toMinute: string,
   platform?: string,
 ): Promise<AdMinuteRow[]> {
-  const buckets = await aggregateBuckets(gameKey, fromMinute, toMinute, platform);
+  const platformKey = normalizePlatformFilter(platform);
+  const buckets = platformKey
+    ? await aggregateBuckets(gameKey, fromMinute, toMinute, platformKey)
+    : await aggregateBucketsAllPlatforms(gameKey, fromMinute, toMinute);
   const updatedAt = Date.now();
   return buckets
     .map((b) => ({
       game_key: b.game_key,
       minute_bucket: b.minute_bucket,
+      platform: b.platform,
       ad_type: b.ad_type,
       scene: b.scene,
       ad_request_cnt: b.ad_request_cnt,
@@ -312,8 +322,20 @@ export async function aggregateAdMinuteFromEvents(
     .sort((a, b) => (a.minute_bucket < b.minute_bucket ? -1 : a.minute_bucket > b.minute_bucket ? 1 : 0));
 }
 
+async function aggregateBucketsAllPlatforms(
+  gameKey: string,
+  minuteFrom: string,
+  minuteTo: string,
+): Promise<AdAggregateBucket[]> {
+  const parts = await Promise.all(
+    PRECOMPUTE_PLATFORMS.map((platform) => aggregateBuckets(gameKey, minuteFrom, minuteTo, platform)),
+  );
+  return parts.flat();
+}
+
 function reduceRowsToBuckets(
   gameKey: string,
+  platform: string,
   rows: Array<{ event_name: string; event_ts: number; params_json: string | Record<string, unknown> }>,
 ): AdAggregateBucket[] {
   const map = new Map<string, AdAggregateBucket>();
@@ -333,12 +355,13 @@ function reduceRowsToBuckets(
     }
     const adType = String(params.ad_type || 'unknown');
     const scene = String(params.scene || 'unknown');
-    const key = `${bucket}|${adType}|${scene}`;
+    const key = `${platform}|${bucket}|${adType}|${scene}`;
     let agg = map.get(key);
     if (!agg) {
       agg = {
         game_key: gameKey,
         minute_bucket: bucket,
+        platform,
         ad_type: adType,
         scene,
         ad_request_cnt: 0,
@@ -389,7 +412,7 @@ async function replaceBuckets(
     );
     if (buckets.length === 0) return;
     const cols = [
-      'game_key', 'minute_bucket', 'ad_type', 'scene',
+      'game_key', 'minute_bucket', 'platform', 'ad_type', 'scene',
       'ad_request_cnt', 'ad_show_cnt', 'ad_click_cnt', 'ad_complete_cnt', 'ad_error_cnt',
       'ecpm_used', 'ad_revenue_estimated_cny', 'updated_at',
     ];
@@ -399,7 +422,7 @@ async function replaceBuckets(
       const ecpm = getEstimatedEcpm(b.game_key, b.ad_type, b.scene);
       const revenue = estimateRevenueCny(b.ad_show_cnt, ecpm);
       values.push(
-        b.game_key, b.minute_bucket, b.ad_type, b.scene,
+        b.game_key, b.minute_bucket, b.platform, b.ad_type, b.scene,
         b.ad_request_cnt, b.ad_show_cnt, b.ad_click_cnt, b.ad_complete_cnt, b.ad_error_cnt,
         ecpm, revenue, updatedAt,
       );
@@ -417,16 +440,16 @@ async function replaceBuckets(
     if (buckets.length === 0) return;
     const stmt = db.prepare(
       `INSERT INTO analytics_ad_minute (
-         game_key, minute_bucket, ad_type, scene,
+         game_key, minute_bucket, platform, ad_type, scene,
          ad_request_cnt, ad_show_cnt, ad_click_cnt, ad_complete_cnt, ad_error_cnt,
          ecpm_used, ad_revenue_estimated_cny, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const b of buckets) {
       const ecpm = getEstimatedEcpm(b.game_key, b.ad_type, b.scene);
       const revenue = estimateRevenueCny(b.ad_show_cnt, ecpm);
       stmt.run(
-        b.game_key, b.minute_bucket, b.ad_type, b.scene,
+        b.game_key, b.minute_bucket, b.platform, b.ad_type, b.scene,
         b.ad_request_cnt, b.ad_show_cnt, b.ad_click_cnt, b.ad_complete_cnt, b.ad_error_cnt,
         ecpm, revenue, updatedAt,
       );

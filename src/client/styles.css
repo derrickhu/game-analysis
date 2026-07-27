@@ -1,44 +1,234 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --ga-bg: #e8eef6;
+  --ga-bg-elevated: #ffffff;
+  --ga-bg-muted: #d9e3f0;
+  --ga-bg-subtle: #f3f6fb;
+  --ga-border: #c9d6e8;
+  --ga-border-strong: #a8bcd4;
+  --ga-text: #0f172a;
+  --ga-text-secondary: #334155;
+  --ga-text-muted: #64748b;
+  --ga-accent: #1d4ed8;
+  --ga-accent-soft: #dbeafe;
+  --ga-accent-hover: #2563eb;
+  --ga-info: #0284c7;
+  --ga-success: #047857;
+  --ga-warning: #b45309;
+  --ga-danger: #be123c;
+  --ga-violet: #7c3aed;
+  --ga-teal: #0d9488;
+  --ga-radius-sm: 8px;
+  --ga-radius-md: 12px;
+  --ga-radius-lg: 18px;
+  --ga-shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06);
+  --ga-shadow-md: 0 8px 24px rgba(29, 78, 216, 0.1);
+  --ga-shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.12);
+  --ga-font-sans: 'DM Sans', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Segoe UI', sans-serif;
+  --ga-font-mono: 'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
 * {
   box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
 }
 
 body {
   margin: 0;
   min-width: 1200px;
-  background: #f5f7fb;
-  color: #1f2933;
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  color: var(--ga-text);
+  font-family: var(--ga-font-sans);
+  font-feature-settings: 'ss01' on, 'cv11' on;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(980px 460px at 0% -8%, rgba(37, 99, 235, 0.14), transparent 55%),
+    radial-gradient(860px 420px at 100% 0%, rgba(124, 58, 237, 0.1), transparent 52%),
+    radial-gradient(720px 380px at 70% 100%, rgba(13, 148, 136, 0.1), transparent 50%),
+    linear-gradient(180deg, #dce6f2 0%, var(--ga-bg) 220px, #eef2f8 100%);
 }
 
 .app-shell {
   min-height: 100vh;
-  background: #f5f7fb;
+  background: transparent;
 }
 
-.app-header {
+.app-header.ant-layout-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: auto;
-  padding: 20px 28px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  gap: 24px;
+  height: auto !important;
+  line-height: 1.5;
+  padding: 14px 32px;
+  background: rgba(255, 255, 255, 0.94) !important;
+  border-bottom: 1px solid var(--ga-border);
+  backdrop-filter: blur(14px) saturate(1.1);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset, var(--ga-shadow-sm);
 }
 
-.app-title {
-  margin: 0 0 4px;
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.app-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #2563eb 0%, #7c3aed 55%, #0d9488 100%);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.35);
+  flex-shrink: 0;
+}
+
+.app-title.ant-typography {
+  margin: 0 !important;
+  font-size: 24px !important;
+  font-weight: 720 !important;
+  letter-spacing: -0.03em;
+  color: var(--ga-text) !important;
+  line-height: 1.2 !important;
 }
 
 .game-input {
   width: 220px;
 }
 
-.app-content {
-  padding: 24px 28px 40px;
+.app-content.ant-layout-content {
+  padding: 22px 32px 56px;
+}
+
+.app-nav-primary .ant-tabs-nav {
+  margin: 0 0 14px !important;
+}
+
+.app-nav-primary .ant-tabs-nav::before {
+  border-bottom-color: var(--ga-border) !important;
+}
+
+.app-nav-primary.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab {
+  border-radius: 10px 10px 0 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ga-text-secondary);
+  font-weight: 600;
+  padding: 10px 18px !important;
+}
+
+.app-nav-primary.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab:hover {
+  color: var(--ga-accent);
+}
+
+.app-nav-primary.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab-active {
+  background: var(--ga-bg-elevated) !important;
+  border-color: var(--ga-border) !important;
+  border-bottom-color: var(--ga-bg-elevated) !important;
+  color: var(--ga-accent) !important;
+  box-shadow: var(--ga-shadow-sm);
+}
+
+.app-nav-secondary.ant-tabs .ant-tabs-nav {
+  margin-bottom: 20px !important;
+  background: rgba(255, 255, 255, 0.78);
+  border-radius: 12px;
+  padding: 4px 8px 0;
+  border: 1px solid var(--ga-border);
+}
+
+.app-nav-secondary .ant-tabs-tab {
+  font-weight: 560;
+  padding: 10px 14px !important;
+}
+
+.app-nav-secondary .ant-tabs-ink-bar {
+  height: 3px !important;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(90deg, #2563eb, #7c3aed, #0d9488) !important;
+}
+
+.app-content .ant-card {
+  border: 1px solid var(--ga-border);
+  border-radius: var(--ga-radius-lg);
+  background: #ffffff;
+  box-shadow: var(--ga-shadow-sm);
+  transition: box-shadow 0.22s ease, border-color 0.22s ease;
+}
+
+.app-content .ant-card:hover {
+  box-shadow: var(--ga-shadow-md);
+  border-color: #9eb4d0;
+}
+
+.app-content .ant-card .ant-card-head {
+  min-height: 52px;
+  border-bottom: 1px solid #e2eaf4;
+  font-weight: 650;
+  background: linear-gradient(180deg, #f3f6fb, #ffffff);
+}
+
+.app-content .ant-card .ant-card-head-title {
+  color: var(--ga-text);
+  font-size: 15px;
+}
+
+.app-content .ant-card .ant-card-body {
+  padding: 18px 20px 20px;
+}
+
+.app-content .ant-statistic .ant-statistic-title {
+  color: var(--ga-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+
+.app-content .ant-statistic .ant-statistic-content {
+  font-family: var(--ga-font-sans);
+  font-weight: 730;
+  letter-spacing: -0.04em;
+  color: var(--ga-text);
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.app-content .ant-statistic .ant-statistic-content-suffix {
+  font-size: 14px;
+  font-weight: 560;
+  margin-inline-start: 4px;
+  color: var(--ga-text-secondary);
+}
+
+.app-content .ant-table-thead > tr > th {
+  font-weight: 650;
+  font-size: 12px;
+  color: var(--ga-text-secondary) !important;
+  background: #eaf0f8 !important;
+}
+
+.app-content .ant-alert {
+  border-radius: var(--ga-radius-md);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  background: linear-gradient(90deg, rgba(219, 234, 254, 0.85), rgba(237, 233, 254, 0.65));
+}
+
+.app-content .ant-alert-warning {
+  border-color: rgba(180, 83, 9, 0.25);
+  background: linear-gradient(90deg, rgba(254, 243, 199, 0.75), rgba(255, 237, 213, 0.65));
 }
 
 .metric-note {
@@ -51,4 +241,98 @@ body {
 
 .table-card {
   margin-top: 16px;
+}
+
+.kpi-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 4px;
+  border-radius: 0 4px 4px 0;
+  background: linear-gradient(180deg, #2563eb, #7c3aed, #0d9488);
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.35);
+}
+
+.kpi-card:nth-child(3n + 1)::before {
+  background: linear-gradient(180deg, #2563eb, #0284c7);
+}
+
+.kpi-card:nth-child(3n + 2)::before {
+  background: linear-gradient(180deg, #059669, #0d9488);
+}
+
+.kpi-card:nth-child(3n)::before {
+  background: linear-gradient(180deg, #d97706, #db2777);
+}
+
+.kpi-card .ant-card-body {
+  padding: 18px 18px 16px 22px !important;
+  background:
+    radial-gradient(130px 90px at 100% 0%, rgba(37, 99, 235, 0.08), transparent 70%),
+    #ffffff;
+}
+
+.ga-chart-frame {
+  position: relative;
+  border-radius: 14px;
+  padding: 8px 4px 4px;
+  background:
+    linear-gradient(180deg, rgba(243, 246, 251, 0.95), rgba(255, 255, 255, 0.7)),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 23px,
+      rgba(37, 99, 235, 0.05) 23px,
+      rgba(37, 99, 235, 0.05) 24px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 23px,
+      rgba(124, 58, 237, 0.04) 23px,
+      rgba(124, 58, 237, 0.04) 24px
+    );
+  border: 1px solid rgba(169, 190, 216, 0.75);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.echarts-for-react {
+  min-height: 200px;
+}
+
+.app-header .ant-btn-primary {
+  background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #7c3aed);
+  border: none;
+  box-shadow: 0 4px 14px rgba(29, 78, 216, 0.32);
+}
+
+.app-header .ant-btn-primary:hover {
+  background: linear-gradient(135deg, #2563eb, #4f46e5) !important;
+}
+
+.app-header .ant-select-selector,
+.app-header .ant-picker {
+  border-radius: 10px !important;
+  border-color: #b6c7de !important;
+  background: #f3f6fb !important;
+}
+
+code,
+.mono {
+  font-family: var(--ga-font-mono);
+}
+
+.app-content .ant-empty-description {
+  color: var(--ga-text-muted);
+}
+
+.app-content > .ant-space-vertical {
+  width: 100%;
 }

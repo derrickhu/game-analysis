@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Button,
   Card,
   Col,
@@ -14,7 +13,7 @@ import {
   message,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { playerDataCollection } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -206,7 +205,7 @@ export function HotpotPlayerSnapshotPanel() {
         {
           type: 'bar',
           data: buckets.map((b) => b.user_cnt),
-          itemStyle: { color: '#f59e0b' },
+          itemStyle: { color: '#d97706' },
           barMaxWidth: 40,
           label: {
             show: true,
@@ -234,7 +233,7 @@ export function HotpotPlayerSnapshotPanel() {
         {
           type: 'bar',
           data: levels.map((l) => l.user_cnt),
-          itemStyle: { color: '#3b82f6' },
+          itemStyle: { color: '#2563eb' },
           barMaxWidth: 28,
         },
       ],
@@ -247,7 +246,7 @@ export function HotpotPlayerSnapshotPanel() {
       tooltip: { trigger: 'axis' },
       legend: {
         data: ['人均金币', '人均主线通关'],
-        textStyle: { color: '#374151', fontSize: 12, fontWeight: 500 },
+        textStyle: { color: '#475569', fontSize: 12, fontWeight: 500 },
         top: 8,
         left: 'center',
       },
@@ -266,7 +265,7 @@ export function HotpotPlayerSnapshotPanel() {
           name: '人均金币',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#f59e0b' },
+          itemStyle: { color: '#d97706' },
           data: trend.map((p) => Math.round(p.avg_coins)),
         },
         {
@@ -274,27 +273,42 @@ export function HotpotPlayerSnapshotPanel() {
           type: 'line',
           smooth: true,
           yAxisIndex: 1,
-          itemStyle: { color: '#3b82f6' },
+          itemStyle: { color: '#2563eb' },
           data: trend.map((p) => Number(p.avg_bowl_badge_level.toFixed(1))),
         },
       ],
     };
   }, [data?.daily_trend]);
 
+  const snapshotMeta = [
+    `快照日 ${snapshotDate}`,
+    `玩家 ${formatInt(kpi?.user_count)}`,
+    latestRun
+      ? `最近拉取 ${new Date(latestRun.started_at).toLocaleString('zh-CN')}（${latestRun.fetched_count} 条）`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <Card
       title={
         <Space>
-          <span>玩家档案快照</span>
+          <Tooltip title="解析 hotpot_wallet_v1 等存档字段，观察金币存量分布与主线进度横切面。每日 04:00 全量拉取云存档集合。">
+            <span style={{ cursor: 'help' }}>玩家档案快照</span>
+          </Tooltip>
           {runStatusTag}
         </Space>
       }
       extra={
         <Space>
-          <Text type="secondary">
-            数据源：每日 04:00 全量拉取{' '}
-            {data?.source_collection || playerDataCollection('hotpot', platform)} 集合
-          </Text>
+          <Tooltip
+            title={`集合：${data?.source_collection || playerDataCollection('hotpot', platform)}`}
+          >
+            <Text type="secondary" style={{ cursor: 'help' }}>
+              {snapshotMeta}
+            </Text>
+          </Tooltip>
           <Button
             icon={<ReloadOutlined />}
             type="primary"
@@ -309,29 +323,6 @@ export function HotpotPlayerSnapshotPanel() {
       loading={loading && !data}
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <Alert
-          showIcon
-          type="info"
-          message={
-            <span>
-              当前快照日期：<strong>{snapshotDate}</strong> / 玩家总数：
-              <strong>{formatInt(kpi?.user_count)}</strong>
-              {latestRun && (
-                <>
-                  {' '}
-                  / 最近一次拉取：{new Date(latestRun.started_at).toLocaleString('zh-CN')}（
-                  {latestRun.fetched_count} 条，
-                  {latestRun.finished_at > 0
-                    ? `${latestRun.finished_at - latestRun.started_at}ms`
-                    : '-'}
-                  ）
-                </>
-              )}
-            </span>
-          }
-          description="本看板解析 hotpot_wallet_v1 等存档字段，重点观察金币存量分布与主线进度横切面。"
-        />
-
         {!hasData ? (
           <Empty
             description={

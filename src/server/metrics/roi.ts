@@ -9,14 +9,11 @@ import {
   type CohortLtvDailyRow,
   type UserDailyRow,
 } from '../ltv-db';
-import { buildCohortLtvRows, listPlatformUserKeys } from './ltv';
-import { isPlatformFilterActive } from './platform-filter';
+import { buildCohortLtvRows } from './ltv';
+import { normalizePlatformFilter } from './platform-filter';
 
 async function loadUserDailyRows(gameKey: string, platform?: string): Promise<UserDailyRow[]> {
-  const rows = await listUserDailyRows(gameKey);
-  if (!isPlatformFilterActive(platform)) return rows;
-  const platformUserKeys = await listPlatformUserKeys(gameKey, platform as string);
-  return rows.filter((r) => platformUserKeys.has(r.user_key));
+  return listUserDailyRows(gameKey, normalizePlatformFilter(platform));
 }
 
 async function loadCohortLtvRows(
@@ -26,10 +23,11 @@ async function loadCohortLtvRows(
   toDate: string,
   platform?: string,
 ): Promise<CohortLtvDailyRow[]> {
-  if (!isPlatformFilterActive(platform)) return listCohortLtvRows(gameKey, fromDate, toDate);
-  // 预聚合表 analytics_cohort_ltv_daily 不区分平台；选定具体平台时基于该平台的 user_daily 子集
-  // 在内存里重算 cohort LTV，不落库。
-  return buildCohortLtvRows(gameKey, userDailyRows, fromDate, toDate);
+  const platformKey = normalizePlatformFilter(platform);
+  const rows = await listCohortLtvRows(gameKey, fromDate, toDate, platformKey);
+  if (rows.length > 0 || !platformKey) return rows;
+  // 冷启动兜底：该平台 cohort LTV 尚未回算完
+  return buildCohortLtvRows(gameKey, userDailyRows, fromDate, toDate, platformKey);
 }
 
 export interface BusinessRoiRow {

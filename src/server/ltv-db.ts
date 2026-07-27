@@ -8,6 +8,8 @@ export interface UserDailyRow {
   game_key: string;
   date_key: string;
   user_key: string;
+  /** wechat / douyin；历史混算行为 '' */
+  platform: string;
   first_seen_date: string;
   is_new_user: number;
   is_active: number;
@@ -29,6 +31,8 @@ export interface UserDailyRow {
 export interface CohortLtvDailyRow {
   game_key: string;
   cohort_date: string;
+  /** wechat / douyin；历史混算行为 '' */
+  platform: string;
   age_day: number;
   cohort_size: number;
   active_users: number;
@@ -176,12 +180,61 @@ async function addMysqlColumnIfMissing(pool: mysql.Pool, tableName: string, colu
   }
 }
 
+async function hasMysqlColumn(pool: mysql.Pool, tableName: string, columnName: string): Promise<boolean> {
+  const [rows] = await pool.query(
+    `SELECT COLUMN_NAME AS name
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND COLUMN_NAME = ?`,
+    [tableName, columnName],
+  );
+  return (rows as Array<{ name: string }>).length > 0;
+}
+
+async function ensurePlatformOnUserDaily(pool: mysql.Pool): Promise<void> {
+  if (!(await hasMysqlColumn(pool, 'analytics_user_daily', 'platform'))) {
+    await pool.query(`
+      ALTER TABLE analytics_user_daily
+        ADD COLUMN platform VARCHAR(16) NOT NULL DEFAULT '' AFTER user_key
+    `);
+    await pool.query(`
+      ALTER TABLE analytics_user_daily
+        DROP PRIMARY KEY,
+        ADD PRIMARY KEY (game_key, date_key, user_key, platform)
+    `);
+    await pool.query(`
+      CREATE INDEX idx_game_platform_date
+        ON analytics_user_daily (game_key, platform, date_key)
+    `).catch(() => undefined);
+  }
+}
+
+async function ensurePlatformOnCohortLtv(pool: mysql.Pool): Promise<void> {
+  if (!(await hasMysqlColumn(pool, 'analytics_cohort_ltv_daily', 'platform'))) {
+    await pool.query(`
+      ALTER TABLE analytics_cohort_ltv_daily
+        ADD COLUMN platform VARCHAR(16) NOT NULL DEFAULT '' AFTER cohort_date
+    `);
+    await pool.query(`
+      ALTER TABLE analytics_cohort_ltv_daily
+        DROP PRIMARY KEY,
+        ADD PRIMARY KEY (game_key, cohort_date, platform, age_day)
+    `);
+    await pool.query(`
+      CREATE INDEX idx_game_platform_cohort
+        ON analytics_cohort_ltv_daily (game_key, platform, cohort_date)
+    `).catch(() => undefined);
+  }
+}
+
 async function migrateMysql(pool: mysql.Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS analytics_user_daily (
       game_key VARCHAR(32) NOT NULL,
       date_key VARCHAR(10) NOT NULL,
       user_key VARCHAR(191) NOT NULL,
+      platform VARCHAR(16) NOT NULL DEFAULT '',
       first_seen_date VARCHAR(10) NOT NULL,
       is_new_user TINYINT NOT NULL DEFAULT 0,
       is_active TINYINT NOT NULL DEFAULT 1,
@@ -198,16 +251,19 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       share_cnt INT NOT NULL DEFAULT 0,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
-      PRIMARY KEY (game_key, date_key, user_key),
+      PRIMARY KEY (game_key, date_key, user_key, platform),
       INDEX idx_game_first_seen (game_key, first_seen_date),
-      INDEX idx_game_user_date (game_key, user_key, date_key)
+      INDEX idx_game_user_date (game_key, user_key, date_key),
+      INDEX idx_game_platform_date (game_key, platform, date_key)
     )
   `);
+  await ensurePlatformOnUserDaily(pool);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS analytics_cohort_ltv_daily (
       game_key VARCHAR(32) NOT NULL,
       cohort_date VARCHAR(10) NOT NULL,
+      platform VARCHAR(16) NOT NULL DEFAULT '',
       age_day INT NOT NULL,
       cohort_size INT NOT NULL DEFAULT 0,
       active_users INT NOT NULL DEFAULT 0,
@@ -220,11 +276,13 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       retention_rate DOUBLE NOT NULL DEFAULT 0,
       is_complete_day TINYINT NOT NULL DEFAULT 0,
       updated_at BIGINT NOT NULL,
-      PRIMARY KEY (game_key, cohort_date, age_day),
+      PRIMARY KEY (game_key, cohort_date, platform, age_day),
       INDEX idx_game_age (game_key, age_day),
-      INDEX idx_game_cohort (game_key, cohort_date)
+      INDEX idx_game_cohort (game_key, cohort_date),
+      INDEX idx_game_platform_cohort (game_key, platform, cohort_date)
     )
   `);
+  await ensurePlatformOnCohortLtv(pool);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS business_daily_inputs (
@@ -386,6 +444,7 @@ export async function replaceUserDailyRows(
   gameKey: string,
   fromDate: string,
   toDate: string,
+  platform: string,
   rows: UserDailyRow[],
 ): Promise<number> {
   await ensureLtvTables();
@@ -395,14 +454,15 @@ export async function replaceUserDailyRows(
     await conn.beginTransaction();
     await conn.query(
       `DELETE FROM analytics_user_daily
-        WHERE game_key = ? AND date_key BETWEEN ? AND ?`,
-      [gameKey, fromDate, toDate],
+        WHERE game_key = ? AND platform = ? AND date_key BETWEEN ? AND ?`,
+      [gameKey, platform, fromDate, toDate],
     );
     if (rows.length > 0) {
       const cols = [
         'game_key',
         'date_key',
         'user_key',
+        'platform',
         'first_seen_date',
         'is_new_user',
         'is_active',
@@ -445,6 +505,7 @@ export async function replaceCohortLtvRows(
   gameKey: string,
   fromCohortDate: string,
   toCohortDate: string,
+  platform: string,
   rows: CohortLtvDailyRow[],
 ): Promise<number> {
   await ensureLtvTables();
@@ -454,13 +515,14 @@ export async function replaceCohortLtvRows(
     await conn.beginTransaction();
     await conn.query(
       `DELETE FROM analytics_cohort_ltv_daily
-        WHERE game_key = ? AND cohort_date BETWEEN ? AND ?`,
-      [gameKey, fromCohortDate, toCohortDate],
+        WHERE game_key = ? AND platform = ? AND cohort_date BETWEEN ? AND ?`,
+      [gameKey, platform, fromCohortDate, toCohortDate],
     );
     if (rows.length > 0) {
       const cols = [
         'game_key',
         'cohort_date',
+        'platform',
         'age_day',
         'cohort_size',
         'active_users',
@@ -495,14 +557,15 @@ export async function replaceCohortLtvRows(
   }
 }
 
-export async function listUserDailyRows(gameKey: string): Promise<UserDailyRow[]> {
+export async function listUserDailyRows(gameKey: string, platform = ''): Promise<UserDailyRow[]> {
   await ensureLtvTables();
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `SELECT * FROM analytics_user_daily
       WHERE game_key = ?
+        AND (? = '' OR platform = ?)
       ORDER BY first_seen_date ASC, date_key ASC`,
-    [gameKey],
+    [gameKey, platform, platform],
   );
   return rows as UserDailyRow[];
 }
@@ -511,14 +574,17 @@ export async function listCohortLtvRows(
   gameKey: string,
   fromCohortDate: string,
   toCohortDate: string,
+  platform = '',
 ): Promise<CohortLtvDailyRow[]> {
   await ensureLtvTables();
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `SELECT * FROM analytics_cohort_ltv_daily
-      WHERE game_key = ? AND cohort_date BETWEEN ? AND ?
+      WHERE game_key = ?
+        AND platform = ?
+        AND cohort_date BETWEEN ? AND ?
       ORDER BY cohort_date ASC, age_day ASC`,
-    [gameKey, fromCohortDate, toCohortDate],
+    [gameKey, platform, fromCohortDate, toCohortDate],
   );
   return rows as CohortLtvDailyRow[];
 }

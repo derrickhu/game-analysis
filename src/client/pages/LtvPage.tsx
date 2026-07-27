@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Card, Col, Empty, Result, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
+import { Card, Col, Empty, Result, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { getGameDescriptor } from '../../shared/games';
 import { appendPlatformQuery } from '../../shared/platforms';
@@ -331,26 +331,19 @@ export function LtvPage({ windowOverride }: { windowOverride?: WindowValue } = {
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert
-        type="info"
-        showIcon
-        message={`通用 LTV / 商业化指标 · 统计范围：${rangeLabel}`}
-        description={
-          <>
-            <Text>
-              本页所有顶部 KPI、商业化漏斗和 cohort 表都跟随顶部日期选择器。多日窗口里的 ARPDAU 使用
-              「广告收入 / 活跃用户日」，单日窗口则等价于「当天广告收入 / 当天 DAU」。
-            </Text>
-            <br />
-            <Text type="secondary">
-              {ltv?.notice ||
-                '所有游戏共用同一套 gameKey 口径；有真实 eCPM 的日期优先使用真实 eCPM，缺少真实收入/曝光时回退到预估 eCPM。'}
-            </Text>
-          </>
-        }
-      />
-
       <Row gutter={[16, 16]}>
+        <Col span={24}>
+          <Text type="secondary">
+            <Tooltip
+              title={
+                ltv?.notice ||
+                '顶部 KPI / 漏斗 / cohort 表跟随日期选择器。多日 ARPDAU=广告收入/活跃用户日；真实 eCPM 优先，缺失回退预估。'
+              }
+            >
+              <span style={{ cursor: 'help' }}>LTV / 商业化 · {rangeLabel} ⓘ</span>
+            </Tooltip>
+          </Text>
+        </Col>
         <Col xs={12} md={6}>
           <Card>
             <Statistic

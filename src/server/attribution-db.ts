@@ -33,6 +33,8 @@ export interface UserAttributionRow {
   user_key: string;
   user_id: string;
   anonymous_id: string;
+  /** 埋点渠道：wechat / douyin，与广告商 provider/platform 字段无关 */
+  analytics_platform: string;
   first_seen_ts: number;
   attributed_at: number;
   attribution_type: string;
@@ -57,6 +59,8 @@ export interface AttributedUserDailyRow {
   user_key: string;
   user_id: string;
   anonymous_id: string;
+  /** 埋点渠道：wechat / douyin，与广告商 provider/platform 字段无关 */
+  analytics_platform: string;
   first_seen_date: string;
   is_new_user: number;
   is_active: number;
@@ -151,6 +155,7 @@ export async function initAttributionStorage(): Promise<void> {
       user_key VARCHAR(191) NOT NULL,
       user_id VARCHAR(128) NOT NULL,
       anonymous_id VARCHAR(64) NOT NULL,
+      analytics_platform VARCHAR(16) NOT NULL DEFAULT '',
       first_seen_ts BIGINT NOT NULL,
       attributed_at BIGINT NOT NULL,
       attribution_type VARCHAR(32) NOT NULL,
@@ -181,6 +186,7 @@ export async function initAttributionStorage(): Promise<void> {
       user_key VARCHAR(191) NOT NULL,
       user_id VARCHAR(128) NOT NULL,
       anonymous_id VARCHAR(64) NOT NULL,
+      analytics_platform VARCHAR(16) NOT NULL DEFAULT '',
       first_seen_date VARCHAR(10) NOT NULL,
       is_new_user TINYINT NOT NULL DEFAULT 0,
       is_active TINYINT NOT NULL DEFAULT 1,
@@ -230,6 +236,16 @@ export async function initAttributionStorage(): Promise<void> {
 
   // Forward-compatible columns for older local databases.
   await addColumnIfMissing(pool, 'postback_queue', 'attribution_json', 'JSON NOT NULL');
+  await addColumnIfMissing(pool, 'user_attribution', 'analytics_platform', "VARCHAR(16) NOT NULL DEFAULT '' AFTER anonymous_id");
+  await addColumnIfMissing(pool, 'attributed_user_daily', 'analytics_platform', "VARCHAR(16) NOT NULL DEFAULT '' AFTER anonymous_id");
+  await pool.query(`
+    CREATE INDEX idx_ua_analytics_platform
+      ON user_attribution (game_key, analytics_platform, first_seen_ts)
+  `).catch(() => undefined);
+  await pool.query(`
+    CREATE INDEX idx_aud_analytics_platform
+      ON attributed_user_daily (game_key, analytics_platform, first_seen_date)
+  `).catch(() => undefined);
   migrated = true;
 }
 
@@ -271,7 +287,7 @@ export async function upsertUserAttributions(rows: UserAttributionRow[]): Promis
   await initAttributionStorage();
   const pool = await getMysqlPool();
   const cols = [
-    'game_key', 'user_key', 'user_id', 'anonymous_id', 'first_seen_ts', 'attributed_at',
+    'game_key', 'user_key', 'user_id', 'anonymous_id', 'analytics_platform', 'first_seen_ts', 'attributed_at',
     'attribution_type', 'match_type', 'confidence', 'provider', 'channel', 'campaign_id',
     'adgroup_id', 'creative_id', 'click_id', 'gdt_vid', 'launch_scene', 'touch_id',
     'raw_json', 'updated_at',
@@ -305,7 +321,7 @@ export async function replaceAttributedUserDaily(
   );
   if (rows.length === 0) return 0;
   const cols = [
-    'game_key', 'date_key', 'user_key', 'user_id', 'anonymous_id', 'first_seen_date',
+    'game_key', 'date_key', 'user_key', 'user_id', 'anonymous_id', 'analytics_platform', 'first_seen_date',
     'is_new_user', 'is_active', 'provider', 'channel', 'campaign_id', 'adgroup_id',
     'creative_id', 'attribution_type', 'match_type', 'confidence', 'session_cnt',
     'ad_show_cnt', 'ad_revenue_estimated_cny', 'tutorial_complete_cnt',

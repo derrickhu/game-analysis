@@ -42,6 +42,7 @@ function BusinessSubTabs() {
   })();
   return (
     <Tabs
+      className="app-nav-secondary"
       activeKey={subKey}
       onChange={(key) => {
         // 切子 Tab 时保留 URL 上的 ?game=&platform=&window= 查询参数（由 Provider 主动写回的真值），
@@ -218,13 +219,13 @@ export function BusinessLayout() {
     <AnalyticsFilterProvider>
       <Layout className="app-shell">
         <Header className="app-header">
-          <div>
+          <div className="app-brand">
+            <span className="app-brand-mark" aria-hidden>
+              GP
+            </span>
             <Title level={3} className="app-title">
               游戏经营分析
             </Title>
-            <Text type="secondary">
-              已接入 @gp/analytics-sdk 的游戏从打点流水拉数据，未接入的请先按指引接入
-            </Text>
           </div>
           <BusinessHeaderControls />
         </Header>

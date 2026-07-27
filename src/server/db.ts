@@ -378,6 +378,7 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
     CREATE TABLE IF NOT EXISTS game_level_pass_rates (
       game_key VARCHAR(64) NOT NULL,
       mode_key VARCHAR(64) NOT NULL,
+      platform VARCHAR(16) NOT NULL DEFAULT '',
       level_id INT NOT NULL,
       window_days INT NOT NULL,
       window_start_date VARCHAR(10) NOT NULL,
@@ -393,7 +394,7 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       is_sample_low TINYINT NOT NULL DEFAULT 0,
       computed_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
-      PRIMARY KEY (game_key, mode_key, level_id, window_days),
+      PRIMARY KEY (game_key, mode_key, platform, level_id, window_days),
       INDEX idx_level_pass_rates_game_mode (game_key, mode_key, window_days)
     )
   `);

@@ -20,7 +20,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 import type { ReactNode } from 'react';
 
 import { getGameDescriptor } from '../../shared/games';
@@ -136,11 +136,11 @@ function MetricTitle({ label, help }: { label: string; help: string }) {
 }
 
 function heatColor(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '#f5f5f5';
-  if (value >= 0.15) return '#b7eb8f';
-  if (value >= 0.08) return '#d9f7be';
-  if (value >= 0.04) return '#fff7e6';
-  return '#fff1f0';
+  if (value === null || value === undefined) return '#eef2f7';
+  if (value >= 0.15) return '#6ee7b7';
+  if (value >= 0.08) return '#a7f3d0';
+  if (value >= 0.04) return '#bfdbfe';
+  return '#fecdd3';
 }
 
 async function fetchRetentionRange(
@@ -272,11 +272,11 @@ export function RetentionPage() {
     return {
       tooltip: { trigger: 'axis', valueFormatter: (value: number | string) => (typeof value === 'number' ? `${value.toFixed(1)}%` : value) },
       legend: { top: 0 },
-      grid: { left: 56, right: 24, top: 48, bottom: 48 },
+      grid: { left: 16, right: 20, top: 48, bottom: 28, containLabel: true },
       xAxis: { type: 'category', data: xAxis },
       yAxis: { type: 'value', name: '留存率', axisLabel: { formatter: '{value}%' } },
       series: [
-        buildSeries(1, 'D1 新增次留'),
+        { ...buildSeries(1, 'D1 新增次留'), areaStyle: { opacity: 0.12 } },
         buildSeries(2, 'D2 留存'),
         buildSeries(3, 'D3 留存'),
         buildSeries(7, 'D7 留存'),
@@ -290,12 +290,12 @@ export function RetentionPage() {
     return {
       tooltip: { trigger: 'axis', valueFormatter: (value: number | string) => (typeof value === 'number' ? `${value.toFixed(1)}%` : value) },
       legend: { top: 0 },
-      grid: { left: 56, right: 24, top: 48, bottom: 56 },
+      grid: { left: 16, right: 20, top: 48, bottom: 52, containLabel: true },
       xAxis: { type: 'category', data: xAxis },
       yAxis: { type: 'value', name: '留存率', axisLabel: { formatter: '{value}%' } },
       dataZoom: [
         { type: 'inside', start: 0, end: 100 },
-        { type: 'slider', height: 18, bottom: 12, start: 0, end: 100 },
+        { type: 'slider', height: 20, bottom: 8, start: 0, end: 100 },
       ],
       series: segments.map((seg) => ({
         name: seg.device_type,
@@ -351,38 +351,29 @@ export function RetentionPage() {
     );
   }
 
+  const retentionHelp =
+    data?.notice ||
+    '看多天新增 cohort 的 D1/D7 趋势与矩阵；点矩阵行可钻取 D0-D30。按 session_start 去重，是新增留存，不是活跃次留。';
+  const matrixHelp =
+    '行=新增日期 cohort（该日首次 session_start 人数）；列=这批人在第 N 天是否再次 session_start。格子第一行留存率、第二行回访/新增。未成熟格子不参与均值。≠ 活跃次留。';
+
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert
-        type="info"
-        showIcon
-        message={`留存分析 · 当前游戏：${descriptor?.displayName ?? gameKey}`}
-        description={
-          data?.notice ||
-          '默认看多天新增 cohort 的 D1/D7 趋势和留存矩阵；点击某一天再钻取 D0-D30 曲线。新增和回访统一按 session_start 去重，这里展示的是新增留存，不是活跃次留，也不是 5 分钟实时指标。'
-        }
-      />
-      <Alert
-        type="info"
-        showIcon
-        message="留存矩阵口径说明"
-        description={
-          <Space direction="vertical" size={0}>
-            <Text>
-              每一行的日期就是 cohort 日期。例如 2026-05-07 这一行，新增人数就是 5 月 7
-              日首次 session_start 的用户数，不是 5 月 6 日；D1 看这批人在 5 月 8 日是否回来，D2 看 5 月 9
-              日是否再次 session_start，D7 看 5 月 14 日。
-            </Text>
-            <Text type="secondary">
-              格子里第一行是留存率，第二行是“回访人数/该 cohort 新增人数”。未到完整自然日的格子显示“未成熟”，不参与平均值和趋势判断；样本很小的早期日期只作排障参考。
-              活跃次留的分母是前一日活跃用户，新增次留的分母是首次 session_start 的新用户，本页统一使用新增次留/新增留存。
-            </Text>
-          </Space>
-        }
-      />
       {loadError && <Alert type="warning" showIcon message={loadError} />}
 
-      <Card title="筛选">
+      <Card
+        title={
+          <MetricTitle
+            label={`留存筛选 · ${descriptor?.displayName ?? gameKey}`}
+            help={`${retentionHelp} ${matrixHelp}`}
+          />
+        }
+        extra={
+          <Text type="secondary">
+            {data?.from_date || '-'} ~ {data?.to_date || '-'} · {cohorts.length} cohort · {segment}
+          </Text>
+        }
+      >
         <Space wrap>
           <RangePicker
             allowClear={false}
@@ -412,42 +403,49 @@ export function RetentionPage() {
             style={{ width: 180 }}
           />
           <Button onClick={() => void loadData(gameKey, range)}>刷新</Button>
-          <Text type="secondary">
-            主图和矩阵当前维度：{segment}；下方平台对比会同时展示所有平台。
-            实际查询：{data?.from_date || '-'} ~ {data?.to_date || '-'}，返回 {cohorts.length} 个 cohort。
-          </Text>
-          <Text type="secondary">点击矩阵行查看单日 D0-D30 详情。</Text>
         </Space>
       </Card>
 
       <Spin spinning={pageLoading} tip="正在加载 cohort 留存数据...">
       <Row gutter={[16, 16]}>
         <Col xs={12} md={6}>
-          <Card>
-            <Statistic title="范围 Cohort 人数" value={totalUsers} suffix="人" />
+          <Card className="kpi-card">
+            <Tooltip title="筛选范围内各 cohort 新增人数之和（当前平台维度）">
+              <Statistic title="范围 Cohort 人数" value={totalUsers} suffix="人" />
+            </Tooltip>
           </Card>
         </Col>
         <Col xs={12} md={6}>
-          <Card>
-            <Statistic title="平均 D1 新增次留" value={d1Avg !== null ? d1Avg * 100 : 0} suffix="%" precision={1} />
-            <Text type="secondary">按 cohort 人数加权</Text>
+          <Card className="kpi-card">
+            <Tooltip title="各成熟 cohort 的 D1 新增次留，按 cohort 人数加权平均">
+              <Statistic title="平均 D1 新增次留" value={d1Avg !== null ? d1Avg * 100 : 0} suffix="%" precision={1} />
+            </Tooltip>
           </Card>
         </Col>
         <Col xs={12} md={6}>
-          <Card>
-            <Statistic title="平均 D2 留存" value={d2Avg !== null ? d2Avg * 100 : 0} suffix="%" precision={1} />
-            <Text type="secondary">{d2Avg === null ? '暂无成熟 D2' : '按 cohort 人数加权'}</Text>
+          <Card className="kpi-card">
+            <Tooltip title={d2Avg === null ? '暂无成熟 D2' : '各成熟 cohort 的 D2 留存，按人数加权平均'}>
+              <Statistic title="平均 D2 留存" value={d2Avg !== null ? d2Avg * 100 : 0} suffix="%" precision={1} />
+            </Tooltip>
           </Card>
         </Col>
         <Col xs={12} md={6}>
-          <Card>
-            <Statistic title="平均 D3 留存" value={d3Avg !== null ? d3Avg * 100 : 0} suffix="%" precision={1} />
-            <Text type="secondary">{d3Avg === null ? '暂无成熟 D3' : '按 cohort 人数加权'}</Text>
+          <Card className="kpi-card">
+            <Tooltip title={d3Avg === null ? '暂无成熟 D3' : '各成熟 cohort 的 D3 留存，按人数加权平均'}>
+              <Statistic title="平均 D3 留存" value={d3Avg !== null ? d3Avg * 100 : 0} suffix="%" precision={1} />
+            </Tooltip>
           </Card>
         </Col>
       </Row>
 
-      <Card title={`多天留存趋势 · ${segment}`}>
+      <Card
+        title={
+          <MetricTitle
+            label={`多天留存趋势 · ${segment}`}
+            help="各 cohort 在 D1/D2/D3/D7 的新增留存率走势；未成熟天数不参与判断。"
+          />
+        }
+      >
         {cohorts.length > 0 ? <ReactECharts option={trendOption} style={{ height: 320 }} /> : <Empty description="暂无 cohort 数据" />}
       </Card>
 
@@ -468,7 +466,7 @@ export function RetentionPage() {
           scroll={{ x: 900 }}
           onRow={(record) => ({
             onClick: () => setSelectedDate(record.cohort_date),
-            style: { cursor: 'pointer', background: record.cohort_date === selectedDate ? '#e6f4ff' : undefined },
+            style: { cursor: 'pointer', background: record.cohort_date === selectedDate ? '#e0f2fe' : undefined },
           })}
         />
       </Card>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Col, Empty, Row, Space, Statistic, Table, Tooltip, Typography, message } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../components/AnalyticsChart';
 
 import { appendPlatformQuery } from '../../shared/platforms';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
@@ -140,16 +140,16 @@ export function EconomyFlowPanel() {
           name: '花愿入账',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#10b981' },
-          areaStyle: { color: 'rgba(16,185,129,0.1)' },
+          itemStyle: { color: '#059669' },
+          areaStyle: { color: 'rgba(5,150,105,0.14)' },
           data: series.map((p) => p.huayuan_in),
         },
         {
           name: '花愿出账',
           type: 'line',
           smooth: true,
-          itemStyle: { color: '#ef4444' },
-          areaStyle: { color: 'rgba(239,68,68,0.08)' },
+          itemStyle: { color: '#e11d48' },
+          areaStyle: { color: 'rgba(225,29,72,0.12)' },
           data: series.map((p) => p.huayuan_out),
         },
         {
@@ -157,7 +157,7 @@ export function EconomyFlowPanel() {
           type: 'line',
           smooth: true,
           yAxisIndex: 1,
-          itemStyle: { color: '#3b82f6' },
+          itemStyle: { color: '#2563eb' },
           data: series.map((p) => p.diamond_in),
         },
         {
@@ -165,7 +165,7 @@ export function EconomyFlowPanel() {
           type: 'line',
           smooth: true,
           yAxisIndex: 1,
-          itemStyle: { color: '#a855f7' },
+          itemStyle: { color: '#7c3aed' },
           data: series.map((p) => p.diamond_out),
         },
       ],
@@ -197,8 +197,11 @@ export function EconomyFlowPanel() {
 
   return (
     <Card
-      title="经济流转健康度"
-      extra={<Text type="secondary">数据源：order_deliver / decoration_purchase / idle_reward_claim ...</Text>}
+      title={
+        <Tooltip title="数据源：order_deliver / decoration_purchase / idle_reward_claim 等经济事件。看花愿/钻石入账 vs 出账是否健康。">
+          <span style={{ cursor: 'help' }}>经济流转健康度</span>
+        </Tooltip>
+      }
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <Row gutter={[16, 16]}>
@@ -222,9 +225,9 @@ export function EconomyFlowPanel() {
                   valueStyle={{
                     color:
                       (kpi?.huayuan_net ?? 0) > 0
-                        ? '#10b981'
+                        ? '#059669'
                         : (kpi?.huayuan_net ?? 0) < 0
-                          ? '#ef4444'
+                          ? '#e11d48'
                           : undefined,
                   }}
                 />
@@ -249,9 +252,9 @@ export function EconomyFlowPanel() {
                 valueStyle={{
                   color:
                     (kpi?.diamond_net ?? 0) > 0
-                      ? '#10b981'
+                      ? '#059669'
                       : (kpi?.diamond_net ?? 0) < 0
-                        ? '#ef4444'
+                        ? '#e11d48'
                         : undefined,
                 }}
               />
