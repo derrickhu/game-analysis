@@ -6,12 +6,14 @@ import 'antd/dist/reset.css';
 import { Navigate, RouterProvider, createBrowserRouter } from 'react-router-dom';
 
 import { BusinessLayout } from './layouts/BusinessLayout';
+import { HomeLayout } from './layouts/HomeLayout';
 import { OpsLayout } from './layouts/OpsLayout';
 import { AttributionPage } from './pages/AttributionPage';
 import { CommercialPage } from './pages/CommercialPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { EventsPage } from './pages/EventsPage';
 import { GameplayPage } from './pages/GameplayPage';
+import { HomePage } from './pages/HomePage';
 import { OpsPage } from './pages/OpsPage';
 import { PlayerSnapshotPage } from './pages/PlayerSnapshotPage';
 import { RetentionPage } from './pages/RetentionPage';
@@ -22,7 +24,7 @@ registerAnalyticsChartTheme();
 
 /**
  * 路由结构（v7 createBrowserRouter）：
- *   /                          → 重定向 /business/dashboard
+ *   /                                         总览主页（各游戏今日各平台日活）
  *   /business                  → 重定向 /business/dashboard
  *   /business/dashboard?game=&window=         大盘运营（通用：KPI + 活跃趋势 + 广告 + 分享）
  *   /business/retention?game=                 留存分析（cohort D0-D30 + 设备拆分）
@@ -34,14 +36,13 @@ registerAnalyticsChartTheme();
  *   /ops                                      系统运维（不依赖游戏 / 时间窗口，URL 永远干净）
  *
  * URL 上的 ?game= / ?window= 由 BusinessLayout 内 mount 的 AnalyticsFilterProvider 读写，
- * /ops 不 mount Provider，所以系统运维页面 URL 不会被业务过滤参数污染。
- *
- * Tab 切换通过 location.pathname 推断 activeKey，浏览器后退/前进或粘贴 URL 都能正确反映视图。
+ * /ops 与 / 不 mount Provider，避免业务过滤参数污染。
  */
 const router = createBrowserRouter([
   {
     path: '/',
-    element: <Navigate to="/business/dashboard" replace />,
+    element: <HomeLayout />,
+    children: [{ index: true, element: <HomePage /> }],
   },
   {
     path: '/business',
@@ -64,8 +65,7 @@ const router = createBrowserRouter([
     element: <OpsLayout />,
     children: [{ index: true, element: <OpsPage /> }],
   },
-  // 兜底：未知路径回首页（避免因 typo 进入空白页）
-  { path: '*', element: <Navigate to="/business/dashboard" replace /> },
+  { path: '*', element: <Navigate to="/" replace /> },
 ]);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

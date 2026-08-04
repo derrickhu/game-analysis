@@ -49,6 +49,7 @@ import {
 } from '../metrics/realtime-hotpot-modes';
 import { getCaizhuGameplayOverview } from '../metrics/realtime-caizhu';
 import { ingestHuahuaSnapshots } from '../jobs/ingest-huahua-snapshot';
+import { getHomeDau } from '../metrics/home-dau';
 import { getOverview } from '../metrics/realtime-overview';
 import { getProgressOverview } from '../metrics/realtime-progress';
 import { getShareOverview } from '../metrics/realtime-share';
@@ -781,6 +782,12 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       kpi: result.kpi,
       series: result.series,
     };
+  });
+
+  /** 经分主页：今日各游戏 × 微信/抖音 DAU（单次聚合，按总日活降序） */
+  app.get('/api/realtime/home-dau', async () => {
+    const result = await getHomeDau();
+    return { ok: true, ...result };
   });
 
   // 通用 LTV Cohort：所有已接入 SDK 的游戏共用，hotpot 只是首个回算样本。

@@ -1,6 +1,6 @@
 import { Button, DatePicker, Layout, Select, Space, Tabs, Tag, Tooltip, Typography, message } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { ALL_GAMES, getGameDescriptor } from '../../shared/games';
 import { PLATFORM_OPTIONS, type PlatformFilter } from '../../shared/platforms';
@@ -219,14 +219,14 @@ export function BusinessLayout() {
     <AnalyticsFilterProvider>
       <Layout className="app-shell">
         <Header className="app-header">
-          <div className="app-brand">
+          <Link to="/" className="app-brand app-brand-link">
             <span className="app-brand-mark" aria-hidden>
               GP
             </span>
             <Title level={3} className="app-title">
               游戏经营分析
             </Title>
-          </div>
+          </Link>
           <BusinessHeaderControls />
         </Header>
 

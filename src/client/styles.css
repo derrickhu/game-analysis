@@ -80,6 +80,15 @@ body {
   flex-shrink: 0;
 }
 
+.app-brand-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-brand-link:hover .app-title.ant-typography {
+  color: var(--ga-accent) !important;
+}
+
 .app-brand-mark {
   display: grid;
   place-items: center;
@@ -335,4 +344,240 @@ code,
 
 .app-content > .ant-space-vertical {
   width: 100%;
+}
+
+/* ── 经分总览主页：高密度游戏日活网格 ── */
+
+.app-content-home {
+  padding-top: 16px;
+  padding-bottom: 32px;
+}
+
+.home-page {
+  margin-top: 4px;
+}
+
+.home-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.home-heading.ant-typography {
+  margin: 0 0 4px !important;
+  font-size: 22px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.02em;
+  line-height: 1.25 !important;
+}
+
+.home-sub {
+  font-size: 13px !important;
+}
+
+.home-meta {
+  font-size: 13px !important;
+}
+
+.home-meta-sep {
+  margin: 0 6px;
+  opacity: 0.45;
+}
+
+.home-alert {
+  margin-bottom: 14px;
+}
+
+/* 当前游戏少：一排最多约 3 个大格，占满可视宽度 */
+.home-game-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 18px;
+}
+
+.home-game-card {
+  --home-heat: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 210px;
+  padding: 22px 22px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--ga-border);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(37, 99, 235, calc(0.05 + var(--home-heat) * 0.12)) 0%,
+      rgba(255, 255, 255, 0.96) 42%
+    ),
+    #fff;
+  box-shadow: var(--ga-shadow-sm);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.home-game-card:hover {
+  border-color: #9eb4d0;
+  box-shadow: var(--ga-shadow-md);
+  transform: translateY(-2px);
+}
+
+.home-game-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.home-game-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.home-game-rank {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--ga-text-muted);
+  font-family: var(--ga-font-mono);
+  font-size: 13px;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+.home-game-card:nth-child(-n + 3) .home-game-rank {
+  background: linear-gradient(145deg, #2563eb, #7c3aed);
+  color: #fff;
+}
+
+.home-game-name {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 720;
+  letter-spacing: -0.03em;
+  color: var(--ga-text);
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-game-total {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.1;
+  flex-shrink: 0;
+}
+
+.home-game-total-num {
+  font-family: var(--ga-font-mono);
+  font-size: 34px;
+  font-weight: 720;
+  letter-spacing: -0.05em;
+  color: var(--ga-text);
+}
+
+.home-game-total-label {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ga-text-muted);
+  letter-spacing: 0.04em;
+}
+
+.home-platform-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.home-platform-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(243, 246, 251, 0.9);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.home-platform-row:hover {
+  background: var(--ga-accent-soft);
+  border-color: rgba(37, 99, 235, 0.22);
+}
+
+.home-platform-row:focus-visible {
+  outline: 2px solid var(--ga-accent);
+  outline-offset: 1px;
+}
+
+.home-platform-label {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ga-text-secondary);
+}
+
+.home-platform-bar-track {
+  position: relative;
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+
+.home-platform-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #0d9488);
+  min-width: 0;
+  transition: width 0.25s ease;
+}
+
+.home-platform-wechat .home-platform-bar-fill {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+}
+
+.home-platform-douyin .home-platform-bar-fill {
+  background: linear-gradient(90deg, #0f172a, #475569);
+}
+
+.home-platform-dau {
+  min-width: 3.6em;
+  text-align: right;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ga-text);
+  letter-spacing: -0.03em;
+}
+
+.home-empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--ga-text-muted);
+  font-size: 14px;
+}
+
+@media (min-width: 1440px) {
+  .home-game-grid {
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 20px;
+  }
 }
