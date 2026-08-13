@@ -386,14 +386,59 @@ code,
   opacity: 0.45;
 }
 
+.home-month-revenue {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--ga-border);
+  background: #fff;
+}
+
+.home-month-revenue-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.home-month-revenue-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ga-text-muted);
+  letter-spacing: 0.04em;
+}
+
+.home-month-revenue-num {
+  font-family: var(--ga-font-mono);
+  font-size: 28px;
+  font-weight: 720;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: #b45309;
+}
+
+.home-month-revenue-unit {
+  font-size: 13px;
+  color: var(--ga-text-muted);
+}
+
+.home-month-revenue-hint {
+  font-size: 12px !important;
+}
+
 .home-alert {
   margin-bottom: 14px;
 }
 
-/* 当前游戏少：一排最多约 3 个大格，占满可视宽度 */
+/* 双指标卡略宽：一排约 2～3 个，保证日活/曝光并排可读 */
 .home-game-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
   gap: 18px;
 }
 
@@ -403,7 +448,7 @@ code,
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-height: 210px;
+  min-height: 236px;
   padding: 22px 22px 18px;
   border-radius: 16px;
   border: 1px solid var(--ga-border);
@@ -436,6 +481,7 @@ code,
   align-items: center;
   gap: 12px;
   min-width: 0;
+  flex: 1;
 }
 
 .home-game-rank {
@@ -469,28 +515,64 @@ code,
   white-space: nowrap;
 }
 
-.home-game-total {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.1;
+.home-game-kpis {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  grid-template-rows: 32px auto;
+  column-gap: 16px;
+  align-items: end;
   flex-shrink: 0;
 }
 
-.home-game-total-num {
+.home-game-kpi {
+  display: contents;
+}
+
+.home-game-kpi-num {
+  grid-row: 1;
+  justify-self: end;
+  align-self: end;
   font-family: var(--ga-font-mono);
-  font-size: 34px;
+  font-size: 28px;
   font-weight: 720;
   letter-spacing: -0.05em;
+  line-height: 1;
   color: var(--ga-text);
 }
 
-.home-game-total-label {
+.home-game-kpi-label {
+  grid-row: 2;
+  justify-self: end;
   margin-top: 4px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 650;
   color: var(--ga-text-muted);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+
+.home-game-kpi-ad .home-game-kpi-num {
+  padding-left: 16px;
+  margin-left: 4px;
+  border-left: 1px solid rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+}
+
+.home-game-kpi-ad .home-game-kpi-label {
+  color: #0f766e;
+  opacity: 0.78;
+}
+
+.home-game-kpi-rev .home-game-kpi-num {
+  padding-left: 16px;
+  margin-left: 4px;
+  border-left: 1px solid rgba(15, 23, 42, 0.1);
+  color: #b45309;
+}
+
+.home-game-kpi-rev .home-game-kpi-label {
+  color: #b45309;
+  opacity: 0.78;
 }
 
 .home-platform-list {
@@ -502,7 +584,7 @@ code,
 
 .home-platform-row {
   display: grid;
-  grid-template-columns: 48px 1fr auto;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -534,9 +616,48 @@ code,
   color: var(--ga-text-secondary);
 }
 
+.home-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.home-metric-ad {
+  padding-left: 12px;
+  border-left: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.home-metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.home-metric-k {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--ga-text-muted);
+}
+
+.home-metric-v {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--ga-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.home-metric-ad .home-metric-k,
+.home-metric-ad .home-metric-v {
+  color: #0f766e;
+}
+
 .home-platform-bar-track {
   position: relative;
-  height: 6px;
+  height: 5px;
   border-radius: 99px;
   background: rgba(15, 23, 42, 0.06);
   overflow: hidden;
@@ -551,21 +672,16 @@ code,
   transition: width 0.25s ease;
 }
 
-.home-platform-wechat .home-platform-bar-fill {
+.home-platform-wechat .home-metric-dau .home-platform-bar-fill {
   background: linear-gradient(90deg, #16a34a, #22c55e);
 }
 
-.home-platform-douyin .home-platform-bar-fill {
+.home-platform-douyin .home-metric-dau .home-platform-bar-fill {
   background: linear-gradient(90deg, #0f172a, #475569);
 }
 
-.home-platform-dau {
-  min-width: 3.6em;
-  text-align: right;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--ga-text);
-  letter-spacing: -0.03em;
+.home-metric-ad .home-platform-bar-fill {
+  background: linear-gradient(90deg, #0f766e, #2dd4bf);
 }
 
 .home-empty {
@@ -577,7 +693,15 @@ code,
 
 @media (min-width: 1440px) {
   .home-game-grid {
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
     gap: 20px;
+  }
+
+  .home-game-kpis {
+    grid-template-rows: 36px auto;
+  }
+
+  .home-game-kpi-num {
+    font-size: 32px;
   }
 }

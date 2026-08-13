@@ -657,6 +657,31 @@ export async function listBusinessDailyInputs(
   return rows as BusinessDailyInputRow[];
 }
 
+/** 按游戏汇总微信流量主真实收入（business_daily_inputs），日期闭区间。 */
+export async function sumBusinessDailyRevenueByGame(
+  gameKeys: string[],
+  fromDate: string,
+  toDate: string,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (gameKeys.length === 0 || fromDate > toDate || !isMysqlMode()) return out;
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const placeholders = gameKeys.map(() => '?').join(', ');
+  const [rows] = await pool.query(
+    `SELECT game_key, SUM(wechat_ad_revenue_cny) AS revenue_cny
+       FROM business_daily_inputs
+      WHERE game_key IN (${placeholders})
+        AND date_key BETWEEN ? AND ?
+      GROUP BY game_key`,
+    [...gameKeys, fromDate, toDate],
+  );
+  for (const row of rows as Array<Record<string, unknown>>) {
+    out.set(String(row.game_key), Math.round(Number(row.revenue_cny || 0) * 100) / 100);
+  }
+  return out;
+}
+
 export async function replaceWechatPublisherAdDailyRows(
   gameKey: string,
   fromDate: string,

@@ -1,13 +1,16 @@
 import { getEnabledAnalyticsGames } from '../config/analytics-games';
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
+import { sumBusinessDailyRevenueByGame } from '../ltv-db';
 
 /**
- * 经分主页：一次查出「今日」各游戏 × 微信/抖音的 DAU。
- * 口径与 overview 一致：session_start + COALESCE(NULLIF(user_id,''), anonymous_id)。
+ * 经分主页：一次查出「今日」各游戏 × 微信/抖音的 DAU 与广告曝光。
+ * - DAU 口径与 overview 一致：session_start + COALESCE(NULLIF(user_id,''), anonymous_id)
+ * - 曝光口径与商业化看板一致：ad_show 事件次数（非去重用户）
  */
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
+const AD_SHOW = 'ad_show';
 const HOME_PLATFORMS = ['wechat', 'douyin'] as const;
 
 export type HomePlatform = (typeof HOME_PLATFORMS)[number];
@@ -16,12 +19,16 @@ export interface HomePlatformDau {
   platform: HomePlatform;
   label: string;
   dau: number;
+  ad_show_cnt: number;
 }
 
 export interface HomeGameDau {
   game_key: string;
   display_name: string;
   total_dau: number;
+  total_ad_show: number;
+  /** 当月截至昨天（T-1）微信流量主真实收入，元 */
+  month_t1_revenue_cny: number;
   platforms: HomePlatformDau[];
 }
 
@@ -30,6 +37,12 @@ export interface HomeDauResult {
   from_ts: number;
   to_ts: number;
   computed_at: number;
+  /** 当月 1 号 */
+  month_from_date: string;
+  /** 昨天（T-1）；若今天是 1 号则仍为昨天，但不计入当月 */
+  month_t1_date: string;
+  /** 全部游戏当月 T-1 收益合计 */
+  month_t1_revenue_cny: number;
   games: HomeGameDau[];
 }
 
@@ -50,13 +63,42 @@ function formatLocalDate(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-interface RawRow {
+function startOfLocalMonth(ts: number): number {
+  const d = new Date(ts);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+interface RawDauRow {
   game_key: string;
   platform: string;
   dau: number;
 }
 
-async function queryTodayDauRows(fromTs: number, toTs: number, gameKeys: string[]): Promise<RawRow[]> {
+interface RawAdShowRow {
+  game_key: string;
+  platform: string;
+  ad_show_cnt: number;
+}
+
+type SqlParam = string | number;
+
+async function queryGroupedRows<T extends Record<string, unknown>>(
+  sql: string,
+  params: SqlParam[],
+  mapRow: (row: Record<string, unknown>) => T,
+): Promise<T[]> {
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [rows] = await pool.query(sql, params);
+    return (rows as Array<Record<string, unknown>>).map(mapRow);
+  }
+  const rows = getDb().prepare(sql).all(...params) as Array<Record<string, unknown>>;
+  return rows.map(mapRow);
+}
+
+async function queryTodayDauRows(fromTs: number, toTs: number, gameKeys: string[]): Promise<RawDauRow[]> {
   if (gameKeys.length === 0 || toTs < fromTs) return [];
 
   const placeholders = gameKeys.map(() => '?').join(', ');
@@ -73,23 +115,34 @@ async function queryTodayDauRows(fromTs: number, toTs: number, gameKeys: string[
      GROUP BY game_key, platform`;
   const params = [SESSION_START, fromTs, toTs, ...gameKeys, ...HOME_PLATFORMS];
 
-  if (isMysqlMode()) {
-    const pool = await getMysqlPool();
-    const [rows] = await pool.query(sql, params);
-    return (rows as Array<{ game_key: string; platform: string; dau: number }>).map((r) => ({
-      game_key: String(r.game_key),
-      platform: String(r.platform || ''),
-      dau: Number(r.dau || 0),
-    }));
-  }
-
-  const rows = getDb()
-    .prepare(sql)
-    .all(...params) as Array<{ game_key: string; platform: string; dau: number }>;
-  return rows.map((r) => ({
+  return queryGroupedRows(sql, params, (r) => ({
     game_key: String(r.game_key),
     platform: String(r.platform || ''),
     dau: Number(r.dau || 0),
+  }));
+}
+
+async function queryTodayAdShowRows(fromTs: number, toTs: number, gameKeys: string[]): Promise<RawAdShowRow[]> {
+  if (gameKeys.length === 0 || toTs < fromTs) return [];
+
+  const placeholders = gameKeys.map(() => '?').join(', ');
+  const platformPlaceholders = HOME_PLATFORMS.map(() => '?').join(', ');
+  const sql = `
+    SELECT game_key,
+           platform,
+           COUNT(*) AS ad_show_cnt
+      FROM analytics_events
+     WHERE event_name = ?
+       AND event_ts BETWEEN ? AND ?
+       AND game_key IN (${placeholders})
+       AND platform IN (${platformPlaceholders})
+     GROUP BY game_key, platform`;
+  const params = [AD_SHOW, fromTs, toTs, ...gameKeys, ...HOME_PLATFORMS];
+
+  return queryGroupedRows(sql, params, (r) => ({
+    game_key: String(r.game_key),
+    platform: String(r.platform || ''),
+    ad_show_cnt: Number(r.ad_show_cnt || 0),
   }));
 }
 
@@ -97,14 +150,27 @@ async function queryTodayDauRows(fromTs: number, toTs: number, gameKeys: string[
 export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
   const fromTs = startOfLocalDay(now);
   const toTs = now;
+  const monthFromTs = startOfLocalMonth(now);
+  const t1Ts = fromTs - 1;
+  const monthFromDate = formatLocalDate(monthFromTs);
+  const monthT1Date = formatLocalDate(t1Ts);
   const enabled = getEnabledAnalyticsGames();
   const gameKeys = enabled.map((g) => g.gameKey);
-  const rows = await queryTodayDauRows(fromTs, toTs, gameKeys);
+  const [dauRows, adShowRows, revenueMap] = await Promise.all([
+    queryTodayDauRows(fromTs, toTs, gameKeys),
+    queryTodayAdShowRows(fromTs, toTs, gameKeys),
+    sumBusinessDailyRevenueByGame(gameKeys, monthFromDate, monthT1Date),
+  ]);
 
   const dauMap = new Map<string, number>();
-  for (const row of rows) {
+  for (const row of dauRows) {
     if (!(HOME_PLATFORMS as readonly string[]).includes(row.platform)) continue;
     dauMap.set(`${row.game_key}\0${row.platform}`, row.dau);
+  }
+  const adShowMap = new Map<string, number>();
+  for (const row of adShowRows) {
+    if (!(HOME_PLATFORMS as readonly string[]).includes(row.platform)) continue;
+    adShowMap.set(`${row.game_key}\0${row.platform}`, row.ad_show_cnt);
   }
 
   const games: HomeGameDau[] = enabled.map((g) => {
@@ -112,23 +178,33 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
       platform,
       label: PLATFORM_LABEL[platform],
       dau: dauMap.get(`${g.gameKey}\0${platform}`) || 0,
+      ad_show_cnt: adShowMap.get(`${g.gameKey}\0${platform}`) || 0,
     }));
     const total_dau = platforms.reduce((sum, p) => sum + p.dau, 0);
+    const total_ad_show = platforms.reduce((sum, p) => sum + p.ad_show_cnt, 0);
+    const month_t1_revenue_cny = revenueMap.get(g.gameKey) || 0;
     return {
       game_key: g.gameKey,
       display_name: g.displayName,
       total_dau,
+      total_ad_show,
+      month_t1_revenue_cny,
       platforms,
     };
   });
 
   games.sort((a, b) => b.total_dau - a.total_dau || a.display_name.localeCompare(b.display_name, 'zh-CN'));
+  const month_t1_revenue_cny =
+    Math.round(games.reduce((sum, g) => sum + g.month_t1_revenue_cny, 0) * 100) / 100;
 
   return {
     date_key: formatLocalDate(fromTs),
     from_ts: fromTs,
     to_ts: toTs,
     computed_at: now,
+    month_from_date: monthFromDate,
+    month_t1_date: monthT1Date,
+    month_t1_revenue_cny,
     games,
   };
 }
