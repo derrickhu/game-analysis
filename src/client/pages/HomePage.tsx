@@ -1,8 +1,10 @@
 import { Alert, Button, Space, Spin, Typography } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import type { EChartsOption } from 'echarts';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { PlatformFilter } from '../../shared/platforms';
+import ReactECharts from '../components/AnalyticsChart';
 import { fetchJson } from '../fetchJson';
 
 const { Text, Title } = Typography;
@@ -23,6 +25,18 @@ interface HomeGameDau {
   platforms: HomePlatformDau[];
 }
 
+interface HomeMonthlyGameSeries {
+  game_key: string;
+  display_name: string;
+  revenue: number[];
+}
+
+interface HomeMonthlyTrend {
+  months: string[];
+  games: HomeMonthlyGameSeries[];
+  total: number[];
+}
+
 interface HomeDauResponse {
   ok: boolean;
   date_key?: string;
@@ -30,6 +44,7 @@ interface HomeDauResponse {
   month_from_date?: string;
   month_t1_date?: string;
   month_t1_revenue_cny?: number;
+  monthly_trend?: HomeMonthlyTrend;
   games?: HomeGameDau[];
   error?: string;
 }
@@ -48,6 +63,12 @@ function formatYuan(n: number): string {
     return `${v >= 10 ? v.toFixed(1) : v.toFixed(2)}万`;
   }
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatMonthLabel(monthKey: string): string {
+  const [year, month] = monthKey.split('-');
+  if (!year || !month) return monthKey;
+  return `${year.slice(2)}年${Number(month)}月`;
 }
 
 function barPct(value: number, max: number): number {
@@ -88,6 +109,8 @@ export function HomePage() {
   const [monthFromDate, setMonthFromDate] = useState('');
   const [monthT1Date, setMonthT1Date] = useState('');
   const [monthT1Revenue, setMonthT1Revenue] = useState(0);
+  const [monthlyTrend, setMonthlyTrend] = useState<HomeMonthlyTrend | null>(null);
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean> | null>(null);
   const [games, setGames] = useState<HomeGameDau[]>([]);
 
   const load = useCallback(async () => {
@@ -103,6 +126,7 @@ export function HomePage() {
       setMonthFromDate(data.month_from_date || '');
       setMonthT1Date(data.month_t1_date || '');
       setMonthT1Revenue(data.month_t1_revenue_cny ?? 0);
+      setMonthlyTrend(data.monthly_trend || null);
       setGames(data.games || []);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -118,6 +142,71 @@ export function HomePage() {
   }, [load]);
 
   const maxTotal = Math.max(1, ...games.map((g) => g.total_dau));
+
+  const monthChartOption = useMemo<EChartsOption>(() => {
+    const months = monthlyTrend?.months || [];
+    const labels = months.map(formatMonthLabel);
+    const gameSeries = monthlyTrend?.games || [];
+    const selected: Record<string, boolean> = { 合计: true };
+    for (const game of gameSeries) selected[game.display_name] = false;
+    if (legendSelected) {
+      for (const [name, on] of Object.entries(legendSelected)) {
+        if (name in selected) selected[name] = on;
+      }
+    }
+    return {
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (value) =>
+          typeof value === 'number' ? `${formatYuan(value)} 元` : String(value ?? ''),
+      },
+      legend: {
+        type: 'scroll',
+        top: 0,
+        right: 8,
+        selected,
+        selectedMode: true,
+      },
+      grid: { left: 12, right: 16, top: 36, bottom: 8, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        boundaryGap: false,
+        axisLabel: { hideOverlap: true },
+      },
+      yAxis: {
+        type: 'value',
+        name: '元',
+        min: 0,
+        axisLabel: {
+          formatter: (value: number) => (value >= 10000 ? `${(value / 10000).toFixed(1)}万` : String(value)),
+        },
+        splitLine: { lineStyle: { type: 'dashed' } },
+      },
+      series: [
+        {
+          name: '合计',
+          type: 'line' as const,
+          smooth: 0.35,
+          showSymbol: true,
+          symbolSize: 8,
+          z: 3,
+          lineStyle: { width: 3, type: 'solid' as const },
+          itemStyle: { color: '#b45309' },
+          areaStyle: { opacity: 0.16 },
+          data: monthlyTrend?.total || [],
+        },
+        ...gameSeries.map((game) => ({
+          name: game.display_name,
+          type: 'line' as const,
+          smooth: 0.35,
+          showSymbol: true,
+          symbolSize: 7,
+          data: game.revenue,
+        })),
+      ],
+    };
+  }, [legendSelected, monthlyTrend]);
 
   const openGamePlatform = (gameKey: string, platform: PlatformFilter) => {
     navigate(
@@ -159,6 +248,29 @@ export function HomePage() {
             ? `${monthFromDate} ~ ${monthT1Date} · 微信流量主真实收入，不含今日`
             : '微信流量主真实收入，不含今日（今日结算通常未出）'}
         </Text>
+      </div>
+
+      <div className="home-month-chart">
+        <div className="home-month-chart-head">
+          <span className="home-month-chart-title">近一年月度收益</span>
+          <Text type="secondary" className="home-month-chart-hint">
+            默认只看合计 · 点图例可对比单款游戏
+          </Text>
+        </div>
+        {monthlyTrend && monthlyTrend.months.length > 0 ? (
+          <ReactECharts
+            option={monthChartOption}
+            height={280}
+            framed={false}
+            onEvents={{
+              legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
+                setLegendSelected(event.selected || null);
+              },
+            }}
+          />
+        ) : (
+          <div className="home-month-chart-empty">暂无月度收益</div>
+        )}
       </div>
 
       {error && (

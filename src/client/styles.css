@@ -431,6 +431,41 @@ code,
   font-size: 12px !important;
 }
 
+.home-month-chart {
+  margin-bottom: 18px;
+  padding: 14px 16px 6px;
+  border-radius: 12px;
+  border: 1px solid var(--ga-border);
+  background: #fff;
+}
+
+.home-month-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 0 4px 4px;
+}
+
+.home-month-chart-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ga-text);
+  letter-spacing: -0.02em;
+}
+
+.home-month-chart-hint {
+  font-size: 12px !important;
+}
+
+.home-month-chart-empty {
+  padding: 36px 12px;
+  text-align: center;
+  color: var(--ga-text-muted);
+  font-size: 13px;
+}
+
 .home-alert {
   margin-bottom: 14px;
 }

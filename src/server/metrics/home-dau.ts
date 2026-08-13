@@ -1,6 +1,10 @@
 import { getEnabledAnalyticsGames } from '../config/analytics-games';
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
-import { sumBusinessDailyRevenueByGame } from '../ltv-db';
+import {
+  listBusinessMonthlyRevenue,
+  rebuildBusinessMonthlyRevenue,
+  sumBusinessDailyRevenueByGame,
+} from '../ltv-db';
 
 /**
  * 经分主页：一次查出「今日」各游戏 × 微信/抖音的 DAU 与广告曝光。
@@ -32,6 +36,18 @@ export interface HomeGameDau {
   platforms: HomePlatformDau[];
 }
 
+export interface HomeMonthlyGameSeries {
+  game_key: string;
+  display_name: string;
+  revenue: number[];
+}
+
+export interface HomeMonthlyTrend {
+  months: string[];
+  games: HomeMonthlyGameSeries[];
+  total: number[];
+}
+
 export interface HomeDauResult {
   date_key: string;
   from_ts: number;
@@ -43,6 +59,7 @@ export interface HomeDauResult {
   month_t1_date: string;
   /** 全部游戏当月 T-1 收益合计 */
   month_t1_revenue_cny: number;
+  monthly_trend: HomeMonthlyTrend;
   games: HomeGameDau[];
 }
 
@@ -68,6 +85,16 @@ function startOfLocalMonth(ts: number): number {
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+function listMonthKeys(now: number, count = 12): string[] {
+  const cursor = new Date(now);
+  const keys: string[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(cursor.getFullYear(), cursor.getMonth() - i, 1);
+    keys.push(`${d.getFullYear()}-${d.getMonth() + 1 < 10 ? `0${d.getMonth() + 1}` : `${d.getMonth() + 1}`}`);
+  }
+  return keys;
 }
 
 interface RawDauRow {
@@ -156,11 +183,24 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
   const monthT1Date = formatLocalDate(t1Ts);
   const enabled = getEnabledAnalyticsGames();
   const gameKeys = enabled.map((g) => g.gameKey);
-  const [dauRows, adShowRows, revenueMap] = await Promise.all([
+  const monthKeys = listMonthKeys(now, 12);
+  const fromMonth = monthKeys[0] || monthFromDate.slice(0, 7);
+  const toMonth = monthKeys[monthKeys.length - 1] || monthFromDate.slice(0, 7);
+  const [dauRows, adShowRows, revenueMap, monthlyRowsRaw] = await Promise.all([
     queryTodayDauRows(fromTs, toTs, gameKeys),
     queryTodayAdShowRows(fromTs, toTs, gameKeys),
     sumBusinessDailyRevenueByGame(gameKeys, monthFromDate, monthT1Date),
+    listBusinessMonthlyRevenue(gameKeys, fromMonth, toMonth),
   ]);
+  let monthlyRows = monthlyRowsRaw;
+  if (monthlyRows.length === 0 && gameKeys.length > 0) {
+    await rebuildBusinessMonthlyRevenue({
+      gameKeys,
+      fromDate: `${fromMonth}-01`,
+      toDate: monthT1Date,
+    });
+    monthlyRows = await listBusinessMonthlyRevenue(gameKeys, fromMonth, toMonth);
+  }
 
   const dauMap = new Map<string, number>();
   for (const row of dauRows) {
@@ -197,6 +237,28 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
   const month_t1_revenue_cny =
     Math.round(games.reduce((sum, g) => sum + g.month_t1_revenue_cny, 0) * 100) / 100;
 
+  const currentMonthKey = monthFromDate.slice(0, 7);
+  const monthlyByGame = new Map<string, Map<string, number>>();
+  for (const row of monthlyRows) {
+    let byMonth = monthlyByGame.get(row.game_key);
+    if (!byMonth) {
+      byMonth = new Map();
+      monthlyByGame.set(row.game_key, byMonth);
+    }
+    byMonth.set(row.month_key, row.revenue_cny);
+  }
+  const monthlyGames: HomeMonthlyGameSeries[] = games.map((g) => {
+    const byMonth = monthlyByGame.get(g.game_key);
+    const revenue = monthKeys.map((monthKey) => {
+      if (monthKey === currentMonthKey) return g.month_t1_revenue_cny;
+      return byMonth?.get(monthKey) || 0;
+    });
+    return { game_key: g.game_key, display_name: g.display_name, revenue };
+  });
+  const total = monthKeys.map((_, idx) =>
+    Math.round(monthlyGames.reduce((sum, g) => sum + (g.revenue[idx] || 0), 0) * 100) / 100,
+  );
+
   return {
     date_key: formatLocalDate(fromTs),
     from_ts: fromTs,
@@ -205,6 +267,7 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
     month_from_date: monthFromDate,
     month_t1_date: monthT1Date,
     month_t1_revenue_cny,
+    monthly_trend: { months: monthKeys, games: monthlyGames, total },
     games,
   };
 }

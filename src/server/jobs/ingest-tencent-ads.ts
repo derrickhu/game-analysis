@@ -2,6 +2,7 @@ import { getConfig } from '../config';
 import type { TencentAdsGameMapping } from '../config/tencent-ads';
 import {
   listBusinessDailyInputs,
+  rebuildBusinessMonthlyRevenue,
   replaceTencentAdsDailyReportRawRows,
   upsertBusinessDailyInput,
   type BusinessDailyInputRow,
@@ -236,6 +237,23 @@ export async function ingestTencentAdsBusinessInputs(options: {
   const games: TencentAdsIngestGameSummary[] = [];
   for (const mapping of mappings) {
     games.push(await ingestMapping(mapping, fromDate, toDate));
+  }
+
+  const rebuiltKeys = games.filter((game) => !game.error && !game.skipped).map((game) => game.game_key);
+  if (rebuiltKeys.length > 0) {
+    try {
+      const monthAgo = new Date(`${toDate}T00:00:00+08:00`);
+      monthAgo.setMonth(monthAgo.getMonth() - 11);
+      monthAgo.setDate(1);
+      const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+      await rebuildBusinessMonthlyRevenue({
+        gameKeys: rebuiltKeys,
+        fromDate: `${monthAgo.getFullYear()}-${pad(monthAgo.getMonth() + 1)}-01`,
+        toDate,
+      });
+    } catch (error) {
+      console.warn('[tencent_ads] 月度收益汇总失败:', error);
+    }
   }
 
   return {

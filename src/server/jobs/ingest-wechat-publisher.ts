@@ -3,6 +3,7 @@ import type { WechatPublisherGameMapping } from '../config/wechat-publisher';
 import {
   listBusinessDailyInputs,
   recordWechatPublisherIngestRun,
+  rebuildBusinessMonthlyRevenue,
   replaceWechatPublisherAdDailyRows,
   upsertBusinessDailyInput,
   type BusinessDailyInputRow,
@@ -231,6 +232,23 @@ export async function ingestWechatPublisherBusinessInputs(options: {
     to_date: toDate,
     games,
   };
+  const rebuiltKeys = games.filter((game) => !game.error && !game.skipped).map((game) => game.game_key);
+  if (rebuiltKeys.length > 0) {
+    try {
+      const monthAgo = new Date(`${toDate}T00:00:00+08:00`);
+      monthAgo.setMonth(monthAgo.getMonth() - 11);
+      monthAgo.setDate(1);
+      const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+      const fromMonthDate = `${monthAgo.getFullYear()}-${pad(monthAgo.getMonth() + 1)}-01`;
+      await rebuildBusinessMonthlyRevenue({
+        gameKeys: rebuiltKeys,
+        fromDate: fromMonthDate,
+        toDate,
+      });
+    } catch (error) {
+      console.warn('[wechat_publisher] 月度收益汇总失败:', error);
+    }
+  }
   await recordRun(summary, games.map((game) => game.error).filter(Boolean).join('\n'));
   return summary;
 }

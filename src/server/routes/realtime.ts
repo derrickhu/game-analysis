@@ -784,7 +784,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     };
   });
 
-  /** 经分主页：今日各游戏 × 微信/抖音 DAU / 曝光，以及当月截至昨天（T-1）微信真实收益 */
+  /** 经分主页：今日各游戏 × 微信/抖音 DAU / 曝光，当月 T-1 收益，以及近一年月度收益曲线 */
   app.get('/api/realtime/home-dau', async () => {
     const result = await getHomeDau();
     return { ok: true, ...result };

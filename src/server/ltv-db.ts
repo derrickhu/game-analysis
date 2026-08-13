@@ -347,6 +347,20 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS business_monthly_revenue (
+      game_key VARCHAR(32) NOT NULL,
+      month_key VARCHAR(7) NOT NULL,
+      revenue_cny DOUBLE NOT NULL DEFAULT 0,
+      impressions BIGINT NOT NULL DEFAULT 0,
+      spend_cny DOUBLE NOT NULL DEFAULT 0,
+      day_count INT NOT NULL DEFAULT 0,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, month_key),
+      INDEX idx_month (month_key)
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS tencent_ads_daily_reports_raw (
       game_key VARCHAR(32) NOT NULL,
       account_id VARCHAR(32) NOT NULL,
@@ -678,6 +692,94 @@ export async function sumBusinessDailyRevenueByGame(
   );
   for (const row of rows as Array<Record<string, unknown>>) {
     out.set(String(row.game_key), Math.round(Number(row.revenue_cny || 0) * 100) / 100);
+  }
+  return out;
+}
+
+export interface BusinessMonthlyRevenueRow {
+  game_key: string;
+  month_key: string;
+  revenue_cny: number;
+  impressions: number;
+  spend_cny: number;
+  day_count: number;
+}
+
+function dateKeyToMonthKey(dateKey: string): string {
+  return dateKey.slice(0, 7);
+}
+
+/** 从日表重算月表。打开总览只读月表，避免每次扫一年日流水。 */
+export async function rebuildBusinessMonthlyRevenue(options: {
+  gameKeys?: string[];
+  fromDate?: string;
+  toDate?: string;
+} = {}): Promise<number> {
+  if (!isMysqlMode()) return 0;
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const fromMonth = options.fromDate ? dateKeyToMonthKey(options.fromDate) : '1970-01';
+  const toMonth = options.toDate ? dateKeyToMonthKey(options.toDate) : '9999-12';
+  if (fromMonth > toMonth) return 0;
+
+  const gameKeys = (options.gameKeys || []).filter(Boolean);
+  const gameFilterSql = gameKeys.length > 0 ? `AND game_key IN (${gameKeys.map(() => '?').join(', ')})` : '';
+  const gameParams = gameKeys;
+  const fromDate = `${fromMonth}-01`;
+  const toDate = `${toMonth}-31`;
+  const now = Date.now();
+
+  const deleteSql = `
+    DELETE FROM business_monthly_revenue
+     WHERE month_key BETWEEN ? AND ?
+       ${gameFilterSql}`;
+  await pool.query(deleteSql, [fromMonth, toMonth, ...gameParams]);
+
+  const insertSql = `
+    INSERT INTO business_monthly_revenue
+      (game_key, month_key, revenue_cny, impressions, spend_cny, day_count, updated_at)
+    SELECT game_key,
+           LEFT(date_key, 7) AS month_key,
+           ROUND(SUM(wechat_ad_revenue_cny), 2) AS revenue_cny,
+           SUM(wechat_ad_impressions) AS impressions,
+           ROUND(SUM(spend_cny), 2) AS spend_cny,
+           COUNT(*) AS day_count,
+           ? AS updated_at
+      FROM business_daily_inputs
+     WHERE date_key BETWEEN ? AND ?
+       ${gameFilterSql}
+     GROUP BY game_key, LEFT(date_key, 7)`;
+  const [result] = await pool.query(insertSql, [now, fromDate, toDate, ...gameParams]);
+  return Number((result as mysql.ResultSetHeader).affectedRows || 0);
+}
+
+export async function listBusinessMonthlyRevenue(
+  gameKeys: string[],
+  fromMonth: string,
+  toMonth: string,
+): Promise<BusinessMonthlyRevenueRow[]> {
+  const out: BusinessMonthlyRevenueRow[] = [];
+  if (gameKeys.length === 0 || fromMonth > toMonth || !isMysqlMode()) return out;
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const placeholders = gameKeys.map(() => '?').join(', ');
+  const [rows] = await pool.query(
+    `SELECT game_key, month_key, revenue_cny, impressions, spend_cny, day_count
+       FROM business_monthly_revenue
+      WHERE game_key IN (${placeholders})
+        AND month_key BETWEEN ? AND ?
+      ORDER BY month_key ASC, game_key ASC`,
+    [...gameKeys, fromMonth, toMonth],
+  );
+  for (const row of rows as Array<Record<string, unknown>>) {
+    out.push({
+      game_key: String(row.game_key),
+      month_key: String(row.month_key),
+      revenue_cny: Math.round(Number(row.revenue_cny || 0) * 100) / 100,
+      impressions: Number(row.impressions || 0),
+      spend_cny: Math.round(Number(row.spend_cny || 0) * 100) / 100,
+      day_count: Number(row.day_count || 0),
+    });
   }
   return out;
 }
