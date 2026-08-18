@@ -15,7 +15,7 @@ import {
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
 const AD_SHOW = 'ad_show';
-const HOME_PLATFORMS = ['wechat', 'douyin'] as const;
+const HOME_PLATFORMS = ['wechat', 'douyin', 'taptap'] as const;
 
 export type HomePlatform = (typeof HOME_PLATFORMS)[number];
 
@@ -66,6 +66,7 @@ export interface HomeDauResult {
 const PLATFORM_LABEL: Record<HomePlatform, string> = {
   wechat: '微信',
   douyin: '抖音',
+  taptap: 'TapTap',
 };
 
 function startOfLocalDay(ts: number): number {

@@ -39,4 +39,4 @@ export interface DeviceInfo {
 }
 
 /** 平台标识 */
-export type PlatformName = 'wechat' | 'douyin' | 'h5' | 'unknown';
+export type PlatformName = 'wechat' | 'douyin' | 'taptap' | 'h5' | 'unknown';

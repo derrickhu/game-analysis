@@ -5,7 +5,7 @@ import { PLATFORM_SQL, normalizePlatformFilter, platformSqlParams } from './plat
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
 /** 全局筛选只提供微信/抖音，预聚合按这两个平台分别落库，查询直接读表。 */
-const RETENTION_PRECOMPUTE_PLATFORMS = ['wechat', 'douyin'] as const;
+const RETENTION_PRECOMPUTE_PLATFORMS = ['wechat', 'douyin', 'taptap'] as const;
 
 export type RetentionDeviceType = 'iOS' | 'Android' | 'HarmonyOS' | 'iPad' | 'Android Pad' | 'Unknown';
 
