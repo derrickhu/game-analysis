@@ -1,6 +1,7 @@
 import { getEnabledAnalyticsGames } from '../config/analytics-games';
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
 import {
+  listBusinessDailyRevenue,
   listBusinessMonthlyRevenue,
   rebuildBusinessMonthlyRevenue,
   sumBusinessDailyRevenueByGame,
@@ -48,6 +49,12 @@ export interface HomeMonthlyTrend {
   total: number[];
 }
 
+export interface HomeDailyTrend {
+  days: string[];
+  games: HomeMonthlyGameSeries[];
+  total: number[];
+}
+
 export interface HomeDauResult {
   date_key: string;
   from_ts: number;
@@ -57,8 +64,11 @@ export interface HomeDauResult {
   month_from_date: string;
   /** 昨天（T-1）；若今天是 1 号则仍为昨天，但不计入当月 */
   month_t1_date: string;
+  /** 近一月日曲线起点（含），截止 T-1 */
+  daily_from_date: string;
   /** 全部游戏当月 T-1 收益合计 */
   month_t1_revenue_cny: number;
+  daily_trend: HomeDailyTrend;
   monthly_trend: HomeMonthlyTrend;
   games: HomeGameDau[];
 }
@@ -94,6 +104,26 @@ function listMonthKeys(now: number, count = 12): string[] {
   for (let i = count - 1; i >= 0; i--) {
     const d = new Date(cursor.getFullYear(), cursor.getMonth() - i, 1);
     keys.push(`${d.getFullYear()}-${d.getMonth() + 1 < 10 ? `0${d.getMonth() + 1}` : `${d.getMonth() + 1}`}`);
+  }
+  return keys;
+}
+
+function addLocalDays(ts: number, days: number): number {
+  const d = new Date(ts);
+  d.setDate(d.getDate() + days);
+  return d.getTime();
+}
+
+/** 近一月日曲线：含 T-1 共 30 天。 */
+const DAILY_TREND_DAYS = 30;
+
+function listDayKeys(fromTs: number, toTs: number): string[] {
+  const keys: string[] = [];
+  let cursor = startOfLocalDay(fromTs);
+  const end = startOfLocalDay(toTs);
+  while (cursor <= end) {
+    keys.push(formatLocalDate(cursor));
+    cursor = addLocalDays(cursor, 1);
   }
   return keys;
 }
@@ -187,11 +217,15 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
   const monthKeys = listMonthKeys(now, 12);
   const fromMonth = monthKeys[0] || monthFromDate.slice(0, 7);
   const toMonth = monthKeys[monthKeys.length - 1] || monthFromDate.slice(0, 7);
-  const [dauRows, adShowRows, revenueMap, monthlyRowsRaw] = await Promise.all([
+  const dailyFromTs = addLocalDays(startOfLocalDay(t1Ts), -(DAILY_TREND_DAYS - 1));
+  const dailyFromDate = formatLocalDate(dailyFromTs);
+  const dayKeys = listDayKeys(dailyFromTs, t1Ts);
+  const [dauRows, adShowRows, revenueMap, monthlyRowsRaw, dailyRows] = await Promise.all([
     queryTodayDauRows(fromTs, toTs, gameKeys),
     queryTodayAdShowRows(fromTs, toTs, gameKeys),
     sumBusinessDailyRevenueByGame(gameKeys, monthFromDate, monthT1Date),
     listBusinessMonthlyRevenue(gameKeys, fromMonth, toMonth),
+    listBusinessDailyRevenue(gameKeys, dailyFromDate, monthT1Date),
   ]);
   let monthlyRows = monthlyRowsRaw;
   if (monthlyRows.length === 0 && gameKeys.length > 0) {
@@ -260,6 +294,24 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
     Math.round(monthlyGames.reduce((sum, g) => sum + (g.revenue[idx] || 0), 0) * 100) / 100,
   );
 
+  const dailyByGame = new Map<string, Map<string, number>>();
+  for (const row of dailyRows) {
+    let byDay = dailyByGame.get(row.game_key);
+    if (!byDay) {
+      byDay = new Map();
+      dailyByGame.set(row.game_key, byDay);
+    }
+    byDay.set(row.date_key, row.revenue_cny);
+  }
+  const dailyGames: HomeMonthlyGameSeries[] = games.map((g) => {
+    const byDay = dailyByGame.get(g.game_key);
+    const revenue = dayKeys.map((dayKey) => byDay?.get(dayKey) || 0);
+    return { game_key: g.game_key, display_name: g.display_name, revenue };
+  });
+  const dailyTotal = dayKeys.map((_, idx) =>
+    Math.round(dailyGames.reduce((sum, g) => sum + (g.revenue[idx] || 0), 0) * 100) / 100,
+  );
+
   return {
     date_key: formatLocalDate(fromTs),
     from_ts: fromTs,
@@ -267,7 +319,9 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
     computed_at: now,
     month_from_date: monthFromDate,
     month_t1_date: monthT1Date,
+    daily_from_date: dailyFromDate,
     month_t1_revenue_cny,
+    daily_trend: { days: dayKeys, games: dailyGames, total: dailyTotal },
     monthly_trend: { months: monthKeys, games: monthlyGames, total },
     games,
   };

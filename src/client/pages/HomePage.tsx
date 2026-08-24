@@ -1,4 +1,4 @@
-import { Alert, Button, Space, Spin, Typography } from 'antd';
+import { Alert, Button, Segmented, Space, Spin, Typography } from 'antd';
 import type { EChartsOption } from 'echarts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -6,6 +6,8 @@ import { useNavigate } from 'react-router-dom';
 import type { PlatformFilter } from '../../shared/platforms';
 import ReactECharts from '../components/AnalyticsChart';
 import { fetchJson } from '../fetchJson';
+
+type RevenueGranularity = 'day' | 'month';
 
 const { Text, Title } = Typography;
 
@@ -37,13 +39,21 @@ interface HomeMonthlyTrend {
   total: number[];
 }
 
+interface HomeDailyTrend {
+  days: string[];
+  games: HomeMonthlyGameSeries[];
+  total: number[];
+}
+
 interface HomeDauResponse {
   ok: boolean;
   date_key?: string;
   computed_at?: number;
   month_from_date?: string;
   month_t1_date?: string;
+  daily_from_date?: string;
   month_t1_revenue_cny?: number;
+  daily_trend?: HomeDailyTrend;
   monthly_trend?: HomeMonthlyTrend;
   games?: HomeGameDau[];
   error?: string;
@@ -69,6 +79,12 @@ function formatMonthLabel(monthKey: string): string {
   const [year, month] = monthKey.split('-');
   if (!year || !month) return monthKey;
   return `${year.slice(2)}年${Number(month)}月`;
+}
+
+function formatDayLabel(dateKey: string): string {
+  const [, month, day] = dateKey.split('-');
+  if (!month || !day) return dateKey;
+  return `${Number(month)}/${Number(day)}`;
 }
 
 function barPct(value: number, max: number): number {
@@ -109,7 +125,10 @@ export function HomePage() {
   const [monthFromDate, setMonthFromDate] = useState('');
   const [monthT1Date, setMonthT1Date] = useState('');
   const [monthT1Revenue, setMonthT1Revenue] = useState(0);
+  const [dailyFromDate, setDailyFromDate] = useState('');
+  const [dailyTrend, setDailyTrend] = useState<HomeDailyTrend | null>(null);
   const [monthlyTrend, setMonthlyTrend] = useState<HomeMonthlyTrend | null>(null);
+  const [revenueGranularity, setRevenueGranularity] = useState<RevenueGranularity>('day');
   const [legendSelected, setLegendSelected] = useState<Record<string, boolean> | null>(null);
   const [games, setGames] = useState<HomeGameDau[]>([]);
 
@@ -126,6 +145,8 @@ export function HomePage() {
       setMonthFromDate(data.month_from_date || '');
       setMonthT1Date(data.month_t1_date || '');
       setMonthT1Revenue(data.month_t1_revenue_cny ?? 0);
+      setDailyFromDate(data.daily_from_date || '');
+      setDailyTrend(data.daily_trend || null);
       setMonthlyTrend(data.monthly_trend || null);
       setGames(data.games || []);
     } catch (e) {
@@ -143,10 +164,11 @@ export function HomePage() {
 
   const maxTotal = Math.max(1, ...games.map((g) => g.total_dau));
 
-  const monthChartOption = useMemo<EChartsOption>(() => {
-    const months = monthlyTrend?.months || [];
-    const labels = months.map(formatMonthLabel);
-    const gameSeries = monthlyTrend?.games || [];
+  const isDaily = revenueGranularity === 'day';
+  const revenueChartOption = useMemo<EChartsOption>(() => {
+    const buckets = isDaily ? dailyTrend?.days || [] : monthlyTrend?.months || [];
+    const gameSeries = isDaily ? dailyTrend?.games || [] : monthlyTrend?.games || [];
+    const totals = isDaily ? dailyTrend?.total || [] : monthlyTrend?.total || [];
     const selected: Record<string, boolean> = { 合计: true };
     for (const game of gameSeries) selected[game.display_name] = false;
     if (legendSelected) {
@@ -170,9 +192,12 @@ export function HomePage() {
       grid: { left: 12, right: 16, top: 36, bottom: 8, containLabel: true },
       xAxis: {
         type: 'category',
-        data: labels,
+        data: buckets,
         boundaryGap: false,
-        axisLabel: { hideOverlap: true },
+        axisLabel: {
+          hideOverlap: true,
+          formatter: (value: string) => (isDaily ? formatDayLabel(value) : formatMonthLabel(value)),
+        },
       },
       yAxis: {
         type: 'value',
@@ -189,12 +214,12 @@ export function HomePage() {
           type: 'line' as const,
           smooth: 0.35,
           showSymbol: true,
-          symbolSize: 8,
+          symbolSize: isDaily ? 6 : 8,
           z: 3,
           lineStyle: { width: 3, type: 'solid' as const },
           itemStyle: { color: '#b45309' },
           areaStyle: { opacity: 0.16 },
-          data: monthlyTrend?.total || [],
+          data: totals,
         },
         ...gameSeries.map((game) => ({
           name: game.display_name,
@@ -206,7 +231,7 @@ export function HomePage() {
         })),
       ],
     };
-  }, [legendSelected, monthlyTrend]);
+  }, [dailyTrend, isDaily, legendSelected, monthlyTrend]);
 
   const openGamePlatform = (gameKey: string, platform: PlatformFilter) => {
     navigate(
@@ -252,14 +277,29 @@ export function HomePage() {
 
       <div className="home-month-chart">
         <div className="home-month-chart-head">
-          <span className="home-month-chart-title">近一年月度收益</span>
-          <Text type="secondary" className="home-month-chart-hint">
-            默认只看合计 · 点图例可对比单款游戏
-          </Text>
+          <div className="home-month-chart-head-left">
+            <span className="home-month-chart-title">
+              {isDaily ? '近一月日收益 · T-1' : '近一年月度收益'}
+            </span>
+            <Text type="secondary" className="home-month-chart-hint">
+              {isDaily
+                ? `${dailyFromDate && monthT1Date ? `${dailyFromDate} ~ ${monthT1Date}` : '截止昨天'} · 默认只看合计`
+                : '默认只看合计 · 当月按 T-1 · 点图例可对比单款游戏'}
+            </Text>
+          </div>
+          <Segmented
+            size="small"
+            value={revenueGranularity}
+            options={[
+              { label: '按天', value: 'day' },
+              { label: '按月', value: 'month' },
+            ]}
+            onChange={(next) => setRevenueGranularity(next as RevenueGranularity)}
+          />
         </div>
-        {monthlyTrend && monthlyTrend.months.length > 0 ? (
+        {(isDaily ? dailyTrend?.days.length : monthlyTrend?.months.length) ? (
           <ReactECharts
-            option={monthChartOption}
+            option={revenueChartOption}
             height={280}
             framed={false}
             onEvents={{
@@ -269,7 +309,7 @@ export function HomePage() {
             }}
           />
         ) : (
-          <div className="home-month-chart-empty">暂无月度收益</div>
+          <div className="home-month-chart-empty">{isDaily ? '暂无日收益' : '暂无月度收益'}</div>
         )}
       </div>
 

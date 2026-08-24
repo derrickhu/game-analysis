@@ -441,11 +441,18 @@ code,
 
 .home-month-chart-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
   padding: 0 4px 4px;
+}
+
+.home-month-chart-head-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .home-month-chart-title {

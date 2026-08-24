@@ -696,6 +696,42 @@ export async function sumBusinessDailyRevenueByGame(
   return out;
 }
 
+export interface BusinessDailyRevenueRow {
+  game_key: string;
+  date_key: string;
+  revenue_cny: number;
+}
+
+/** 按游戏、按日列出微信流量主真实收入，日期闭区间。 */
+export async function listBusinessDailyRevenue(
+  gameKeys: string[],
+  fromDate: string,
+  toDate: string,
+): Promise<BusinessDailyRevenueRow[]> {
+  const out: BusinessDailyRevenueRow[] = [];
+  if (gameKeys.length === 0 || fromDate > toDate || !isMysqlMode()) return out;
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const placeholders = gameKeys.map(() => '?').join(', ');
+  const [rows] = await pool.query(
+    `SELECT game_key, date_key, ROUND(SUM(wechat_ad_revenue_cny), 2) AS revenue_cny
+       FROM business_daily_inputs
+      WHERE game_key IN (${placeholders})
+        AND date_key BETWEEN ? AND ?
+      GROUP BY game_key, date_key
+      ORDER BY date_key ASC, game_key ASC`,
+    [...gameKeys, fromDate, toDate],
+  );
+  for (const row of rows as Array<Record<string, unknown>>) {
+    out.push({
+      game_key: String(row.game_key),
+      date_key: String(row.date_key),
+      revenue_cny: Math.round(Number(row.revenue_cny || 0) * 100) / 100,
+    });
+  }
+  return out;
+}
+
 export interface BusinessMonthlyRevenueRow {
   game_key: string;
   month_key: string;
