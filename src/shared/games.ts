@@ -122,6 +122,14 @@ export const ALL_GAMES: GameDescriptor[] = [
     hasSnapshotIngest: false,
     monetization: { ads: true, iap: false, ecpmProfile: 'wujin_wenzhang' },
   },
+  {
+    gameKey: 'cunkou',
+    displayName: '村口大战外星人',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    gameplayPanels: ['level_progress'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'cunkou' },
+  },
 ];
 
 export function getGameDescriptor(gameKey: string): GameDescriptor | undefined {

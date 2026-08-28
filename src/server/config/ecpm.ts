@@ -41,6 +41,14 @@ const ECPM_TABLE: Record<string, number> = {
   'petTower.reward': 24,
   'petTower._default': 15,
 
+  // cunkou（村口大战外星人）
+  'cunkou.reward.revive': 28,
+  'cunkou.reward.settleDouble': 26,
+  'cunkou.reward.dailyGift': 24,
+  'cunkou.reward.junkyard': 24,
+  'cunkou.reward': 25,
+  'cunkou._default': 15,
+
   // xiaochu
   'xiaochu.reward.staminaRecovery': 24,
   'xiaochu.reward.signDouble': 24,

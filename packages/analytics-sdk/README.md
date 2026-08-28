@@ -222,7 +222,7 @@ client track() -> EventQueue -> Batcher (15s / 20 条) -> Sender (HTTP)
 | 健康检查路径 | `POST /analytics-ingest/health` |
 | 云函数名 | `analytics-ingest`（Nodejs18.15，handler `index.main`） |
 | CloudDB 集合 | `analytics_events`（已建索引：`game_key+event_ts`、`ingest_ts`、`game_key+user_id+event_ts`、`game_key+event_name+event_ts`） |
-| 已注册 game_key 白名单 | `hotpot`,`huahua`,`caizhu`,`petTower`,`xiaochu`（云函数环境变量 `ANALYTICS_GAME_KEYS`；以线上实际配置为准） |
+| 已注册 game_key 白名单 | `hotpot`,`huahua`,`caizhu`,`petTower`,`xiaochu`,`cunkou`（云函数环境变量 `ANALYTICS_GAME_KEYS`；以线上实际配置为准） |
 
 **重要架构特性：**
 
@@ -318,13 +318,13 @@ Platform.onHide(() => {
 ```
 manageFunctions updateFunctionConfig
   functionName: analytics-ingest
-  envVariables: { ANALYTICS_GAME_KEYS: "hotpot,huahua,caizhu,petTower,xiaochu,gameX" }
+  envVariables: { ANALYTICS_GAME_KEYS: "hotpot,huahua,caizhu,petTower,xiaochu,cunkou,gameX" }
 ```
 
 或者 CloudBase CLI：
 
 ```bash
-tcb fn config update analytics-ingest --envVariables ANALYTICS_GAME_KEYS=hotpot,huahua,caizhu,petTower,xiaochu,gameX
+tcb fn config update analytics-ingest --envVariables ANALYTICS_GAME_KEYS=hotpot,huahua,caizhu,petTower,xiaochu,cunkou,gameX
 ```
 
 **方式 B：CloudBase 控制台手工改**

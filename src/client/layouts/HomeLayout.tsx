@@ -11,7 +11,7 @@ const { Title } = Typography;
  */
 export function HomeLayout() {
   return (
-    <Layout className="app-shell">
+    <Layout className="app-shell app-shell-home">
       <Header className="app-header">
         <Link to="/" className="app-brand app-brand-link">
           <span className="app-brand-mark" aria-hidden>

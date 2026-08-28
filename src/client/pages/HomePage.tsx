@@ -189,7 +189,7 @@ export function HomePage() {
         selected,
         selectedMode: true,
       },
-      grid: { left: 12, right: 16, top: 36, bottom: 8, containLabel: true },
+      grid: { left: 8, right: 12, top: 24, bottom: 2, containLabel: true },
       xAxis: {
         type: 'category',
         data: buckets,
@@ -241,38 +241,35 @@ export function HomePage() {
 
   return (
     <div className="home-page">
-      <div className="home-toolbar">
+      <div className="home-topbar">
         <div className="home-toolbar-text">
           <Title level={4} className="home-heading">
             今日总览
           </Title>
           <Text type="secondary" className="home-sub">
-            {dateKey || '—'} · 日活 / 广告曝光 · 按总日活降序 · 点平台进入看板
+            {dateKey || '—'} · 按日活降序 · 点平台进看板
           </Text>
         </div>
-        <Space>
+        <div className="home-month-revenue" aria-label="当月截至昨天总收益">
+          <div className="home-month-revenue-main">
+            <span className="home-month-revenue-label">当月 T-1</span>
+            <span className="home-month-revenue-num mono">{formatYuan(monthT1Revenue)}</span>
+            <span className="home-month-revenue-unit">元</span>
+          </div>
+          <Text type="secondary" className="home-month-revenue-hint">
+            {monthFromDate && monthT1Date
+              ? `${monthFromDate} ~ ${monthT1Date}`
+              : '微信流量主真实收入，不含今日'}
+          </Text>
+        </div>
+        <Space className="home-topbar-actions">
           <Text type="secondary" className="home-meta">
             {computedAt ? new Date(computedAt).toLocaleTimeString('zh-CN') : '—'}
-            <span className="home-meta-sep">·</span>
-            每分钟自动刷新
           </Text>
           <Button size="small" onClick={() => void load()} loading={loading}>
             刷新
           </Button>
         </Space>
-      </div>
-
-      <div className="home-month-revenue" aria-label="当月截至昨天总收益">
-        <div className="home-month-revenue-main">
-          <span className="home-month-revenue-label">当月总收益 · T-1</span>
-          <span className="home-month-revenue-num mono">{formatYuan(monthT1Revenue)}</span>
-          <span className="home-month-revenue-unit">元</span>
-        </div>
-        <Text type="secondary" className="home-month-revenue-hint">
-          {monthFromDate && monthT1Date
-            ? `${monthFromDate} ~ ${monthT1Date} · 微信流量主真实收入，不含今日`
-            : '微信流量主真实收入，不含今日（今日结算通常未出）'}
-        </Text>
       </div>
 
       <div className="home-month-chart">
@@ -300,7 +297,7 @@ export function HomePage() {
         {(isDaily ? dailyTrend?.days.length : monthlyTrend?.months.length) ? (
           <ReactECharts
             option={revenueChartOption}
-            height={280}
+            height={148}
             framed={false}
             onEvents={{
               legendselectchanged: (event: { selected?: Record<string, boolean> }) => {

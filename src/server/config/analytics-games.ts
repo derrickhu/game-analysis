@@ -56,6 +56,12 @@ export const ANALYTICS_GAMES: AnalyticsGameConfig[] = [
     cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
     enabled: true,
   },
+  {
+    gameKey: 'cunkou',
+    displayName: '村口大战外星人',
+    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
+    enabled: true,
+  },
 ];
 
 export function getAnalyticsGameKeys(): string[] {
