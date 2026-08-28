@@ -49,6 +49,15 @@ const ECPM_TABLE: Record<string, number> = {
   'cunkou.reward': 25,
   'cunkou._default': 15,
 
+  // wujin_wenzhang（无尽纹章）
+  'wujin_wenzhang.reward.revive': 28,
+  'wujin_wenzhang.reward.shopRefresh': 24,
+  'wujin_wenzhang.reward.freeUnit': 24,
+  'wujin_wenzhang.reward.doubleStar': 26,
+  'wujin_wenzhang.reward.dailyFreeRoll': 24,
+  'wujin_wenzhang.reward': 25,
+  'wujin_wenzhang._default': 15,
+
   // xiaochu
   'xiaochu.reward.staminaRecovery': 24,
   'xiaochu.reward.signDouble': 24,

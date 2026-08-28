@@ -1,18 +1,16 @@
 /**
- * 经分后端"事件流拉取"配置。与现有 GAME_CONFIGS（存档差分流）解耦：
- * - GAME_CONFIGS 是按游戏拉各自的 *_playerData 快照集合
- * - ANALYTICS_GAMES 是从一个共用的 analytics_events 集合按 game_key 字段过滤拉新事件
+ * 经分后端"事件流拉取"配置。名单不再手写第二份，统一跟 shared/games.ts 的 ALL_GAMES：
+ * - hasAnalyticsSdk=true → enabled，cron 拉事件，首页出卡片
+ * - hasAnalyticsSdk=false → 只登记、不拉、不上首页
  *
- * 新增一款游戏接入只需要：
- *   1. 在下面 ANALYTICS_GAMES 加一行，并把 enabled 设为 true
- *   2. 在 ecpm.ts 加该游戏的 ECPM 配置
- *   3. 云函数 ANALYTICS_GAME_KEYS 环境变量加该 game_key
- *
- * enabled 字段用于「按接入与否决定是否拉取」：
- * - true: cron 每 30s 拉一次该游戏的事件
- * - false: 完全跳过该游戏（不浪费 CloudBase API 调用次数，也不污染拉取记录）
- *   未接入 SDK 的游戏放这里也行，等真正接入时再翻开关
+ * 新游戏标准化接入：
+ *   1. ALL_GAMES 加一行，hasAnalyticsSdk 翻 true
+ *   2. ecpm.ts 加该游戏的 ECPM
+ *   3. 云函数 ANALYTICS_GAME_KEYS 加该 game_key
+ *   4. 重启经分 API（./start.sh restart）
  */
+
+import { ALL_GAMES } from '../../shared/games';
 
 export interface AnalyticsGameConfig {
   gameKey: string;
@@ -25,44 +23,14 @@ export interface AnalyticsGameConfig {
 
 export const ANALYTICS_EVENTS_COLLECTION = 'analytics_events';
 
-export const ANALYTICS_GAMES: AnalyticsGameConfig[] = [
-  {
-    gameKey: 'hotpot',
-    displayName: '别捞水果',
-    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: true,
-  },
-  {
-    gameKey: 'huahua',
-    displayName: '花花妙屋',
-    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: true,
-  },
-  {
-    gameKey: 'caizhu',
-    displayName: '彩珠五连',
-    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: true,
-  },
-  {
-    gameKey: 'petTower',
-    displayName: '灵宠消消塔2',
-    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: true,
-  },
-  {
-    gameKey: 'xiaochu',
-    displayName: '灵宠消消塔',
-    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: true,
-  },
-  {
-    gameKey: 'cunkou',
-    displayName: '村口大战外星人',
-    cloudEnv: process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323',
-    enabled: true,
-  },
-];
+const DEFAULT_CLOUD_ENV = process.env.TCB_ENV || 'rosa-env-d7grf78r5dbd37323';
+
+export const ANALYTICS_GAMES: AnalyticsGameConfig[] = ALL_GAMES.map((g) => ({
+  gameKey: g.gameKey,
+  displayName: g.displayName,
+  cloudEnv: DEFAULT_CLOUD_ENV,
+  enabled: g.hasAnalyticsSdk,
+}));
 
 export function getAnalyticsGameKeys(): string[] {
   return ANALYTICS_GAMES.map((g) => g.gameKey);

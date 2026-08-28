@@ -7,7 +7,7 @@
  *
  * 所有游戏 gameKey 必须先在这里登记，新增一款游戏只需要：
  *   1. 这里加一行
- *   2. 真正接入了 SDK 就把 hasAnalyticsSdk 翻 true（同时云函数 ANALYTICS_GAME_KEYS 加该 key）
+ *   2. 真正接入了 SDK 就把 hasAnalyticsSdk 翻 true（首页卡片、cron 拉取、业务选择器一起生效；同时云函数 ANALYTICS_GAME_KEYS 加该 key）
  *   3. 还需要老链路存档差分时把 hasSnapshotIngest 翻 true
  */
 
@@ -118,8 +118,9 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'wujin_wenzhang',
     displayName: '无尽纹章',
-    hasAnalyticsSdk: false,
+    hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
+    gameplayPanels: ['level_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'wujin_wenzhang' },
   },
   {

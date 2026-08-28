@@ -62,7 +62,8 @@ export class EventQueue {
     if (events.length === 0) return;
     try {
       const cached = this.storage.get(DEAD_LETTER_KEY);
-      const list = (cached && safeParse<AnalyticsEvent[]>(cached)) || [];
+      const parsed = cached ? safeParse<AnalyticsEvent[]>(cached) : null;
+      const list = Array.isArray(parsed) ? parsed : [];
       list.push(...events);
       while (list.length > this.maxPersistedSize) {
         list.shift();
@@ -100,7 +101,8 @@ export class EventQueue {
     try {
       const pending = this.storage.get(PENDING_KEY);
       if (pending) {
-        const list = safeParse<AnalyticsEvent[]>(pending) || [];
+        const parsed = safeParse<AnalyticsEvent[]>(pending);
+        const list = Array.isArray(parsed) ? parsed : [];
         this.events.push(...list);
         restored = list.length;
         if (this.storage.remove) {
@@ -115,7 +117,8 @@ export class EventQueue {
     try {
       const dead = this.storage.get(DEAD_LETTER_KEY);
       if (dead) {
-        const list = safeParse<AnalyticsEvent[]>(dead) || [];
+        const parsed = safeParse<AnalyticsEvent[]>(dead);
+        const list = Array.isArray(parsed) ? parsed : [];
         this.events.push(...list);
         deadLetterRestored = list.length;
         if (this.storage.remove) {
