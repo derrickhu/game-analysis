@@ -19,7 +19,8 @@ import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
 import { ingestTencentAdsBusinessInputs } from '../jobs/ingest-tencent-ads';
 import { ingestTencentAdsInsights } from '../jobs/ingest-tencent-ads-insights';
-import { ingestWechatPublisherBusinessInputs } from '../jobs/ingest-wechat-publisher';
+import { ingestDouyinPublisherBusinessInputs } from '../publisher/douyin/ingest';
+import { ingestWechatPublisherBusinessInputs } from '../publisher/wechat/ingest';
 import { getConfig } from '../config';
 import {
   aggregateAdMinuteFromEvents,
@@ -151,6 +152,7 @@ interface BusinessInputBody {
   wechat_clicks?: number;
   wechat_ad_revenue_cny?: number;
   wechat_ad_impressions?: number;
+  douyin_ad_revenue_cny?: number;
   acquisition_impressions?: number;
   acquisition_activations?: number;
   acquisition_source?: string;
@@ -1050,6 +1052,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
       return { ok: false, code: 'INVALID_DATE', error: 'date_key 必须是 YYYY-MM-DD' };
     }
+    const existing = (await listBusinessDailyInputs(gameKey, dateKey, dateKey))[0];
     const row = await saveBusinessDailyInput({
       game_key: gameKey,
       date_key: dateKey,
@@ -1057,6 +1060,10 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       wechat_clicks: Math.max(0, Math.trunc(Number(body.wechat_clicks) || 0)),
       wechat_ad_revenue_cny: Math.max(0, Number(body.wechat_ad_revenue_cny) || 0),
       wechat_ad_impressions: Math.max(0, Math.trunc(Number(body.wechat_ad_impressions) || 0)),
+      douyin_ad_revenue_cny:
+        body.douyin_ad_revenue_cny !== undefined
+          ? Math.max(0, Number(body.douyin_ad_revenue_cny) || 0)
+          : Number(existing?.douyin_ad_revenue_cny || 0),
       acquisition_impressions: Math.max(0, Math.trunc(Number(body.acquisition_impressions) || 0)),
       acquisition_activations: Math.max(0, Math.trunc(Number(body.acquisition_activations) || 0)),
       acquisition_source: body.acquisition_source || '',
@@ -1131,6 +1138,26 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       return { ok: false, code: 'INVALID_DATE', error: 'to_date 必须是 YYYY-MM-DD' };
     }
     return ingestWechatPublisherBusinessInputs({
+      gameKey,
+      fromDate: body.from_date,
+      toDate: body.to_date,
+      triggerSource: 'manual',
+    });
+  });
+
+  app.post('/api/realtime/douyin-publisher/ingest-business-inputs', async (request) => {
+    const body = (request.body || {}) as { game?: string; from_date?: string; to_date?: string };
+    const gameKey = body.game?.trim();
+    if (gameKey && !findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    if (body.from_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.from_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'from_date 必须是 YYYY-MM-DD' };
+    }
+    if (body.to_date && !/^\d{4}-\d{2}-\d{2}$/.test(body.to_date)) {
+      return { ok: false, code: 'INVALID_DATE', error: 'to_date 必须是 YYYY-MM-DD' };
+    }
+    return ingestDouyinPublisherBusinessInputs({
       gameKey,
       fromDate: body.from_date,
       toDate: body.to_date,

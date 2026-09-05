@@ -55,6 +55,7 @@ export interface BusinessDailyInputRow {
   wechat_clicks: number;
   wechat_ad_revenue_cny: number;
   wechat_ad_impressions: number;
+  douyin_ad_revenue_cny: number;
   acquisition_impressions: number;
   acquisition_activations: number;
   acquisition_source: string;
@@ -70,6 +71,7 @@ export interface BusinessDailyInputDraft {
   wechat_clicks: number;
   wechat_ad_revenue_cny: number;
   wechat_ad_impressions: number;
+  douyin_ad_revenue_cny?: number;
   acquisition_impressions?: number;
   acquisition_activations?: number;
   acquisition_source?: string;
@@ -90,6 +92,28 @@ export interface WechatPublisherAdDailyRow {
   ecpm_cny: number;
   raw_json: string;
   updated_at: number;
+}
+
+export interface DouyinPublisherAdDailyRow {
+  game_key: string;
+  date_key: string;
+  host_name: string;
+  income_cny: number;
+  raw_json: string;
+  updated_at: number;
+}
+
+export interface DouyinPublisherIngestRunDraft {
+  trigger_source: string;
+  game_key?: string;
+  from_date: string;
+  to_date: string;
+  ok: boolean;
+  games_json: string;
+  error_message?: string;
+  started_at: number;
+  finished_at: number;
+  duration_ms: number;
 }
 
 export interface WechatPublisherIngestRunDraft {
@@ -306,6 +330,7 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
   await addMysqlColumnIfMissing(pool, 'business_daily_inputs', 'acquisition_impressions', "BIGINT NOT NULL DEFAULT 0 AFTER wechat_ad_impressions");
   await addMysqlColumnIfMissing(pool, 'business_daily_inputs', 'acquisition_activations', "BIGINT NOT NULL DEFAULT 0 AFTER acquisition_impressions");
   await addMysqlColumnIfMissing(pool, 'business_daily_inputs', 'acquisition_source', "VARCHAR(64) NOT NULL DEFAULT '' AFTER acquisition_activations");
+  await addMysqlColumnIfMissing(pool, 'business_daily_inputs', 'douyin_ad_revenue_cny', "DOUBLE NOT NULL DEFAULT 0 AFTER wechat_ad_impressions");
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wechat_publisher_ad_daily (
@@ -324,6 +349,43 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       updated_at BIGINT NOT NULL,
       PRIMARY KEY (game_key, date_key, slot_id),
       INDEX idx_game_date (game_key, date_key)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS douyin_publisher_ad_daily (
+      game_key VARCHAR(32) NOT NULL,
+      date_key VARCHAR(10) NOT NULL,
+      host_name VARCHAR(128) NOT NULL DEFAULT '',
+      income_cny DOUBLE NOT NULL DEFAULT 0,
+      raw_json JSON NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (game_key, date_key, host_name),
+      INDEX idx_game_date (game_key, date_key)
+    )
+  `);
+  try {
+    await pool.query('ALTER TABLE douyin_publisher_ad_daily MODIFY host_name VARCHAR(128) NOT NULL DEFAULT \'\'');
+  } catch {
+    // 新表已是 128，或当前账号没有 ALTER 权限时忽略。
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS douyin_publisher_ingest_runs (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      trigger_source VARCHAR(16) NOT NULL,
+      game_key VARCHAR(32) NOT NULL DEFAULT '',
+      from_date VARCHAR(10) NOT NULL,
+      to_date VARCHAR(10) NOT NULL,
+      ok TINYINT NOT NULL DEFAULT 0,
+      games_json JSON NOT NULL,
+      error_message TEXT NOT NULL,
+      started_at BIGINT NOT NULL,
+      finished_at BIGINT NOT NULL,
+      duration_ms BIGINT NOT NULL,
+      INDEX idx_started_at (started_at),
+      INDEX idx_range (from_date, to_date),
+      INDEX idx_game_started (game_key, started_at)
     )
   `);
 
@@ -351,6 +413,8 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       game_key VARCHAR(32) NOT NULL,
       month_key VARCHAR(7) NOT NULL,
       revenue_cny DOUBLE NOT NULL DEFAULT 0,
+      wechat_revenue_cny DOUBLE NOT NULL DEFAULT 0,
+      douyin_revenue_cny DOUBLE NOT NULL DEFAULT 0,
       impressions BIGINT NOT NULL DEFAULT 0,
       spend_cny DOUBLE NOT NULL DEFAULT 0,
       day_count INT NOT NULL DEFAULT 0,
@@ -359,6 +423,8 @@ async function migrateMysql(pool: mysql.Pool): Promise<void> {
       INDEX idx_month (month_key)
     )
   `);
+  await addMysqlColumnIfMissing(pool, 'business_monthly_revenue', 'wechat_revenue_cny', 'DOUBLE NOT NULL DEFAULT 0 AFTER revenue_cny');
+  await addMysqlColumnIfMissing(pool, 'business_monthly_revenue', 'douyin_revenue_cny', 'DOUBLE NOT NULL DEFAULT 0 AFTER wechat_revenue_cny');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tencent_ads_daily_reports_raw (
@@ -610,14 +676,15 @@ export async function upsertBusinessDailyInput(input: BusinessDailyInputDraft): 
   await pool.query(
     `INSERT INTO business_daily_inputs (
        game_key, date_key, spend_cny, wechat_clicks, wechat_ad_revenue_cny,
-       wechat_ad_impressions, acquisition_impressions, acquisition_activations,
+       wechat_ad_impressions, douyin_ad_revenue_cny, acquisition_impressions, acquisition_activations,
        acquisition_source, note, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        spend_cny = VALUES(spend_cny),
        wechat_clicks = VALUES(wechat_clicks),
        wechat_ad_revenue_cny = VALUES(wechat_ad_revenue_cny),
        wechat_ad_impressions = VALUES(wechat_ad_impressions),
+       douyin_ad_revenue_cny = VALUES(douyin_ad_revenue_cny),
        acquisition_impressions = VALUES(acquisition_impressions),
        acquisition_activations = VALUES(acquisition_activations),
        acquisition_source = VALUES(acquisition_source),
@@ -630,6 +697,7 @@ export async function upsertBusinessDailyInput(input: BusinessDailyInputDraft): 
       input.wechat_clicks,
       input.wechat_ad_revenue_cny,
       input.wechat_ad_impressions,
+      Math.max(0, Number(input.douyin_ad_revenue_cny) || 0),
       Math.max(0, Math.trunc(Number(input.acquisition_impressions) || 0)),
       Math.max(0, Math.trunc(Number(input.acquisition_activations) || 0)),
       input.acquisition_source || '',
@@ -671,19 +739,37 @@ export async function listBusinessDailyInputs(
   return rows as BusinessDailyInputRow[];
 }
 
-/** 按游戏汇总微信流量主真实收入（business_daily_inputs），日期闭区间。 */
+export interface ChannelRevenueCny {
+  total_cny: number;
+  wechat_cny: number;
+  douyin_cny: number;
+}
+
+function roundChannelRevenue(wechatCny: number, douyinCny: number): ChannelRevenueCny {
+  const wechat = Math.round(wechatCny * 100) / 100;
+  const douyin = Math.round(douyinCny * 100) / 100;
+  return {
+    total_cny: Math.round((wechat + douyin) * 100) / 100,
+    wechat_cny: wechat,
+    douyin_cny: douyin,
+  };
+}
+
+/** 按游戏汇总微信/抖音流量主真实收入（business_daily_inputs），日期闭区间。 */
 export async function sumBusinessDailyRevenueByGame(
   gameKeys: string[],
   fromDate: string,
   toDate: string,
-): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+): Promise<Map<string, ChannelRevenueCny>> {
+  const out = new Map<string, ChannelRevenueCny>();
   if (gameKeys.length === 0 || fromDate > toDate || !isMysqlMode()) return out;
   await ensureLtvTables();
   const pool = await getMysqlPool();
   const placeholders = gameKeys.map(() => '?').join(', ');
   const [rows] = await pool.query(
-    `SELECT game_key, SUM(wechat_ad_revenue_cny) AS revenue_cny
+    `SELECT game_key,
+            ROUND(SUM(wechat_ad_revenue_cny), 2) AS wechat_cny,
+            ROUND(SUM(IFNULL(douyin_ad_revenue_cny, 0)), 2) AS douyin_cny
        FROM business_daily_inputs
       WHERE game_key IN (${placeholders})
         AND date_key BETWEEN ? AND ?
@@ -691,7 +777,10 @@ export async function sumBusinessDailyRevenueByGame(
     [...gameKeys, fromDate, toDate],
   );
   for (const row of rows as Array<Record<string, unknown>>) {
-    out.set(String(row.game_key), Math.round(Number(row.revenue_cny || 0) * 100) / 100);
+    out.set(
+      String(row.game_key),
+      roundChannelRevenue(Number(row.wechat_cny || 0), Number(row.douyin_cny || 0)),
+    );
   }
   return out;
 }
@@ -700,9 +789,11 @@ export interface BusinessDailyRevenueRow {
   game_key: string;
   date_key: string;
   revenue_cny: number;
+  wechat_cny: number;
+  douyin_cny: number;
 }
 
-/** 按游戏、按日列出微信流量主真实收入，日期闭区间。 */
+/** 按游戏、按日列出微信/抖音流量主真实收入，日期闭区间。 */
 export async function listBusinessDailyRevenue(
   gameKeys: string[],
   fromDate: string,
@@ -714,7 +805,9 @@ export async function listBusinessDailyRevenue(
   const pool = await getMysqlPool();
   const placeholders = gameKeys.map(() => '?').join(', ');
   const [rows] = await pool.query(
-    `SELECT game_key, date_key, ROUND(SUM(wechat_ad_revenue_cny), 2) AS revenue_cny
+    `SELECT game_key, date_key,
+            ROUND(SUM(wechat_ad_revenue_cny), 2) AS wechat_cny,
+            ROUND(SUM(IFNULL(douyin_ad_revenue_cny, 0)), 2) AS douyin_cny
        FROM business_daily_inputs
       WHERE game_key IN (${placeholders})
         AND date_key BETWEEN ? AND ?
@@ -723,10 +816,13 @@ export async function listBusinessDailyRevenue(
     [...gameKeys, fromDate, toDate],
   );
   for (const row of rows as Array<Record<string, unknown>>) {
+    const channel = roundChannelRevenue(Number(row.wechat_cny || 0), Number(row.douyin_cny || 0));
     out.push({
       game_key: String(row.game_key),
       date_key: String(row.date_key),
-      revenue_cny: Math.round(Number(row.revenue_cny || 0) * 100) / 100,
+      revenue_cny: channel.total_cny,
+      wechat_cny: channel.wechat_cny,
+      douyin_cny: channel.douyin_cny,
     });
   }
   return out;
@@ -736,6 +832,8 @@ export interface BusinessMonthlyRevenueRow {
   game_key: string;
   month_key: string;
   revenue_cny: number;
+  wechat_revenue_cny: number;
+  douyin_revenue_cny: number;
   impressions: number;
   spend_cny: number;
   day_count: number;
@@ -773,10 +871,12 @@ export async function rebuildBusinessMonthlyRevenue(options: {
 
   const insertSql = `
     INSERT INTO business_monthly_revenue
-      (game_key, month_key, revenue_cny, impressions, spend_cny, day_count, updated_at)
+      (game_key, month_key, revenue_cny, wechat_revenue_cny, douyin_revenue_cny, impressions, spend_cny, day_count, updated_at)
     SELECT game_key,
            LEFT(date_key, 7) AS month_key,
-           ROUND(SUM(wechat_ad_revenue_cny), 2) AS revenue_cny,
+           ROUND(SUM(wechat_ad_revenue_cny + IFNULL(douyin_ad_revenue_cny, 0)), 2) AS revenue_cny,
+           ROUND(SUM(wechat_ad_revenue_cny), 2) AS wechat_revenue_cny,
+           ROUND(SUM(IFNULL(douyin_ad_revenue_cny, 0)), 2) AS douyin_revenue_cny,
            SUM(wechat_ad_impressions) AS impressions,
            ROUND(SUM(spend_cny), 2) AS spend_cny,
            COUNT(*) AS day_count,
@@ -800,7 +900,8 @@ export async function listBusinessMonthlyRevenue(
   const pool = await getMysqlPool();
   const placeholders = gameKeys.map(() => '?').join(', ');
   const [rows] = await pool.query(
-    `SELECT game_key, month_key, revenue_cny, impressions, spend_cny, day_count
+    `SELECT game_key, month_key, revenue_cny, wechat_revenue_cny, douyin_revenue_cny,
+            impressions, spend_cny, day_count
        FROM business_monthly_revenue
       WHERE game_key IN (${placeholders})
         AND month_key BETWEEN ? AND ?
@@ -808,10 +909,16 @@ export async function listBusinessMonthlyRevenue(
     [...gameKeys, fromMonth, toMonth],
   );
   for (const row of rows as Array<Record<string, unknown>>) {
+    const channel = roundChannelRevenue(
+      Number(row.wechat_revenue_cny || 0),
+      Number(row.douyin_revenue_cny || 0),
+    );
     out.push({
       game_key: String(row.game_key),
       month_key: String(row.month_key),
-      revenue_cny: Math.round(Number(row.revenue_cny || 0) * 100) / 100,
+      revenue_cny: channel.total_cny || Math.round(Number(row.revenue_cny || 0) * 100) / 100,
+      wechat_revenue_cny: channel.wechat_cny,
+      douyin_revenue_cny: channel.douyin_cny,
       impressions: Number(row.impressions || 0),
       spend_cny: Math.round(Number(row.spend_cny || 0) * 100) / 100,
       day_count: Number(row.day_count || 0),
@@ -871,6 +978,68 @@ export async function replaceWechatPublisherAdDailyRows(
   } finally {
     conn.release();
   }
+}
+
+export async function replaceDouyinPublisherAdDailyRows(
+  gameKey: string,
+  fromDate: string,
+  toDate: string,
+  rows: DouyinPublisherAdDailyRow[],
+): Promise<number> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `DELETE FROM douyin_publisher_ad_daily
+        WHERE game_key = ? AND date_key BETWEEN ? AND ?`,
+      [gameKey, fromDate, toDate],
+    );
+    if (rows.length > 0) {
+      const cols = ['game_key', 'date_key', 'host_name', 'income_cny', 'raw_json', 'updated_at'];
+      const placeholders = `(${cols.map(() => '?').join(',')})`;
+      const values: unknown[] = [];
+      for (const row of rows) {
+        for (const col of cols) values.push((row as unknown as Record<string, unknown>)[col]);
+      }
+      await conn.query(
+        `INSERT INTO douyin_publisher_ad_daily (${cols.join(',')})
+         VALUES ${rows.map(() => placeholders).join(',')}`,
+        values,
+      );
+    }
+    await conn.commit();
+    return rows.length;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function recordDouyinPublisherIngestRun(input: DouyinPublisherIngestRunDraft): Promise<void> {
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  await pool.query(
+    `INSERT INTO douyin_publisher_ingest_runs (
+       trigger_source, game_key, from_date, to_date, ok, games_json,
+       error_message, started_at, finished_at, duration_ms
+     ) VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?, ?)`,
+    [
+      input.trigger_source,
+      input.game_key || '',
+      input.from_date,
+      input.to_date,
+      input.ok ? 1 : 0,
+      input.games_json,
+      input.error_message || '',
+      input.started_at,
+      input.finished_at,
+      input.duration_ms,
+    ],
+  );
 }
 
 export async function recordWechatPublisherIngestRun(input: WechatPublisherIngestRunDraft): Promise<void> {

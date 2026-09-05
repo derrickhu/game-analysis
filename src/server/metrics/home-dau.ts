@@ -32,7 +32,7 @@ export interface HomeGameDau {
   display_name: string;
   total_dau: number;
   total_ad_show: number;
-  /** 当月截至昨天（T-1）微信流量主真实收入，元 */
+  /** 当月截至昨天（T-1）微信+抖音流量主真实收入，元 */
   month_t1_revenue_cny: number;
   platforms: HomePlatformDau[];
 }
@@ -43,16 +43,25 @@ export interface HomeMonthlyGameSeries {
   revenue: number[];
 }
 
+export interface HomeChannelTrend {
+  games: HomeMonthlyGameSeries[];
+  total: number[];
+}
+
 export interface HomeMonthlyTrend {
   months: string[];
   games: HomeMonthlyGameSeries[];
   total: number[];
+  wechat: HomeChannelTrend;
+  douyin: HomeChannelTrend;
 }
 
 export interface HomeDailyTrend {
   days: string[];
   games: HomeMonthlyGameSeries[];
   total: number[];
+  wechat: HomeChannelTrend;
+  douyin: HomeChannelTrend;
 }
 
 export interface HomeDauResult {
@@ -66,8 +75,10 @@ export interface HomeDauResult {
   month_t1_date: string;
   /** 近一月日曲线起点（含），截止 T-1 */
   daily_from_date: string;
-  /** 全部游戏当月 T-1 收益合计 */
+  /** 全部游戏当月 T-1 收益合计（微信+抖音） */
   month_t1_revenue_cny: number;
+  month_t1_wechat_revenue_cny: number;
+  month_t1_douyin_revenue_cny: number;
   daily_trend: HomeDailyTrend;
   monthly_trend: HomeMonthlyTrend;
   games: HomeGameDau[];
@@ -228,7 +239,10 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
     listBusinessDailyRevenue(gameKeys, dailyFromDate, monthT1Date),
   ]);
   let monthlyRows = monthlyRowsRaw;
-  if (monthlyRows.length === 0 && gameKeys.length > 0) {
+  const monthlySplitMissing = monthlyRows.some(
+    (row) => row.revenue_cny > 0 && row.wechat_revenue_cny === 0 && row.douyin_revenue_cny === 0,
+  );
+  if (gameKeys.length > 0 && (monthlyRows.length === 0 || monthlySplitMissing)) {
     await rebuildBusinessMonthlyRevenue({
       gameKeys,
       fromDate: `${fromMonth}-01`,
@@ -257,7 +271,8 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
     }));
     const total_dau = platforms.reduce((sum, p) => sum + p.dau, 0);
     const total_ad_show = platforms.reduce((sum, p) => sum + p.ad_show_cnt, 0);
-    const month_t1_revenue_cny = revenueMap.get(g.gameKey) || 0;
+    const channel = revenueMap.get(g.gameKey);
+    const month_t1_revenue_cny = channel?.total_cny || 0;
     return {
       game_key: g.gameKey,
       display_name: g.displayName,
@@ -269,47 +284,60 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
   });
 
   games.sort((a, b) => b.total_dau - a.total_dau || a.display_name.localeCompare(b.display_name, 'zh-CN'));
+  const month_t1_wechat_revenue_cny =
+    Math.round(games.reduce((sum, g) => sum + (revenueMap.get(g.game_key)?.wechat_cny || 0), 0) * 100) / 100;
+  const month_t1_douyin_revenue_cny =
+    Math.round(games.reduce((sum, g) => sum + (revenueMap.get(g.game_key)?.douyin_cny || 0), 0) * 100) / 100;
   const month_t1_revenue_cny =
-    Math.round(games.reduce((sum, g) => sum + g.month_t1_revenue_cny, 0) * 100) / 100;
+    Math.round((month_t1_wechat_revenue_cny + month_t1_douyin_revenue_cny) * 100) / 100;
 
   const currentMonthKey = monthFromDate.slice(0, 7);
-  const monthlyByGame = new Map<string, Map<string, number>>();
+  const monthlyByGame = new Map<string, Map<string, { total: number; wechat: number; douyin: number }>>();
   for (const row of monthlyRows) {
     let byMonth = monthlyByGame.get(row.game_key);
     if (!byMonth) {
       byMonth = new Map();
       monthlyByGame.set(row.game_key, byMonth);
     }
-    byMonth.set(row.month_key, row.revenue_cny);
-  }
-  const monthlyGames: HomeMonthlyGameSeries[] = games.map((g) => {
-    const byMonth = monthlyByGame.get(g.game_key);
-    const revenue = monthKeys.map((monthKey) => {
-      if (monthKey === currentMonthKey) return g.month_t1_revenue_cny;
-      return byMonth?.get(monthKey) || 0;
+    byMonth.set(row.month_key, {
+      total: row.revenue_cny,
+      wechat: row.wechat_revenue_cny,
+      douyin: row.douyin_revenue_cny,
     });
-    return { game_key: g.game_key, display_name: g.display_name, revenue };
-  });
-  const total = monthKeys.map((_, idx) =>
-    Math.round(monthlyGames.reduce((sum, g) => sum + (g.revenue[idx] || 0), 0) * 100) / 100,
+  }
+  const monthlyTrend = buildChannelTrends(
+    monthKeys,
+    games,
+    (gameKey, bucket) => {
+      if (bucket === currentMonthKey) {
+        const channel = revenueMap.get(gameKey);
+        return {
+          total: channel?.total_cny || 0,
+          wechat: channel?.wechat_cny || 0,
+          douyin: channel?.douyin_cny || 0,
+        };
+      }
+      return monthlyByGame.get(gameKey)?.get(bucket) || { total: 0, wechat: 0, douyin: 0 };
+    },
   );
 
-  const dailyByGame = new Map<string, Map<string, number>>();
+  const dailyByGame = new Map<string, Map<string, { total: number; wechat: number; douyin: number }>>();
   for (const row of dailyRows) {
     let byDay = dailyByGame.get(row.game_key);
     if (!byDay) {
       byDay = new Map();
       dailyByGame.set(row.game_key, byDay);
     }
-    byDay.set(row.date_key, row.revenue_cny);
+    byDay.set(row.date_key, {
+      total: row.revenue_cny,
+      wechat: row.wechat_cny,
+      douyin: row.douyin_cny,
+    });
   }
-  const dailyGames: HomeMonthlyGameSeries[] = games.map((g) => {
-    const byDay = dailyByGame.get(g.game_key);
-    const revenue = dayKeys.map((dayKey) => byDay?.get(dayKey) || 0);
-    return { game_key: g.game_key, display_name: g.display_name, revenue };
-  });
-  const dailyTotal = dayKeys.map((_, idx) =>
-    Math.round(dailyGames.reduce((sum, g) => sum + (g.revenue[idx] || 0), 0) * 100) / 100,
+  const dailyTrend = buildChannelTrends(
+    dayKeys,
+    games,
+    (gameKey, bucket) => dailyByGame.get(gameKey)?.get(bucket) || { total: 0, wechat: 0, douyin: 0 },
   );
 
   return {
@@ -321,8 +349,53 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
     month_t1_date: monthT1Date,
     daily_from_date: dailyFromDate,
     month_t1_revenue_cny,
-    daily_trend: { days: dayKeys, games: dailyGames, total: dailyTotal },
-    monthly_trend: { months: monthKeys, games: monthlyGames, total },
+    month_t1_wechat_revenue_cny,
+    month_t1_douyin_revenue_cny,
+    daily_trend: { days: dayKeys, ...dailyTrend },
+    monthly_trend: { months: monthKeys, ...monthlyTrend },
     games,
+  };
+}
+
+function buildChannelTrends(
+  buckets: string[],
+  games: HomeGameDau[],
+  pick: (gameKey: string, bucket: string) => { total: number; wechat: number; douyin: number },
+): {
+  games: HomeMonthlyGameSeries[];
+  total: number[];
+  wechat: HomeChannelTrend;
+  douyin: HomeChannelTrend;
+} {
+  const totalGames: HomeMonthlyGameSeries[] = [];
+  const wechatGames: HomeMonthlyGameSeries[] = [];
+  const douyinGames: HomeMonthlyGameSeries[] = [];
+  for (const game of games) {
+    const total: number[] = [];
+    const wechat: number[] = [];
+    const douyin: number[] = [];
+    for (const bucket of buckets) {
+      const value = pick(game.game_key, bucket);
+      total.push(value.total);
+      wechat.push(value.wechat);
+      douyin.push(value.douyin);
+    }
+    totalGames.push({ game_key: game.game_key, display_name: game.display_name, revenue: total });
+    wechatGames.push({ game_key: game.game_key, display_name: game.display_name, revenue: wechat });
+    douyinGames.push({ game_key: game.game_key, display_name: game.display_name, revenue: douyin });
+  }
+  const sumAt = (series: HomeMonthlyGameSeries[], idx: number) =>
+    Math.round(series.reduce((sum, game) => sum + (game.revenue[idx] || 0), 0) * 100) / 100;
+  return {
+    games: totalGames,
+    total: buckets.map((_, idx) => sumAt(totalGames, idx)),
+    wechat: {
+      games: wechatGames,
+      total: buckets.map((_, idx) => sumAt(wechatGames, idx)),
+    },
+    douyin: {
+      games: douyinGames,
+      total: buckets.map((_, idx) => sumAt(douyinGames, idx)),
+    },
   };
 }

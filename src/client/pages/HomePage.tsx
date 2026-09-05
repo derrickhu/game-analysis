@@ -5,9 +5,11 @@ import { useNavigate } from 'react-router-dom';
 
 import type { PlatformFilter } from '../../shared/platforms';
 import ReactECharts from '../components/AnalyticsChart';
+import { GameIcon } from '../components/GameIcon';
 import { fetchJson } from '../fetchJson';
 
 type RevenueGranularity = 'day' | 'month';
+type RevenueChannel = 'total' | 'wechat' | 'douyin';
 
 const { Text, Title } = Typography;
 
@@ -33,16 +35,25 @@ interface HomeMonthlyGameSeries {
   revenue: number[];
 }
 
+interface HomeChannelTrend {
+  games: HomeMonthlyGameSeries[];
+  total: number[];
+}
+
 interface HomeMonthlyTrend {
   months: string[];
   games: HomeMonthlyGameSeries[];
   total: number[];
+  wechat: HomeChannelTrend;
+  douyin: HomeChannelTrend;
 }
 
 interface HomeDailyTrend {
   days: string[];
   games: HomeMonthlyGameSeries[];
   total: number[];
+  wechat: HomeChannelTrend;
+  douyin: HomeChannelTrend;
 }
 
 interface HomeDauResponse {
@@ -53,11 +64,22 @@ interface HomeDauResponse {
   month_t1_date?: string;
   daily_from_date?: string;
   month_t1_revenue_cny?: number;
+  month_t1_wechat_revenue_cny?: number;
+  month_t1_douyin_revenue_cny?: number;
   daily_trend?: HomeDailyTrend;
   monthly_trend?: HomeMonthlyTrend;
   games?: HomeGameDau[];
   error?: string;
 }
+
+const CHANNEL_META: Record<
+  RevenueChannel,
+  { title: string; color: string; empty: string }
+> = {
+  total: { title: '总收入', color: '#b45309', empty: '暂无总收益' },
+  wechat: { title: '微信收入', color: '#1d4ed8', empty: '暂无微信收益' },
+  douyin: { title: '抖音收入', color: '#7c3aed', empty: '暂无抖音收益' },
+};
 
 function formatCount(n: number): string {
   if (n >= 10_000) {
@@ -89,6 +111,101 @@ function formatDayLabel(dateKey: string): string {
 
 function barPct(value: number, max: number): number {
   return Math.round((value / Math.max(1, max)) * 100);
+}
+
+function pickChannelTrend(
+  channel: RevenueChannel,
+  daily: HomeDailyTrend | null,
+  monthly: HomeMonthlyTrend | null,
+  isDaily: boolean,
+): { buckets: string[]; games: HomeMonthlyGameSeries[]; totals: number[] } {
+  if (isDaily) {
+    const source = daily;
+    const branch = channel === 'wechat' ? source?.wechat : channel === 'douyin' ? source?.douyin : null;
+    return {
+      buckets: source?.days || [],
+      games: branch?.games || source?.games || [],
+      totals: branch?.total || source?.total || [],
+    };
+  }
+  const source = monthly;
+  const branch = channel === 'wechat' ? source?.wechat : channel === 'douyin' ? source?.douyin : null;
+  return {
+    buckets: source?.months || [],
+    games: branch?.games || source?.games || [],
+    totals: branch?.total || source?.total || [],
+  };
+}
+
+function buildRevenueChartOption(input: {
+  channel: RevenueChannel;
+  isDaily: boolean;
+  buckets: string[];
+  games: HomeMonthlyGameSeries[];
+  totals: number[];
+  legendSelected: Record<string, boolean> | null;
+}): EChartsOption {
+  const selected: Record<string, boolean> = { 合计: true };
+  for (const game of input.games) selected[game.display_name] = false;
+  if (input.legendSelected) {
+    for (const [name, on] of Object.entries(input.legendSelected)) {
+      if (name in selected) selected[name] = on;
+    }
+  }
+  return {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (value) =>
+        typeof value === 'number' ? `${formatYuan(value)} 元` : String(value ?? ''),
+    },
+    legend: {
+      type: 'scroll',
+      top: 0,
+      right: 0,
+      selected,
+      selectedMode: true,
+    },
+    grid: { left: 4, right: 8, top: 28, bottom: 2, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: input.buckets,
+      boundaryGap: false,
+      axisLabel: {
+        hideOverlap: true,
+        formatter: (value: string) => (input.isDaily ? formatDayLabel(value) : formatMonthLabel(value)),
+      },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      axisLabel: {
+        formatter: (value: number) => (value >= 10000 ? `${(value / 10000).toFixed(1)}万` : String(value)),
+      },
+      splitLine: { lineStyle: { type: 'dashed' } },
+    },
+    series: [
+      {
+        name: '合计',
+        type: 'line' as const,
+        smooth: 0.35,
+        showSymbol: true,
+        symbolSize: input.isDaily ? 5 : 7,
+        z: 3,
+        lineStyle: { width: 3, type: 'solid' as const },
+        itemStyle: { color: CHANNEL_META[input.channel].color },
+        areaStyle: { opacity: 0.14 },
+        data: input.totals,
+      },
+      ...input.games.map((game) => ({
+        name: game.display_name,
+        type: 'line' as const,
+        smooth: 0.35,
+        showSymbol: true,
+        symbolSize: 6,
+        data: game.revenue,
+      })),
+    ],
+  };
 }
 
 function PlatformMetric({
@@ -125,6 +242,8 @@ export function HomePage() {
   const [monthFromDate, setMonthFromDate] = useState('');
   const [monthT1Date, setMonthT1Date] = useState('');
   const [monthT1Revenue, setMonthT1Revenue] = useState(0);
+  const [monthT1WechatRevenue, setMonthT1WechatRevenue] = useState(0);
+  const [monthT1DouyinRevenue, setMonthT1DouyinRevenue] = useState(0);
   const [dailyFromDate, setDailyFromDate] = useState('');
   const [dailyTrend, setDailyTrend] = useState<HomeDailyTrend | null>(null);
   const [monthlyTrend, setMonthlyTrend] = useState<HomeMonthlyTrend | null>(null);
@@ -145,6 +264,8 @@ export function HomePage() {
       setMonthFromDate(data.month_from_date || '');
       setMonthT1Date(data.month_t1_date || '');
       setMonthT1Revenue(data.month_t1_revenue_cny ?? 0);
+      setMonthT1WechatRevenue(data.month_t1_wechat_revenue_cny ?? 0);
+      setMonthT1DouyinRevenue(data.month_t1_douyin_revenue_cny ?? 0);
       setDailyFromDate(data.daily_from_date || '');
       setDailyTrend(data.daily_trend || null);
       setMonthlyTrend(data.monthly_trend || null);
@@ -163,74 +284,37 @@ export function HomePage() {
   }, [load]);
 
   const maxTotal = Math.max(1, ...games.map((g) => g.total_dau));
-
   const isDaily = revenueGranularity === 'day';
-  const revenueChartOption = useMemo<EChartsOption>(() => {
-    const buckets = isDaily ? dailyTrend?.days || [] : monthlyTrend?.months || [];
-    const gameSeries = isDaily ? dailyTrend?.games || [] : monthlyTrend?.games || [];
-    const totals = isDaily ? dailyTrend?.total || [] : monthlyTrend?.total || [];
-    const selected: Record<string, boolean> = { 合计: true };
-    for (const game of gameSeries) selected[game.display_name] = false;
-    if (legendSelected) {
-      for (const [name, on] of Object.entries(legendSelected)) {
-        if (name in selected) selected[name] = on;
-      }
-    }
-    return {
-      tooltip: {
-        trigger: 'axis',
-        valueFormatter: (value) =>
-          typeof value === 'number' ? `${formatYuan(value)} 元` : String(value ?? ''),
-      },
-      legend: {
-        type: 'scroll',
-        top: 0,
-        right: 8,
-        selected,
-        selectedMode: true,
-      },
-      grid: { left: 8, right: 12, top: 24, bottom: 2, containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: buckets,
-        boundaryGap: false,
-        axisLabel: {
-          hideOverlap: true,
-          formatter: (value: string) => (isDaily ? formatDayLabel(value) : formatMonthLabel(value)),
-        },
-      },
-      yAxis: {
-        type: 'value',
-        name: '元',
-        min: 0,
-        axisLabel: {
-          formatter: (value: number) => (value >= 10000 ? `${(value / 10000).toFixed(1)}万` : String(value)),
-        },
-        splitLine: { lineStyle: { type: 'dashed' } },
-      },
-      series: [
-        {
-          name: '合计',
-          type: 'line' as const,
-          smooth: 0.35,
-          showSymbol: true,
-          symbolSize: isDaily ? 6 : 8,
-          z: 3,
-          lineStyle: { width: 3, type: 'solid' as const },
-          itemStyle: { color: '#b45309' },
-          areaStyle: { opacity: 0.16 },
-          data: totals,
-        },
-        ...gameSeries.map((game) => ({
-          name: game.display_name,
-          type: 'line' as const,
-          smooth: 0.35,
-          showSymbol: true,
-          symbolSize: 7,
-          data: game.revenue,
-        })),
-      ],
-    };
+  const monthHint =
+    monthFromDate && monthT1Date ? `${monthFromDate} ~ ${monthT1Date}` : '当月截至昨天，不含今日';
+  const chartHint = isDaily
+    ? `${dailyFromDate && monthT1Date ? `${dailyFromDate} ~ ${monthT1Date}` : '截止昨天'} · 默认只看合计`
+    : '默认只看合计 · 当月按 T-1 · 点图例可对比单款游戏';
+
+  const monthByChannel: Record<RevenueChannel, number> = {
+    total: monthT1Revenue,
+    wechat: monthT1WechatRevenue,
+    douyin: monthT1DouyinRevenue,
+  };
+
+  const chartOptions = useMemo(() => {
+    const channels: RevenueChannel[] = ['total', 'wechat', 'douyin'];
+    return Object.fromEntries(
+      channels.map((channel) => {
+        const picked = pickChannelTrend(channel, dailyTrend, monthlyTrend, isDaily);
+        return [
+          channel,
+          buildRevenueChartOption({
+            channel,
+            isDaily,
+            buckets: picked.buckets,
+            games: picked.games,
+            totals: picked.totals,
+            legendSelected,
+          }),
+        ];
+      }),
+    ) as Record<RevenueChannel, EChartsOption>;
   }, [dailyTrend, isDaily, legendSelected, monthlyTrend]);
 
   const openGamePlatform = (gameKey: string, platform: PlatformFilter) => {
@@ -250,18 +334,6 @@ export function HomePage() {
             {dateKey || '—'} · 按日活降序 · 点平台进看板
           </Text>
         </div>
-        <div className="home-month-revenue" aria-label="当月截至昨天总收益">
-          <div className="home-month-revenue-main">
-            <span className="home-month-revenue-label">当月 T-1</span>
-            <span className="home-month-revenue-num mono">{formatYuan(monthT1Revenue)}</span>
-            <span className="home-month-revenue-unit">元</span>
-          </div>
-          <Text type="secondary" className="home-month-revenue-hint">
-            {monthFromDate && monthT1Date
-              ? `${monthFromDate} ~ ${monthT1Date}`
-              : '微信流量主真实收入，不含今日'}
-          </Text>
-        </div>
         <Space className="home-topbar-actions">
           <Text type="secondary" className="home-meta">
             {computedAt ? new Date(computedAt).toLocaleTimeString('zh-CN') : '—'}
@@ -279,9 +351,7 @@ export function HomePage() {
               {isDaily ? '近一月日收益 · T-1' : '近一年月度收益'}
             </span>
             <Text type="secondary" className="home-month-chart-hint">
-              {isDaily
-                ? `${dailyFromDate && monthT1Date ? `${dailyFromDate} ~ ${monthT1Date}` : '截止昨天'} · 默认只看合计`
-                : '默认只看合计 · 当月按 T-1 · 点图例可对比单款游戏'}
+              {chartHint}
             </Text>
           </div>
           <Segmented
@@ -294,20 +364,40 @@ export function HomePage() {
             onChange={(next) => setRevenueGranularity(next as RevenueGranularity)}
           />
         </div>
-        {(isDaily ? dailyTrend?.days.length : monthlyTrend?.months.length) ? (
-          <ReactECharts
-            option={revenueChartOption}
-            height={148}
-            framed={false}
-            onEvents={{
-              legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
-                setLegendSelected(event.selected || null);
-              },
-            }}
-          />
-        ) : (
-          <div className="home-month-chart-empty">{isDaily ? '暂无日收益' : '暂无月度收益'}</div>
-        )}
+        <div className="home-revenue-grid">
+          {(['total', 'wechat', 'douyin'] as const).map((channel) => {
+            const meta = CHANNEL_META[channel];
+            const picked = pickChannelTrend(channel, dailyTrend, monthlyTrend, isDaily);
+            return (
+              <section key={channel} className={`home-revenue-panel home-revenue-${channel}`}>
+                <div className="home-revenue-panel-head">
+                  <div className="home-revenue-panel-title-row">
+                    <span className="home-revenue-panel-title">{meta.title}</span>
+                    <span className="home-revenue-panel-num mono">{formatYuan(monthByChannel[channel])}</span>
+                    <span className="home-revenue-panel-unit">元</span>
+                  </div>
+                  <Text type="secondary" className="home-revenue-panel-hint">
+                    当月 T-1 · {monthHint}
+                  </Text>
+                </div>
+                {picked.buckets.length ? (
+                  <ReactECharts
+                    option={chartOptions[channel]}
+                    height={148}
+                    framed={false}
+                    onEvents={{
+                      legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
+                        setLegendSelected(event.selected || null);
+                      },
+                    }}
+                  />
+                ) : (
+                  <div className="home-month-chart-empty">{isDaily ? meta.empty : meta.empty}</div>
+                )}
+              </section>
+            );
+          })}
+        </div>
       </div>
 
       {error && (
@@ -316,8 +406,7 @@ export function HomePage() {
 
       <Spin spinning={loading && games.length === 0}>
         <div className="home-game-grid">
-          {games.map((game, index) => {
-            const rank = index + 1;
+          {games.map((game) => {
             const heat = Math.min(1, game.total_dau / maxTotal);
             const platformDauMax = Math.max(1, ...game.platforms.map((p) => p.dau));
             const platformAdMax = Math.max(1, ...game.platforms.map((p) => p.ad_show_cnt || 0));
@@ -329,9 +418,7 @@ export function HomePage() {
               >
                 <header className="home-game-card-head">
                   <div className="home-game-card-title-row">
-                    <span className="home-game-rank" aria-hidden>
-                      {rank}
-                    </span>
+                    <GameIcon gameKey={game.game_key} name={game.display_name} />
                     <h2 className="home-game-name">{game.display_name}</h2>
                   </div>
                   <div className="home-game-kpis">

@@ -9,6 +9,7 @@
  *   1. 这里加一行
  *   2. 真正接入了 SDK 就把 hasAnalyticsSdk 翻 true（首页卡片、cron 拉取、业务选择器一起生效；同时云函数 ANALYTICS_GAME_KEYS 加该 key）
  *   3. 还需要老链路存档差分时把 hasSnapshotIngest 翻 true
+ *   4. 首页图标：把正方形图标放到 public/game-icons/{gameKey}.png，没有则用 default.svg
  */
 
 /**

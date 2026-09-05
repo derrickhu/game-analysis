@@ -1,5 +1,5 @@
-import type { WechatPublisherGameMapping } from './config/wechat-publisher';
-import { getExternalApiToken, upsertExternalApiToken } from './external-token-store';
+import type { WechatPublisherGameMapping } from './config';
+import { getExternalApiToken, upsertExternalApiToken } from '../../external-token-store';
 
 interface WechatAccessTokenCacheEntry {
   accessToken: string;

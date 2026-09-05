@@ -188,6 +188,7 @@ async function ingestMapping(mapping: TencentAdsGameMapping, fromDate: string, t
         // 微信真实收入/曝光来自流量主后台或后续收入接口，腾讯投放接口不能覆盖这两个口径。
         wechat_ad_revenue_cny: Number(existing?.wechat_ad_revenue_cny || 0),
         wechat_ad_impressions: Number(existing?.wechat_ad_impressions || 0),
+        douyin_ad_revenue_cny: Number(existing?.douyin_ad_revenue_cny || 0),
         acquisition_impressions: row.hasImpressions ? row.impressions : Number(existing?.acquisition_impressions || 0),
         acquisition_activations: row.hasActivations ? row.activations : Number(existing?.acquisition_activations || 0),
         acquisition_source: 'tencent_ads',

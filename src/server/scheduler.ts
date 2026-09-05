@@ -8,7 +8,8 @@ import { ingestEventsForGame } from './jobs/ingest-events';
 import { cleanExpiredEvents } from './jobs/clean-expired-events';
 import { ingestTencentAdsBusinessInputs } from './jobs/ingest-tencent-ads';
 import { ingestTencentAdsInsights } from './jobs/ingest-tencent-ads-insights';
-import { ingestWechatPublisherBusinessInputs } from './jobs/ingest-wechat-publisher';
+import { ingestDouyinPublisherBusinessInputs } from './publisher/douyin/ingest';
+import { ingestWechatPublisherBusinessInputs } from './publisher/wechat/ingest';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { ingestHotpotSnapshots } from './jobs/ingest-hotpot-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
@@ -268,6 +269,32 @@ export function startScheduler(): void {
     void runWechatPublisherIngest('startup');
   }, 15_000);
 
+  // 10) 抖音流量主日报：广告变现 ad/income/query（分成后，元），与微信分列落库后汇总到首页 T-1。
+  const douyinPublisherCron = process.env.DOUYIN_PUBLISHER_INGEST_CRON || '20 10,16,23 * * *';
+  const runDouyinPublisherIngest = async (trigger: 'cron' | 'startup') => {
+    try {
+      const result = await ingestDouyinPublisherBusinessInputs({ triggerSource: trigger });
+      const summary = result.games
+        .map((game) =>
+          game.error
+            ? `${game.game_key}:${game.app_id}:error=${game.error}`
+            : `${game.game_key}:${game.app_id}:fetched=${game.fetched_rows},raw=${game.saved_raw_rows},business=${game.saved_business_rows}`,
+        )
+        .join('; ');
+      console.log(
+        `[scheduler] douyin_publisher(${trigger}) range=${result.from_date}~${result.to_date} ok=${result.ok} ${summary}`,
+      );
+    } catch (error) {
+      console.error(`[scheduler] 抖音流量主自动补录失败 (${trigger}):`, error);
+    }
+  };
+  cron.schedule(douyinPublisherCron, () => {
+    void runDouyinPublisherIngest('cron');
+  });
+  setTimeout(() => {
+    void runDouyinPublisherIngest('startup');
+  }, 20_000);
+
   const enabledKeys = getEnabledAnalyticsGames().map((g) => g.gameKey);
   console.log(
     `[scheduler] started: snapshots(games=${GAME_CONFIGS.length}), ` +
@@ -276,6 +303,6 @@ export function startScheduler(): void {
       `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d), ` +
       `ltv_recompute(cron=${ltvCron}), level_pass_rate(cron=${levelPassRateCron}), ` +
       `tencent_ads(cron=${tencentAdsCron}), tencent_ads_insights(cron=${tencentAdsInsightsCron}), ` +
-      `wechat_publisher(cron=${wechatPublisherCron})`,
+      `wechat_publisher(cron=${wechatPublisherCron}), douyin_publisher(cron=${douyinPublisherCron})`,
   );
 }
