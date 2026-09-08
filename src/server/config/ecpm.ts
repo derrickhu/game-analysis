@@ -58,6 +58,13 @@ const ECPM_TABLE: Record<string, number> = {
   'wujin_wenzhang.reward': 25,
   'wujin_wenzhang._default': 15,
 
+  // jiancai（扫荡菜场）
+  'jiancai.reward.basket': 24,
+  'jiancai.reward.stamina': 24,
+  'jiancai.reward.special': 26,
+  'jiancai.reward': 25,
+  'jiancai._default': 15,
+
   // xiaochu
   'xiaochu.reward.staminaRecovery': 24,
   'xiaochu.reward.signDouble': 24,

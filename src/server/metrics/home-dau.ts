@@ -25,6 +25,8 @@ export interface HomePlatformDau {
   label: string;
   dau: number;
   ad_show_cnt: number;
+  /** 该平台昨天（T-1）流量主真实收入，元；TapTap 暂无官方接口，固定 0 */
+  t1_revenue_cny: number;
 }
 
 export interface HomeGameDau {
@@ -261,13 +263,28 @@ export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
     if (!(HOME_PLATFORMS as readonly string[]).includes(row.platform)) continue;
     adShowMap.set(`${row.game_key}\0${row.platform}`, row.ad_show_cnt);
   }
+  const t1RevenueByGame = new Map<string, { wechat_cny: number; douyin_cny: number }>();
+  for (const row of dailyRows) {
+    if (row.date_key !== monthT1Date) continue;
+    t1RevenueByGame.set(row.game_key, {
+      wechat_cny: row.wechat_cny,
+      douyin_cny: row.douyin_cny,
+    });
+  }
 
   const games: HomeGameDau[] = enabled.map((g) => {
+    const t1Channel = t1RevenueByGame.get(g.gameKey);
     const platforms: HomePlatformDau[] = HOME_PLATFORMS.map((platform) => ({
       platform,
       label: PLATFORM_LABEL[platform],
       dau: dauMap.get(`${g.gameKey}\0${platform}`) || 0,
       ad_show_cnt: adShowMap.get(`${g.gameKey}\0${platform}`) || 0,
+      t1_revenue_cny:
+        platform === 'wechat'
+          ? t1Channel?.wechat_cny || 0
+          : platform === 'douyin'
+            ? t1Channel?.douyin_cny || 0
+            : 0,
     }));
     const total_dau = platforms.reduce((sum, p) => sum + p.dau, 0);
     const total_ad_show = platforms.reduce((sum, p) => sum + p.ad_show_cnt, 0);

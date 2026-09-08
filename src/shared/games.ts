@@ -132,6 +132,15 @@ export const ALL_GAMES: GameDescriptor[] = [
     gameplayPanels: ['level_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'cunkou' },
   },
+  {
+    gameKey: 'jiancai',
+    displayName: '扫荡菜场',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    // 经营/出门局，走 quest + tutorial 漏斗；玩法面板后续再补
+    gameplayPanels: [],
+    monetization: { ads: true, iap: false, ecpmProfile: 'jiancai' },
+  },
 ];
 
 export function getGameDescriptor(gameKey: string): GameDescriptor | undefined {

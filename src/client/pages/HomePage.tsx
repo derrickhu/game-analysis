@@ -18,6 +18,7 @@ interface HomePlatformDau {
   label: string;
   dau: number;
   ad_show_cnt: number;
+  t1_revenue_cny: number;
 }
 
 interface HomeGameDau {
@@ -213,15 +214,17 @@ function PlatformMetric({
   value,
   max,
 }: {
-  kind: 'dau' | 'ad';
+  kind: 'dau' | 'ad' | 'rev';
   value: number;
   max: number;
 }) {
+  const label = kind === 'dau' ? '日活' : kind === 'ad' ? '曝光' : 'T-1';
+  const display = kind === 'rev' ? formatYuan(value) : formatCount(value);
   return (
     <span className={`home-metric home-metric-${kind}`}>
       <span className="home-metric-head">
-        <span className="home-metric-k">{kind === 'dau' ? '日活' : '曝光'}</span>
-        <span className="home-metric-v mono">{formatCount(value)}</span>
+        <span className="home-metric-k">{label}</span>
+        <span className="home-metric-v mono">{display}</span>
       </span>
       <span className="home-platform-bar-track" aria-hidden>
         <span className="home-platform-bar-fill" style={{ width: `${barPct(value, max)}%` }} />
@@ -410,6 +413,7 @@ export function HomePage() {
             const heat = Math.min(1, game.total_dau / maxTotal);
             const platformDauMax = Math.max(1, ...game.platforms.map((p) => p.dau));
             const platformAdMax = Math.max(1, ...game.platforms.map((p) => p.ad_show_cnt || 0));
+            const platformRevMax = Math.max(1, ...game.platforms.map((p) => p.t1_revenue_cny || 0));
             return (
               <article
                 key={game.game_key}
@@ -443,12 +447,13 @@ export function HomePage() {
                       key={p.platform}
                       type="button"
                       className={`home-platform-row home-platform-${p.platform}`}
-                      aria-label={`${p.label} 日活 ${formatCount(p.dau)}，曝光 ${formatCount(p.ad_show_cnt || 0)}`}
+                      aria-label={`${p.label} 日活 ${formatCount(p.dau)}，曝光 ${formatCount(p.ad_show_cnt || 0)}，T-1 ${formatYuan(p.t1_revenue_cny || 0)} 元`}
                       onClick={() => openGamePlatform(game.game_key, p.platform)}
                     >
                       <span className="home-platform-label">{p.label}</span>
                       <PlatformMetric kind="dau" value={p.dau} max={platformDauMax} />
                       <PlatformMetric kind="ad" value={p.ad_show_cnt || 0} max={platformAdMax} />
+                      <PlatformMetric kind="rev" value={p.t1_revenue_cny || 0} max={platformRevMax} />
                     </button>
                   ))}
                 </div>

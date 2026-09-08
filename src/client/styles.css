@@ -534,7 +534,7 @@ code,
 
 .home-game-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
   gap: 10px;
 }
 
@@ -670,7 +670,7 @@ code,
 
 .home-platform-row {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.05fr);
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -700,6 +700,10 @@ code,
   font-size: 12px;
   font-weight: 650;
   color: var(--ga-text-secondary);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .home-metric {
@@ -709,8 +713,9 @@ code,
   min-width: 0;
 }
 
-.home-metric-ad {
-  padding-left: 12px;
+.home-metric-ad,
+.home-metric-rev {
+  padding-left: 10px;
   border-left: 1px solid rgba(15, 23, 42, 0.08);
 }
 
@@ -739,6 +744,11 @@ code,
 .home-metric-ad .home-metric-k,
 .home-metric-ad .home-metric-v {
   color: #0f766e;
+}
+
+.home-metric-rev .home-metric-k,
+.home-metric-rev .home-metric-v {
+  color: #b45309;
 }
 
 .home-platform-bar-track {
@@ -770,6 +780,10 @@ code,
   background: linear-gradient(90deg, #0f766e, #2dd4bf);
 }
 
+.home-metric-rev .home-platform-bar-fill {
+  background: linear-gradient(90deg, #b45309, #f59e0b);
+}
+
 .home-empty {
   padding: 48px 16px;
   text-align: center;
@@ -779,7 +793,7 @@ code,
 
 @media (min-width: 1440px) {
   .home-game-grid {
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
     gap: 10px;
   }
 }
