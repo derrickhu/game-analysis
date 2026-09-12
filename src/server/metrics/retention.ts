@@ -1,11 +1,10 @@
 import { getMysqlPool } from '../db';
 import { toLocalDateKey } from './ltv';
-import { PLATFORM_SQL, normalizePlatformFilter, platformSqlParams } from './platform-filter';
+import { PLATFORM_SQL, PRECOMPUTE_PLATFORMS, normalizePlatformFilter, platformSqlParams } from './platform-filter';
 
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
-/** 全局筛选只提供微信/抖音，预聚合按这两个平台分别落库，查询直接读表。 */
-const RETENTION_PRECOMPUTE_PLATFORMS = ['wechat', 'douyin', 'taptap'] as const;
+/** 预聚合按各渠道分别落库，查询直接读表。 */
 
 export type RetentionDeviceType = 'iOS' | 'Android' | 'HarmonyOS' | 'iPad' | 'Android Pad' | 'Unknown';
 
@@ -671,7 +670,7 @@ export async function recomputeRetentionCohorts(
   const toDate = options.toDate || addDays(today, -1);
   const fromDate = options.fromDate || addDays(toDate, -30);
   let inserted = 0;
-  for (const platform of RETENTION_PRECOMPUTE_PLATFORMS) {
+  for (const platform of PRECOMPUTE_PLATFORMS) {
     const cohortDates = await listCohortDatesInRange(gameKey, fromDate, toDate, platform);
     const cohorts = await mapWithConcurrency(cohortDates, 4, (cohortDate) =>
       getRetentionCohortOverview(gameKey, cohortDate, { maxAge, platform }),

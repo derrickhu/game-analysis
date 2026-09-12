@@ -13,8 +13,8 @@ export {
 export const PLATFORM_SQL = " AND (? = '' OR platform = ?)";
 
 /**
- * UI 全局筛选只提供微信/抖音；定时预聚合按这两个平台分别落库，
- * 查询默认读表，避免「有 platform 就实时重算」变成线上永远慢路径。
+ * 定时预聚合按各渠道分别落库，查询默认读表，
+ * 避免「有 platform 就实时重算」变成线上永远慢路径。
  */
-export const PRECOMPUTE_PLATFORMS = ['wechat', 'douyin', 'taptap'] as const;
-export type PrecomputePlatform = (typeof PRECOMPUTE_PLATFORMS)[number];
+export { CHANNEL_PLATFORMS as PRECOMPUTE_PLATFORMS } from '../../shared/platforms';
+export type { PlatformFilter as PrecomputePlatform } from '../../shared/platforms';

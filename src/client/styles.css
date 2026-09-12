@@ -776,6 +776,14 @@ code,
   background: linear-gradient(90deg, #0f172a, #475569);
 }
 
+.home-platform-taptap .home-metric-dau .home-platform-bar-fill {
+  background: linear-gradient(90deg, #15c5ce, #0d9488);
+}
+
+.home-platform-huawei .home-metric-dau .home-platform-bar-fill {
+  background: linear-gradient(90deg, #cf0a2c, #f43f5e);
+}
+
 .home-metric-ad .home-platform-bar-fill {
   background: linear-gradient(90deg, #0f766e, #2dd4bf);
 }

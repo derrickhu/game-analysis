@@ -1,3 +1,4 @@
+import { CHANNEL_PLATFORMS, PLATFORM_LABEL, type PlatformFilter } from '../../shared/platforms';
 import { getEnabledAnalyticsGames } from '../config/analytics-games';
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
 import {
@@ -8,7 +9,7 @@ import {
 } from '../ltv-db';
 
 /**
- * 经分主页：一次查出「今日」各游戏 × 微信/抖音的 DAU 与广告曝光。
+ * 经分主页：一次查出「今日」各游戏 × 各渠道的 DAU 与广告曝光。
  * - DAU 口径与 overview 一致：session_start + COALESCE(NULLIF(user_id,''), anonymous_id)
  * - 曝光口径与商业化看板一致：ad_show 事件次数（非去重用户）
  */
@@ -16,16 +17,16 @@ import {
 const USER_KEY_SQL = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
 const SESSION_START = 'session_start';
 const AD_SHOW = 'ad_show';
-const HOME_PLATFORMS = ['wechat', 'douyin', 'taptap'] as const;
+const HOME_PLATFORMS = CHANNEL_PLATFORMS;
 
-export type HomePlatform = (typeof HOME_PLATFORMS)[number];
+export type HomePlatform = PlatformFilter;
 
 export interface HomePlatformDau {
   platform: HomePlatform;
   label: string;
   dau: number;
   ad_show_cnt: number;
-  /** 该平台昨天（T-1）流量主真实收入，元；TapTap 暂无官方接口，固定 0 */
+  /** 该平台昨天（T-1）流量主真实收入，元；Tap / 华为暂无官方接口，固定 0 */
   t1_revenue_cny: number;
 }
 
@@ -85,12 +86,6 @@ export interface HomeDauResult {
   monthly_trend: HomeMonthlyTrend;
   games: HomeGameDau[];
 }
-
-const PLATFORM_LABEL: Record<HomePlatform, string> = {
-  wechat: '微信',
-  douyin: '抖音',
-  taptap: 'TapTap',
-};
 
 function startOfLocalDay(ts: number): number {
   const d = new Date(ts);
@@ -217,7 +212,7 @@ async function queryTodayAdShowRows(fromTs: number, toTs: number, gameKeys: stri
   }));
 }
 
-/** 组装主页矩阵：游戏按 total_dau 降序；平台固定微信→抖音。 */
+/** 组装主页矩阵：游戏按 total_dau 降序；平台固定微信→抖音→Tap→华为。 */
 export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
   const fromTs = startOfLocalDay(now);
   const toTs = now;
