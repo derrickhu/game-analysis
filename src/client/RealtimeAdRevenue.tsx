@@ -199,6 +199,17 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     level_prop_wildNext: '闯关道具 - 万能预备',
     classic_native_template: '经典模式 - 原生模板广告',
   },
+  petTower: {
+    victory_double: '结算翻倍',
+    victory_home: '结算回城',
+    quest_double: '日常翻倍',
+    battle_revive: '战斗复活',
+    realm_extra_run: '秘境加次',
+    stamina_refill: '体力回复',
+    free_gacha_pull: '免费召唤',
+    checkin_double: '签到翻倍',
+    tower_reset: '通天塔重置',
+  },
   xiaochu: {
     // 灵宠消消塔广告位定义见 xiao_chu/js/data/economyConfig.js 的 AD_REWARDS。
     revive: '战斗失败 - 局内复活',

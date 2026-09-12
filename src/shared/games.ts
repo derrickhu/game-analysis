@@ -33,6 +33,7 @@ export type GameplayPanelId =
   | 'huahua_growth'         // 花花等级成长 + 新手引导漏斗
   | 'huahua_engagement'     // 花花参与度（任务/签到/抽奖/熟客/合成）
   | 'caizhu_gameplay'       // 彩珠五连：入口/经典模式/道具/教程
+  | 'pet_tower_gameplay'    // 灵宠消消塔2：时长 / 广告经济 / 通天塔层漏斗（只服务 petTower）
   | 'match_progress';       // 消除关卡进度（caizhu 待补）
 
 /**
@@ -50,9 +51,10 @@ export interface GameDescriptor {
   /** 是否走老的玩家存档快照拉取链路（GAME_CONFIGS）；新游戏一律 false，逐步靠打点 SDK 替代 */
   hasSnapshotIngest: boolean;
   /**
-   * 玩法分析面板列表。
+   * 玩法分析面板列表。只渲染本游戏声明的 ID，其它游戏的专属面板不会出现。
    * 空数组（或未声明）= /business/gameplay 显示「该游戏暂无玩法分析模块」引导。
    * 多个 ID 时按声明顺序在页面纵向堆叠（一般每款游戏 1~3 个面板足够）。
+   * 游戏专属接口还必须按 gameKey 拒绝串调（见 /api/realtime/*-gameplay）。
    */
   gameplayPanels?: GameplayPanelId[];
   /** 通用商业化指标配置。LTV/ARPU/ARPDAU 等平台级指标只看这里，不写游戏专属逻辑。 */
@@ -105,8 +107,8 @@ export const ALL_GAMES: GameDescriptor[] = [
     displayName: '灵宠消消塔2',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
-    gameplayPanels: ['level_progress'],
-    monetization: { ads: false, iap: false, ecpmProfile: 'petTower' },
+    gameplayPanels: ['pet_tower_gameplay', 'level_progress'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'petTower' },
   },
   {
     gameKey: 'xiaochu',

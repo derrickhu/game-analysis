@@ -49,6 +49,7 @@ import {
   getHotpotFruitSliceOverview,
 } from '../metrics/realtime-hotpot-modes';
 import { getCaizhuGameplayOverview } from '../metrics/realtime-caizhu';
+import { getPetTowerGameplayOverview, PET_TOWER_GAME_KEY } from '../metrics/realtime-pettower';
 import { ingestHuahuaSnapshots } from '../jobs/ingest-huahua-snapshot';
 import { getHomeDau } from '../metrics/home-dau';
 import { getOverview } from '../metrics/realtime-overview';
@@ -1297,6 +1298,22 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
   app.get('/api/realtime/hotpot-progress', async (request) => {
     const query = (request.query || {}) as AdRevenueQuery;
     return buildLevelProgressResponse({ ...query, game: query.game || 'hotpot' });
+  });
+
+  // 灵宠消消塔2 专属：时长 / 广告经济 / 通天塔。其它游戏禁止走这条，避免串面板。
+  app.get('/api/realtime/pet-tower-gameplay', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || PET_TOWER_GAME_KEY;
+    if (gameKey !== PET_TOWER_GAME_KEY) {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'pet-tower-gameplay 当前只服务 petTower' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getPetTowerGameplayOverview(gameKey, fromTs, toTs, query.platform);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
+      ...result,
+    };
   });
 
   // 彩珠五连专属：入口、经典模式、道具、教程步骤聚合。

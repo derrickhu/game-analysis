@@ -10,6 +10,7 @@ import { HotpotDailyLimitedPanel } from './HotpotDailyLimitedPanel';
 import { HotpotFruitSlicePanel } from './HotpotFruitSlicePanel';
 import { LevelProgressPanel } from './LevelProgressPanel';
 import { OrderFunnelPanel } from './OrderFunnelPanel';
+import { PetTowerGameplayPanel } from './PetTowerGameplayPanel';
 
 /**
  * 玩法分析面板注册表：GameplayPanelId → 渲染组件 / 中文标题。
@@ -86,6 +87,11 @@ export const GAMEPLAY_PANEL_REGISTRY: Record<GameplayPanelId, GameplayPanelMeta>
     id: 'caizhu_gameplay',
     title: '彩珠玩法总览',
     Component: CaizhuGameplayPanel,
+  },
+  pet_tower_gameplay: {
+    id: 'pet_tower_gameplay',
+    title: '塔2时长 / 经济 / 通天塔',
+    Component: PetTowerGameplayPanel,
   },
   match_progress: {
     id: 'match_progress',
