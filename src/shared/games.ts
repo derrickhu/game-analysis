@@ -34,6 +34,8 @@ export type GameplayPanelId =
   | 'huahua_engagement'     // 花花参与度（任务/签到/抽奖/熟客/合成）
   | 'caizhu_gameplay'       // 彩珠五连：入口/经典模式/道具/教程
   | 'pet_tower_gameplay'    // 灵宠消消塔2：时长 / 广告经济 / 通天塔层漏斗（只服务 petTower）
+  | 'jiancai_gameplay'      // 扫荡菜场：新手引导 / 时长 / 出门局（只服务 jiancai）
+  | 'wujin_gameplay'        // 无尽纹章：新手漏斗 / 时长 / 章节无尽（只服务 wujin_wenzhang）
   | 'match_progress';       // 消除关卡进度（caizhu 待补）
 
 /**
@@ -123,7 +125,7 @@ export const ALL_GAMES: GameDescriptor[] = [
     displayName: '无尽纹章',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
-    gameplayPanels: ['level_progress'],
+    gameplayPanels: ['wujin_gameplay', 'level_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'wujin_wenzhang' },
   },
   {
@@ -139,8 +141,7 @@ export const ALL_GAMES: GameDescriptor[] = [
     displayName: '扫荡菜场',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
-    // 经营/出门局，走 quest + tutorial 漏斗；玩法面板后续再补
-    gameplayPanels: [],
+    gameplayPanels: ['jiancai_gameplay'],
     monetization: { ads: true, iap: false, ecpmProfile: 'jiancai' },
   },
 ];

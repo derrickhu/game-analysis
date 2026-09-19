@@ -1,6 +1,7 @@
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
 import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
+import { emptyDurationKpi, loadSessionDuration, type SessionDurationKpi } from './session-duration';
 
 /**
  * 实时综合看板（DAU / 新增 / 留存 / 活跃趋势）
@@ -46,6 +47,16 @@ export interface OverviewKpi {
   retention_anchor_date: string;
   /** 计算时刻：查询点的 ms 时间戳 */
   computed_at: number;
+  /**
+   * 人均在线时长（分钟）。全游戏标准口径：
+   * 相邻事件间隔 ≤5 分钟拼会话，单段短于 15 秒不计。
+   */
+  minutes_per_user: number;
+  avg_session_ms: number;
+  median_session_ms: number;
+  session_cnt: number;
+  play_users: number;
+  duration_source: SessionDurationKpi['duration_source'];
 }
 
 interface CohortStat {
@@ -94,12 +105,16 @@ export async function getOverview(
   const oneHourFrom = Math.max(toTs - 3_600_000, fromTs);
 
   // 并行计算各 KPI（SQLite 是同步驱动，所以并行收益很小，但代码组织上更清晰）
-  const [dau, active1h, newInWindow, retentionD1, retentionD7] = await Promise.all([
+  const [dau, active1h, newInWindow, retentionD1, retentionD7, duration] = await Promise.all([
     countDistinctUsers(gameKey, fromTs, toTs, SESSION_START, platform),
     countDistinctUsers(gameKey, oneHourFrom, toTs, undefined, platform), // 任意事件都算活跃
     countNewUsersInWindow(gameKey, fromTs, toTs, platform),
     cohortRetention(gameKey, d1CohortStart, d1CohortEnd, anchorDayStart, anchorDayEnd, platform),
     cohortRetention(gameKey, d7CohortStart, d7CohortEnd, anchorDayStart, anchorDayEnd, platform),
+    loadSessionDuration(gameKey, fromTs, toTs, platform).catch(() => ({
+      kpi: emptyDurationKpi(),
+      sessions: [],
+    })),
   ]);
 
   const series = await getActiveSeries(gameKey, fromTs, toTs, platform);
@@ -119,6 +134,12 @@ export async function getOverview(
       retention_d7_cohort_date: formatLocalDate(d7CohortStart),
       retention_anchor_date: formatLocalDate(anchorDayStart),
       computed_at: now,
+      minutes_per_user: duration.kpi.minutes_per_user,
+      avg_session_ms: duration.kpi.avg_session_ms,
+      median_session_ms: duration.kpi.median_session_ms,
+      session_cnt: duration.kpi.session_cnt,
+      play_users: duration.kpi.play_users,
+      duration_source: duration.kpi.duration_source,
     },
     series,
   };

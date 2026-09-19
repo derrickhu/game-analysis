@@ -83,7 +83,8 @@ export function platformToSnapshotPrefix(platform?: string | null): string {
  * 经分 gameKey 永远用基础名（huahua / hotpot / petTower），不要带 `_tt` / `_tap` / `_hw`。
  */
 export function playerDataCollection(gameKey: string, platform?: string | null): string {
-  const base = String(gameKey || '').trim() || 'game';
+  // CloudBase 集合名按 GAME_KEY.toLowerCase()：petTower → pettower_tt_playerData
+  const base = String(gameKey || '').trim().toLowerCase() || 'game';
   const p = normalizePlatformFilter(platform);
   if (p === 'douyin') return `${base}_tt_playerData`;
   if (p === 'taptap') return `${base}_tap_playerData`;

@@ -198,6 +198,10 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     level_prop_crossClear: '闯关道具 - 十字清场',
     level_prop_wildNext: '闯关道具 - 万能预备',
     classic_native_template: '经典模式 - 原生模板广告',
+    // 历史流水仍会出现：经典模式局末插屏 / 旧日奖与闯关结算位
+    classic_game_over: '经典模式 - 局末插屏',
+    daily_bonus: '每日奖励 - 看广告领取',
+    level_clear: '闯关结算 - 插屏',
   },
   petTower: {
     victory_double: '结算翻倍',
@@ -233,6 +237,33 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     trialContinue: '试炼塔 - 续打层数',
     poolPetReset: '灵宠重修 - 广告增强',
     unlockTeamPreset: '编队预设 - 解锁槽位',
+  },
+  // wujin_wenzhang 广告位 = srpg-rosa/src/platform/AdManager.ts AdScenario
+  wujin_wenzhang: {
+    extraDeploy: '上阵编成 - 看广告多上一人',
+    revive: '战斗失败 - 局内复活一名单位',
+    lootRefresh: '战利品三选一 - 看广告刷新选项',
+    shopRefresh: '商店节点 - 看广告刷新货架',
+    interstitial: '章节断点 - 插屏',
+    // eCPM 表里的旧规划名，源码已改为 extraDeploy / 未再打点
+    freeUnit: '上阵编成 - 看广告多上一人（历史）',
+    doubleStar: '结算加星（历史）',
+    dailyFreeRoll: '每日免费抽（历史）',
+  },
+  // cunkou 广告位 = code_1/src/core/AdDay.ts AdPlacement + 弹弓摊 stallPellets
+  cunkou: {
+    revive: '战斗失败 - 队灭原地复活',
+    settleDouble: '结算页 - 奖励翻倍',
+    stallPellets: '弹弓摊 - 看广告补弹子',
+    dailyGift: '每日首局 - 多带一件（历史）',
+    junkyard: '废品站 - 每日免费翻一件（历史）',
+    pileFill: '废品堆 - 一键涨满（历史）',
+  },
+  // jiancai 广告位 = jiancai-rosa/src/config/AdsConfig.ts RewardedAdScene
+  jiancai: {
+    basket: '菜篮 - 看广告解锁弹性格',
+    stamina: '体力不足 - 看广告回体力',
+    special: '特殊菜场 - 看广告出门',
   },
 };
 

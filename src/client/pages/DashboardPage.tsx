@@ -44,6 +44,11 @@ interface OverviewKpi {
   /** 留存锚点日（= 当前时间窗口结束日所在自然日） */
   retention_anchor_date?: string;
   computed_at: number;
+  minutes_per_user?: number;
+  avg_session_ms?: number;
+  median_session_ms?: number;
+  session_cnt?: number;
+  play_users?: number;
 }
 
 interface OverviewSeriesPoint {
@@ -460,6 +465,24 @@ export function DashboardPage() {
               <Statistic title="窗口活跃" value={overviewKpi?.dau ?? 0} suffix="人" />
             </Tooltip>
             <KpiDeltaText delta={deltaText(overviewKpi?.dau, previousKpi?.dau, { digits: 1 })} />
+          </Card>
+        </Col>
+        <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>
+          <Card className="kpi-card" style={kpiCardStyle} styles={kpiCardStyles}>
+            <Tooltip title="窗口内拼出有效会话的人，人均在线分钟。全游戏同一口径：相邻事件间隔 ≤5 分钟算一次会话，短于 15 秒不计。不是 session_end.duration_ms。">
+              <Statistic
+                title="人均时长"
+                value={overviewKpi?.minutes_per_user ?? 0}
+                suffix="分钟"
+                precision={1}
+              />
+            </Tooltip>
+            <Text type="secondary">
+              中位 {(overviewKpi?.median_session_ms ?? 0) > 0
+                ? `${((overviewKpi?.median_session_ms ?? 0) / 60_000).toFixed(1)} 分钟`
+                : '-'}
+            </Text>
+            <KpiDeltaText delta={deltaText(overviewKpi?.minutes_per_user, previousKpi?.minutes_per_user, { digits: 1 })} />
           </Card>
         </Col>
         <Col xs={12} md={6} xl={3} style={{ display: 'flex' }}>

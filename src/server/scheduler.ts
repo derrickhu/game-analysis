@@ -12,6 +12,7 @@ import { ingestDouyinPublisherBusinessInputs } from './publisher/douyin/ingest';
 import { ingestWechatPublisherBusinessInputs } from './publisher/wechat/ingest';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { ingestHotpotSnapshots } from './jobs/ingest-hotpot-snapshot';
+import { ingestPetTowerSnapshots } from './jobs/ingest-pettower-snapshot';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 import { recomputeRetentionCohorts } from './metrics/retention';
 import { recomputeLevelPassRates } from './metrics/level-pass-rate';
@@ -106,12 +107,14 @@ export function startScheduler(): void {
   //    通过 PLAYER_SNAPSHOT_CRON 环境变量可覆盖（如 '0 4 * * *'）
   const playerSnapshotCron = process.env.PLAYER_SNAPSHOT_CRON || '0 4 * * *';
   const snapshotRetentionDays = Math.max(7, Number(process.env.PLAYER_SNAPSHOT_RETENTION_DAYS) || 30);
-  const runPlayerSnapshotIngest = async (gameKey: 'huahua' | 'hotpot') => {
+  const runPlayerSnapshotIngest = async (gameKey: 'huahua' | 'hotpot' | 'petTower') => {
     try {
       console.log(`[scheduler] 开始拉取 ${gameKey} 玩家档案快照`);
       const result = gameKey === 'hotpot'
         ? await ingestHotpotSnapshots({ triggerSource: 'cron', retentionDays: snapshotRetentionDays })
-        : await ingestHuahuaSnapshots({ triggerSource: 'cron', retentionDays: snapshotRetentionDays });
+        : gameKey === 'petTower'
+          ? await ingestPetTowerSnapshots({ triggerSource: 'cron', retentionDays: snapshotRetentionDays })
+          : await ingestHuahuaSnapshots({ triggerSource: 'cron', retentionDays: snapshotRetentionDays });
       if (result.ok) {
         console.log(
           `[scheduler] 玩家快照 ${gameKey}: date=${result.snapshot_date} fetched=${result.fetched} ` +
@@ -128,6 +131,7 @@ export function startScheduler(): void {
   cron.schedule(playerSnapshotCron, async () => {
     await runPlayerSnapshotIngest('huahua');
     await runPlayerSnapshotIngest('hotpot');
+    await runPlayerSnapshotIngest('petTower');
   });
 
   // 5) 通用 LTV / user_daily 回算：默认每 15 分钟一次，但刻意错开整点/刻钟

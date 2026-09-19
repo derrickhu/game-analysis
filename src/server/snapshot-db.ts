@@ -20,7 +20,7 @@ import { toShanghaiDateKey } from './time';
 
 export { toShanghaiDateKey };
 
-const ALLOWED_GAME_KEYS = new Set(['huahua', 'hotpot']);
+const ALLOWED_GAME_KEYS = new Set(['huahua', 'hotpot', 'petTower']);
 
 /** 防 SQL 注入：拼接表名前必须经过白名单校验 */
 function ensureGameKey(gameKey: string): void {
@@ -62,7 +62,34 @@ export interface PlayerSnapshotRow {
   active_customer_count: number;
 }
 
-/** 别捞水果（hotpot）每日玩家快照扁平行 */
+/** 灵宠消消塔2（petTower）每日玩家快照扁平行 */
+export interface PetTowerPlayerSnapshotRow {
+  user_id: string;
+  snapshot_date: string;
+  snapshot_ts: number;
+  platform: string;
+  last_active_at: number;
+  coins: number;
+  lingyu: number;
+  tickets: number;
+  stamina: number;
+  owned_pet_count: number;
+  max_pet_level: number;
+  max_pet_star: number;
+  recruited_count: number;
+  stage_clear_count: number;
+  max_chapter: number;
+  tower_best_floor: number;
+  checkin_total_days: number;
+  checkin_streak_days: number;
+  tutorial_home_done: 0 | 1;
+  tutorial_drag_done: 0 | 1;
+  tutorial_flag_count: number;
+  desktop_added: 0 | 1;
+  sidebar_claimed: 0 | 1;
+  home_chapter: number;
+}
+
 export interface HotpotPlayerSnapshotRow {
   user_id: string;
   snapshot_date: string;
@@ -158,6 +185,38 @@ export async function initSnapshotStorage(): Promise<void> {
       PRIMARY KEY (user_id, snapshot_date),
       INDEX idx_date (snapshot_date),
       INDEX idx_date_coins (snapshot_date, coins)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  );
+
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS ${snapshotTable('petTower')} (
+      user_id              VARCHAR(128) NOT NULL,
+      snapshot_date        VARCHAR(10)  NOT NULL,
+      snapshot_ts          BIGINT       NOT NULL,
+      platform             VARCHAR(32)  NOT NULL DEFAULT '',
+      last_active_at       BIGINT       NOT NULL DEFAULT 0,
+      coins                BIGINT       NOT NULL DEFAULT 0,
+      lingyu               BIGINT       NOT NULL DEFAULT 0,
+      tickets              INT          NOT NULL DEFAULT 0,
+      stamina              INT          NOT NULL DEFAULT 0,
+      owned_pet_count      INT          NOT NULL DEFAULT 0,
+      max_pet_level        INT          NOT NULL DEFAULT 0,
+      max_pet_star         INT          NOT NULL DEFAULT 0,
+      recruited_count      INT          NOT NULL DEFAULT 0,
+      stage_clear_count    INT          NOT NULL DEFAULT 0,
+      max_chapter          INT          NOT NULL DEFAULT 0,
+      tower_best_floor     INT          NOT NULL DEFAULT 0,
+      checkin_total_days   INT          NOT NULL DEFAULT 0,
+      checkin_streak_days  INT          NOT NULL DEFAULT 0,
+      tutorial_home_done   TINYINT(1)   NOT NULL DEFAULT 0,
+      tutorial_drag_done   TINYINT(1)   NOT NULL DEFAULT 0,
+      tutorial_flag_count  INT          NOT NULL DEFAULT 0,
+      desktop_added        TINYINT(1)   NOT NULL DEFAULT 0,
+      sidebar_claimed      TINYINT(1)   NOT NULL DEFAULT 0,
+      home_chapter         INT          NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, snapshot_date),
+      INDEX idx_date (snapshot_date),
+      INDEX idx_date_clears (snapshot_date, stage_clear_count)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   );
 
@@ -269,6 +328,53 @@ export async function upsertHotpotPlayerSnapshots(rows: HotpotPlayerSnapshotRow[
         r.fruit_slice_best_score, r.fruit_slice_total_runs,
         r.gacha_total_pulls, r.bowl_tool_total,
         r.milk_tea_shop_level, r.milk_tea_total_clears,
+      );
+    }
+    const sql =
+      `INSERT INTO ${snapshotTable(gameKey)} (${cols.join(',')}) VALUES ` +
+      slice.map(() => placeholderRow).join(',') +
+      ` ON DUPLICATE KEY UPDATE ${updateSet}`;
+    await pool.query(sql, params);
+    total += slice.length;
+  }
+  return total;
+}
+
+/** petTower 专用批量 upsert */
+export async function upsertPetTowerPlayerSnapshots(rows: PetTowerPlayerSnapshotRow[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const gameKey = 'petTower';
+  ensureGameKey(gameKey);
+  const pool = await getMysqlPool();
+  const cols = [
+    'user_id', 'snapshot_date', 'snapshot_ts', 'platform', 'last_active_at',
+    'coins', 'lingyu', 'tickets', 'stamina',
+    'owned_pet_count', 'max_pet_level', 'max_pet_star', 'recruited_count',
+    'stage_clear_count', 'max_chapter', 'tower_best_floor',
+    'checkin_total_days', 'checkin_streak_days',
+    'tutorial_home_done', 'tutorial_drag_done', 'tutorial_flag_count',
+    'desktop_added', 'sidebar_claimed', 'home_chapter',
+  ];
+  const placeholderRow = `(${cols.map(() => '?').join(',')})`;
+  const updateSet = cols
+    .filter((c) => c !== 'user_id' && c !== 'snapshot_date')
+    .map((c) => `${c}=VALUES(${c})`)
+    .join(',');
+
+  const BATCH = 200;
+  let total = 0;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const slice = rows.slice(i, i + BATCH);
+    const params: unknown[] = [];
+    for (const r of slice) {
+      params.push(
+        r.user_id, r.snapshot_date, r.snapshot_ts, r.platform, r.last_active_at,
+        r.coins, r.lingyu, r.tickets, r.stamina,
+        r.owned_pet_count, r.max_pet_level, r.max_pet_star, r.recruited_count,
+        r.stage_clear_count, r.max_chapter, r.tower_best_floor,
+        r.checkin_total_days, r.checkin_streak_days,
+        r.tutorial_home_done, r.tutorial_drag_done, r.tutorial_flag_count,
+        r.desktop_added, r.sidebar_claimed, r.home_chapter,
       );
     }
     const sql =

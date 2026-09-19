@@ -45,11 +45,18 @@ import {
 } from '../metrics/realtime-hotpot-snapshot';
 import { ingestHotpotSnapshots } from '../jobs/ingest-hotpot-snapshot';
 import {
+  getPetTowerSnapshotOverview,
+  listPetTowerPlayerSnapshots,
+} from '../metrics/realtime-pettower-snapshot';
+import { ingestPetTowerSnapshots } from '../jobs/ingest-pettower-snapshot';
+import {
   getHotpotDailyLimitedOverview,
   getHotpotFruitSliceOverview,
 } from '../metrics/realtime-hotpot-modes';
 import { getCaizhuGameplayOverview } from '../metrics/realtime-caizhu';
+import { getJiancaiGameplayOverview, JIANCAI_GAME_KEY } from '../metrics/realtime-jiancai';
 import { getPetTowerGameplayOverview, PET_TOWER_GAME_KEY } from '../metrics/realtime-pettower';
+import { getWujinGameplayOverview, WUJIN_GAME_KEY } from '../metrics/realtime-wujin';
 import { ingestHuahuaSnapshots } from '../jobs/ingest-huahua-snapshot';
 import { getHomeDau } from '../metrics/home-dau';
 import { getOverview } from '../metrics/realtime-overview';
@@ -1316,6 +1323,38 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     };
   });
 
+  // 无尽纹章专属：新手漏斗 / 时长 / 章节无尽。其它游戏禁止走这条。
+  app.get('/api/realtime/wujin-gameplay', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || WUJIN_GAME_KEY;
+    if (gameKey !== WUJIN_GAME_KEY) {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'wujin-gameplay 当前只服务 wujin_wenzhang' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getWujinGameplayOverview(gameKey, fromTs, toTs, query.platform);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
+      ...result,
+    };
+  });
+
+  // 扫荡菜场专属：新手引导 / 时长 / 出门局。其它游戏禁止走这条。
+  app.get('/api/realtime/jiancai-gameplay', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || JIANCAI_GAME_KEY;
+    if (gameKey !== JIANCAI_GAME_KEY) {
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'jiancai-gameplay 当前只服务 jiancai' };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    const result = await getJiancaiGameplayOverview(gameKey, fromTs, toTs, query.platform);
+    return {
+      ok: true,
+      query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
+      ...result,
+    };
+  });
+
   // 彩珠五连专属：入口、经典模式、道具、教程步骤聚合。
   app.get('/api/realtime/caizhu-gameplay', async (request) => {
     const query = (request.query || {}) as AdRevenueQuery;
@@ -1462,19 +1501,21 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
    * 玩家档案快照分析：默认查最新 snapshot_date 的横切面 + 最近 30 天每日趋势。
    * 与 5 分钟事件流互补：事件流看"做了什么"，快照看"现在是什么状态"。
    */
-  const SNAPSHOT_OVERVIEW_GAMES = new Set(['huahua', 'hotpot']);
+  const SNAPSHOT_OVERVIEW_GAMES = new Set(['huahua', 'hotpot', 'petTower']);
   /** 玩家档案 user_id 前缀白名单，区别于埋点 platform（wechat/douyin/h5/all） */
-  const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'h5', 'anon']);
+  const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'tap', 'hw', 'h5', 'anon']);
 
   app.get('/api/realtime/huahua-snapshot', async (request) => {
     const query = (request.query || {}) as { game?: string; date?: string; platform?: string };
     const gameKey = query.game || 'huahua';
     if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
-      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot 当前支持 huahua / hotpot' };
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot 当前支持 huahua / hotpot / petTower' };
     }
     const result = gameKey === 'hotpot'
       ? await getHotpotSnapshotOverview(gameKey, query.date, query.platform)
-      : await getHuahuaSnapshotOverview(gameKey, query.date, query.platform);
+      : gameKey === 'petTower'
+        ? await getPetTowerSnapshotOverview(gameKey, query.date, query.platform)
+        : await getHuahuaSnapshotOverview(gameKey, query.date, query.platform);
     return {
       ok: true,
       ...result,
@@ -1515,10 +1556,12 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       minCoins?: string;
       maxCoins?: string;
       minBowlLevel?: string;
+      minClears?: string;
+      minTowerFloor?: string;
     };
     const gameKey = query.game || 'huahua';
     if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
-      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot/players 当前支持 huahua / hotpot' };
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'player-snapshot/players 当前支持 huahua / hotpot / petTower' };
     }
     // query.platform 这里语义是玩家档案 user_id 前缀（wx/dy/h5/anon），跟顶部全局筛选的埋点
     // platform（wechat/douyin/h5/all）不是一套编码。前端表格自身的平台筛选下拉已经传前缀值，
@@ -1539,6 +1582,22 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
         min_coins: query.minCoins ? Number(query.minCoins) : undefined,
         max_coins: query.maxCoins ? Number(query.maxCoins) : undefined,
         min_bowl_level: query.minBowlLevel ? Number(query.minBowlLevel) : undefined,
+      });
+      return { ok: true, ...result };
+    }
+    if (gameKey === 'petTower') {
+      const result = await listPetTowerPlayerSnapshots(gameKey, {
+        snapshot_date: query.date,
+        sort: query.sort,
+        order: query.order === 'asc' ? 'asc' : 'desc',
+        page: query.page ? Number(query.page) : undefined,
+        page_size: query.pageSize ? Number(query.pageSize) : undefined,
+        user_id_search: query.q,
+        platform: snapshotPlatform,
+        min_coins: query.minCoins ? Number(query.minCoins) : undefined,
+        max_coins: query.maxCoins ? Number(query.maxCoins) : undefined,
+        min_clears: query.minClears ? Number(query.minClears) : undefined,
+        min_tower_floor: query.minTowerFloor ? Number(query.minTowerFloor) : undefined,
       });
       return { ok: true, ...result };
     }
@@ -1569,7 +1628,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const body = (request.body || {}) as { game?: string; platform?: string; retentionDays?: number };
     const gameKey = body.game || 'huahua';
     if (!SNAPSHOT_OVERVIEW_GAMES.has(gameKey)) {
-      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'snapshot-now 当前支持 huahua / hotpot' };
+      return { ok: false, code: 'UNSUPPORTED_GAME', error: 'snapshot-now 当前支持 huahua / hotpot / petTower' };
     }
     const retentionDays =
       typeof body.retentionDays === 'number' && body.retentionDays > 0 ? body.retentionDays : undefined;
@@ -1579,11 +1638,17 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
           retentionDays,
           platform: body.platform,
         })
-      : await ingestHuahuaSnapshots({
-          triggerSource: 'manual',
-          retentionDays,
-          platform: body.platform,
-        });
+      : gameKey === 'petTower'
+        ? await ingestPetTowerSnapshots({
+            triggerSource: 'manual',
+            retentionDays,
+            platform: body.platform,
+          })
+        : await ingestHuahuaSnapshots({
+            triggerSource: 'manual',
+            retentionDays,
+            platform: body.platform,
+          });
     return result;
   });
 }

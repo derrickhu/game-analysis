@@ -3,6 +3,7 @@ import { Result, Space, Typography } from 'antd';
 import { getGameDescriptor } from '../../shared/games';
 import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { HotpotPlayerSnapshotPanel } from '../gameplay/HotpotPlayerSnapshotPanel';
+import { PetTowerPlayerSnapshotPanel } from '../gameplay/PetTowerPlayerSnapshotPanel';
 import { PlayerSnapshotPanel } from '../gameplay/PlayerSnapshotPanel';
 
 const { Text } = Typography;
@@ -19,9 +20,9 @@ const { Text } = Typography;
  *   - 快照与事件流是两条独立 ETL 链路，混在玩法分析 tab 里容易让人误以为它响应窗口选择
  *   - 快照看板的关注重心（教程停留分布 / 经济存量分桶 / 30 天人均趋势）也跟玩法漏斗维度不同
  *
- * 当前接入：huahua、hotpot（别捞水果）。
+ * 当前接入：huahua、hotpot（别捞水果）、petTower（灵宠消消塔2）。
  */
-const SNAPSHOT_SUPPORTED_GAMES = new Set(['huahua', 'hotpot']);
+const SNAPSHOT_SUPPORTED_GAMES = new Set(['huahua', 'hotpot', 'petTower']);
 
 export function PlayerSnapshotPage() {
   const { gameKey } = useAnalyticsFilter();
@@ -32,7 +33,7 @@ export function PlayerSnapshotPage() {
       <Result
         status="info"
         title={`${descriptor?.displayName ?? gameKey} 暂未接入玩家档案快照`}
-        subTitle="该游戏的玩家档案 DB 拉取链路还未配置；目前花花妙屋、别捞水果已接入每日全量快照分析。"
+        subTitle="该游戏的玩家档案 DB 拉取链路还未配置；目前花花妙屋、别捞水果、灵宠消消塔2已接入每日全量快照分析。"
         extra={
           <Space orientation="vertical" size="small" align="start">
             <Text type="secondary">
@@ -50,6 +51,14 @@ export function PlayerSnapshotPage() {
     return (
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <HotpotPlayerSnapshotPanel />
+      </Space>
+    );
+  }
+
+  if (gameKey === 'petTower') {
+    return (
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+        <PetTowerPlayerSnapshotPanel />
       </Space>
     );
   }

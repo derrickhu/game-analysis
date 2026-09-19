@@ -10,7 +10,9 @@ import { HotpotDailyLimitedPanel } from './HotpotDailyLimitedPanel';
 import { HotpotFruitSlicePanel } from './HotpotFruitSlicePanel';
 import { LevelProgressPanel } from './LevelProgressPanel';
 import { OrderFunnelPanel } from './OrderFunnelPanel';
+import { JiancaiGameplayPanel } from './JiancaiGameplayPanel';
 import { PetTowerGameplayPanel } from './PetTowerGameplayPanel';
+import { WujinGameplayPanel } from './WujinGameplayPanel';
 
 /**
  * 玩法分析面板注册表：GameplayPanelId → 渲染组件 / 中文标题。
@@ -92,6 +94,16 @@ export const GAMEPLAY_PANEL_REGISTRY: Record<GameplayPanelId, GameplayPanelMeta>
     id: 'pet_tower_gameplay',
     title: '塔2时长 / 经济 / 通天塔',
     Component: PetTowerGameplayPanel,
+  },
+  jiancai_gameplay: {
+    id: 'jiancai_gameplay',
+    title: '扫荡菜场新手 / 时长 / 出门局',
+    Component: JiancaiGameplayPanel,
+  },
+  wujin_gameplay: {
+    id: 'wujin_gameplay',
+    title: '无尽纹章新手 / 时长 / 章节',
+    Component: WujinGameplayPanel,
   },
   match_progress: {
     id: 'match_progress',
