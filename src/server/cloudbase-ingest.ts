@@ -1,8 +1,7 @@
-import tcb from '@cloudbase/node-sdk';
-
 import { createIngestRun, finishIngestRun, upsertRawSnapshot, upsertSnapshotHistory } from './db';
 import { normalizeSnapshotDoc } from './importers/snapshot-normalizer';
 import { recomputeDailyMetrics, recomputeHourlyMetrics } from './metrics';
+import { getTcbApp } from './tcb-client';
 
 export interface CloudbaseIngestOptions {
   env: string;
@@ -20,18 +19,6 @@ export interface CloudbaseIngestResult {
   metricHours: number;
 }
 
-function readCredentials() {
-  const secretId = process.env.TENCENTCLOUD_SECRET_ID || process.env.TENCENTCLOUD_SECRETID || '';
-  const secretKey = process.env.TENCENTCLOUD_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY || '';
-  const sessionToken = process.env.TENCENTCLOUD_SESSION_TOKEN || process.env.TENCENTCLOUD_TOKEN || '';
-
-  if (!secretId || !secretKey) {
-    throw new Error('缺少腾讯云密钥，请在 .env 设置 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY');
-  }
-
-  return { secretId, secretKey, sessionToken };
-}
-
 export async function ingestCloudbaseSnapshots(
   options: CloudbaseIngestOptions,
   onProgress?: (imported: number) => void,
@@ -40,15 +27,8 @@ export async function ingestCloudbaseSnapshots(
     throw new Error('缺少 CloudBase 环境 ID');
   }
 
-  const { secretId, secretKey, sessionToken } = readCredentials();
   const pageSize = options.pageSize && options.pageSize > 0 ? options.pageSize : 100;
-  const app = tcb.init({
-    env: options.env,
-    secretId,
-    secretKey,
-    // 临时密钥场景需要 sessionToken；长期只读子账号密钥可不填。
-    sessionToken: sessionToken || undefined,
-  });
+  const app = getTcbApp(options.env);
   const db = app.database();
   const runId = await createIngestRun(options.gameKey, options.collectionName);
   let offset = 0;

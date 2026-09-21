@@ -1,7 +1,6 @@
-import tcb from '@cloudbase/node-sdk';
-
 import { getMysqlPool } from '../db';
 import { findAnalyticsGame } from '../config/analytics-games';
+import { getTcbApp } from '../tcb-client';
 import {
   PLATFORM_SQL,
   PRECOMPUTE_PLATFORMS,
@@ -438,18 +437,7 @@ async function publishLevelPassRateSnapshot(
   if (!game) {
     throw new Error(`unknown analytics game: ${opts.gameKey}`);
   }
-  const secretId = process.env.TENCENTCLOUD_SECRET_ID || process.env.TENCENTCLOUD_SECRETID || '';
-  const secretKey = process.env.TENCENTCLOUD_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY || '';
-  const sessionToken = process.env.TENCENTCLOUD_SESSION_TOKEN || process.env.TENCENTCLOUD_TOKEN || '';
-  if (!secretId || !secretKey) {
-    throw new Error('缺少腾讯云密钥，请设置 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY');
-  }
-  const app = tcb.init({
-    env: game.cloudEnv,
-    secretId,
-    secretKey,
-    sessionToken: sessionToken || undefined,
-  });
+  const app = getTcbApp(game.cloudEnv);
   const snapshot: LevelPassRateSnapshot = {
     game_key: opts.gameKey,
     mode_key: MODE_KEY,

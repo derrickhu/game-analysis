@@ -1,0 +1,6 @@
+{
+  "envId": "rosa-env-d7grf78r5dbd37323",
+  "cloudrun": {
+    "name": "game-analysis"
+  }
+}

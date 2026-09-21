@@ -1,5 +1,3 @@
-import tcb from '@cloudbase/node-sdk';
-
 import { ANALYTICS_EVENTS_COLLECTION, ANALYTICS_GAMES } from '../config/analytics-games';
 import {
   countOldEvents,
@@ -7,6 +5,7 @@ import {
   recordCleanupRun,
   type CleanupRunRecord,
 } from '../analytics-db';
+import { getTcbApp } from '../tcb-client';
 
 /**
  * ── 设计要点 ──────────────────────────────────────────────────────────
@@ -139,24 +138,12 @@ export async function cleanExpiredEvents(options: CleanupOptions = {}): Promise<
   }
 
   // ── 云端 CloudDB ──
-  const secretId = process.env.TENCENTCLOUD_SECRET_ID || process.env.TENCENTCLOUD_SECRETID || '';
-  const secretKey = process.env.TENCENTCLOUD_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY || '';
-  if (!secretId || !secretKey) {
-    summary.cloudErrors.push('skip cloud cleanup: missing TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY');
-  } else {
-    const sessionToken = process.env.TENCENTCLOUD_SESSION_TOKEN || process.env.TENCENTCLOUD_TOKEN || '';
-
-    for (const game of ANALYTICS_GAMES) {
+  for (const game of ANALYTICS_GAMES) {
       try {
         // 白名单守卫：每个游戏循环都校验一次集合名，性能可忽略
         assertWhitelisted(ANALYTICS_EVENTS_COLLECTION, `cloud-${game.gameKey}`);
 
-        const app = tcb.init({
-          env: game.cloudEnv,
-          secretId,
-          secretKey,
-          sessionToken: sessionToken || undefined,
-        });
+        const app = getTcbApp(game.cloudEnv);
         const db = app.database();
         const _ = db.command;
 
@@ -196,7 +183,6 @@ export async function cleanExpiredEvents(options: CleanupOptions = {}): Promise<
         const msg = error instanceof Error ? error.message : String(error);
         summary.cloudErrors.push(`${game.gameKey}: ${msg}`);
       }
-    }
   }
 
   const finishedAt = Date.now();

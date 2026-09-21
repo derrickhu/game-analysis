@@ -15,9 +15,8 @@
  *   - 手动：POST /api/realtime/snapshot-now { game: 'huahua', platform: 'douyin' }
  */
 
-import tcb from '@cloudbase/node-sdk';
-
 import { findAnalyticsGame } from '../config/analytics-games';
+import { getTcbApp } from '../tcb-client';
 import {
   normalizePlatformFilter,
   platformToSnapshotPrefix,
@@ -69,17 +68,6 @@ export interface SnapshotIngestResult {
   /** 本次实际拉取的云集合（多源时逗号拼接） */
   collection_name?: string;
   error?: string;
-}
-
-/** 从 .env 读 CloudBase 凭证，与 cloudbase-ingest.ts 同款 */
-function readCredentials(): { secretId: string; secretKey: string; sessionToken?: string } {
-  const secretId = process.env.TENCENTCLOUD_SECRET_ID || process.env.TENCENTCLOUD_SECRETID || '';
-  const secretKey = process.env.TENCENTCLOUD_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY || '';
-  const sessionToken = process.env.TENCENTCLOUD_SESSION_TOKEN || process.env.TENCENTCLOUD_TOKEN || '';
-  if (!secretId || !secretKey) {
-    throw new Error('缺少腾讯云密钥，请在 .env 设置 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY');
-  }
-  return { secretId, secretKey, sessionToken: sessionToken || undefined };
 }
 
 // ============================================================
@@ -418,8 +406,7 @@ export async function ingestHuahuaSnapshots(options: {
   const errors: string[] = [];
 
   try {
-    const { secretId, secretKey, sessionToken } = readCredentials();
-    const app = tcb.init({ env, secretId, secretKey, sessionToken });
+    const app = getTcbApp(env);
     const db = app.database();
 
     for (const source of sources) {

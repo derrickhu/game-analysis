@@ -8,9 +8,8 @@
  * payload 里存档键仍是客户端 camelCase：`petTower_tt_save_v2`。
  */
 
-import tcb from '@cloudbase/node-sdk';
-
 import { findAnalyticsGame } from '../config/analytics-games';
+import { getTcbApp } from '../tcb-client';
 import { normalizePlatformFilter, playerDataCollection } from '../../shared/platforms';
 import {
   createSnapshotRun,
@@ -38,16 +37,6 @@ export interface PetTowerSnapshotIngestResult {
   trigger_source: 'cron' | 'manual';
   collection_name?: string;
   error?: string;
-}
-
-function readCredentials(): { secretId: string; secretKey: string; sessionToken?: string } {
-  const secretId = process.env.TENCENTCLOUD_SECRET_ID || process.env.TENCENTCLOUD_SECRETID || '';
-  const secretKey = process.env.TENCENTCLOUD_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY || '';
-  const sessionToken = process.env.TENCENTCLOUD_SESSION_TOKEN || process.env.TENCENTCLOUD_TOKEN || '';
-  if (!secretId || !secretKey) {
-    throw new Error('缺少腾讯云密钥，请在 .env 设置 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY');
-  }
-  return { secretId, secretKey, sessionToken: sessionToken || undefined };
 }
 
 function parseJsonString(value: unknown): Record<string, unknown> {
@@ -246,8 +235,7 @@ export async function ingestPetTowerSnapshots(options: {
   const collectionsUsed: string[] = [];
 
   try {
-    const { secretId, secretKey, sessionToken } = readCredentials();
-    const app = tcb.init({ env: game.cloudEnv, secretId, secretKey, sessionToken });
+    const app = getTcbApp(game.cloudEnv);
     const db = app.database();
 
     const tryOptionalCollection = async (

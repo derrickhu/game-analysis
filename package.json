@@ -28,6 +28,7 @@
   "license": "ISC",
   "dependencies": {
     "@cloudbase/node-sdk": "^3.18.1",
+    "@fastify/static": "^10.1.4",
     "@tanstack/react-table": "^8.21.3",
     "@vitejs/plugin-react": "^6.0.1",
     "antd": "^6.3.7",

@@ -10,7 +10,10 @@ import { installProcessLifecycleLogging, getProcessLogPath } from './process-lif
 
 installProcessLifecycleLogging();
 
+import fs from 'node:fs';
+import path from 'node:path';
 import Fastify from 'fastify';
+import fastifyStatic from '@fastify/static';
 
 import { getConfig } from './config';
 import { initializeStorage } from './db';
@@ -23,6 +26,22 @@ import { initSnapshotStorage } from './snapshot-db';
 
 const config = getConfig();
 const app = Fastify({ logger: true });
+
+function expectedBasicAuthorization(password: string): string {
+  return `Basic ${Buffer.from(`ga:${password}`).toString('base64')}`;
+}
+
+app.addHook('onRequest', async (request, reply) => {
+  const password = process.env.GA_ACCESS_PASSWORD;
+  if (!password) return;
+  const urlPath = (request.url || '').split('?')[0];
+  if (urlPath === '/api/health') return;
+  const header = request.headers.authorization || '';
+  if (header !== expectedBasicAuthorization(password)) {
+    reply.header('WWW-Authenticate', 'Basic realm="Game Analysis"');
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+});
 
 app.log.info({
   storageMode: config.storageMode,
@@ -71,23 +90,41 @@ app.post('/api/ingest/cloudbase', async (request) => {
   return { ok: true, ...result };
 });
 
-void registerRealtimeRoutes(app).catch((error) => {
-  app.log.error(error, '实时路由注册失败');
-});
+async function start(): Promise<void> {
+  await registerRealtimeRoutes(app);
 
-void initializeStorage()
-  .then(() => initSnapshotStorage())
-  .catch((error) => {
+  const distDir = path.join(config.rootDir, 'dist');
+  if (fs.existsSync(path.join(distDir, 'index.html'))) {
+    await app.register(fastifyStatic, {
+      root: distDir,
+      wildcard: false,
+    });
+    app.setNotFoundHandler((request, reply) => {
+      const urlPath = (request.url || '').split('?')[0];
+      if (urlPath.startsWith('/api/')) {
+        return reply.code(404).send({ error: 'Not Found' });
+      }
+      return reply.sendFile('index.html');
+    });
+  }
+
+  await app.listen({ port: config.apiPort, host: config.apiHost });
+  app.log.info(
+    { processLog: getProcessLogPath(), host: config.apiHost, port: config.apiPort },
+    '进程诊断日志已启用（uncaughtException / 信号 / 心跳）',
+  );
+
+  try {
+    await initializeStorage();
+    await initSnapshotStorage();
+  } catch (error) {
     app.log.error(error, '存储初始化失败');
     process.exit(1);
-  });
-startScheduler();
+  }
+  startScheduler();
+}
 
-app.listen({ port: config.apiPort, host: '127.0.0.1' })
-  .then(() => {
-    app.log.info({ processLog: getProcessLogPath() }, '进程诊断日志已启用（uncaughtException / 信号 / 心跳）');
-  })
-  .catch((error) => {
-    app.log.error(error, 'API 监听失败');
-    process.exit(1);
-  });
+void start().catch((error) => {
+  app.log.error(error, '服务启动失败');
+  process.exit(1);
+});

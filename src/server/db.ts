@@ -49,17 +49,20 @@ async function getPool(): Promise<mysql.Pool> {
   if (!/^[a-zA-Z0-9_$]+$/.test(config.mysql.database)) {
     throw new Error(`非法 MySQL 数据库名: ${config.mysql.database}`);
   }
-  const serverPool = mysql.createPool({
-    host: config.mysql.host,
-    port: config.mysql.port,
-    user: config.mysql.user,
-    password: config.mysql.password,
-    waitForConnections: true,
-    connectionLimit: 1,
-    connectTimeout: mysqlConnectTimeoutMs(),
-  });
-  await serverPool.query(`CREATE DATABASE IF NOT EXISTS \`${config.mysql.database}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-  await serverPool.end();
+  // 云托管账号通常只有目标库权限，建库由控制台/MCP 提前完成
+  if (process.env.MYSQL_SKIP_CREATE_DATABASE !== 'true') {
+    const serverPool = mysql.createPool({
+      host: config.mysql.host,
+      port: config.mysql.port,
+      user: config.mysql.user,
+      password: config.mysql.password,
+      waitForConnections: true,
+      connectionLimit: 1,
+      connectTimeout: mysqlConnectTimeoutMs(),
+    });
+    await serverPool.query(`CREATE DATABASE IF NOT EXISTS \`${config.mysql.database}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    await serverPool.end();
+  }
 
   mysqlPool = mysql.createPool({
     host: config.mysql.host,

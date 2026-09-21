@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+logs
+run
+.git
+.cursor
+.env
+.env.*
+*.md
+specs
+packages
+.DS_Store
+.codebuddy

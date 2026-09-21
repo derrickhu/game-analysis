@@ -12,6 +12,7 @@ export interface AppConfig {
   rootDir: string;
   dataDir: string;
   dbPath: string;
+  apiHost: string;
   apiPort: number;
   defaultGameKey: string;
   storageMode: 'mysql';
@@ -68,7 +69,9 @@ export function getConfig(): AppConfig {
     dbPath: process.env.GA_DB_PATH
       ? path.resolve(process.env.GA_DB_PATH)
       : path.join(dataDir, 'game-analysis.sqlite'),
-    apiPort: readNumber('GA_API_PORT', 8787),
+    // 云托管会注入 PORT；未注入时保持本地 127.0.0.1:8787，避免改掉本机 start.sh 行为
+    apiHost: process.env.GA_API_HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1'),
+    apiPort: readNumber('PORT', readNumber('GA_API_PORT', 8787)),
     defaultGameKey: process.env.GA_GAME_KEY || 'hotpot',
     storageMode: 'mysql',
     mysql: {

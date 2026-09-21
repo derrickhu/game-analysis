@@ -1,5 +1,3 @@
-import tcb from '@cloudbase/node-sdk';
-
 import {
   ANALYTICS_EVENTS_COLLECTION,
   findAnalyticsGame,
@@ -14,6 +12,7 @@ import {
   type AnalyticsEventRow,
 } from '../analytics-db';
 import { recomputeRealtimeAdMinute } from '../metrics/realtime-ad';
+import { getTcbApp } from '../tcb-client';
 
 const PAGE_SIZE = 200;
 const MAX_PAGES_PER_RUN = 25;
@@ -51,27 +50,6 @@ interface IngestSummary {
   cursorBefore: number;
   cursorAfter: number;
   newAdMinuteRows: number;
-}
-
-const tcbAppCache = new Map<string, ReturnType<typeof tcb.init>>();
-
-function getApp(envId: string) {
-  const cached = tcbAppCache.get(envId);
-  if (cached) return cached;
-  const secretId = process.env.TENCENTCLOUD_SECRET_ID || process.env.TENCENTCLOUD_SECRETID || '';
-  const secretKey = process.env.TENCENTCLOUD_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY || '';
-  const sessionToken = process.env.TENCENTCLOUD_SESSION_TOKEN || process.env.TENCENTCLOUD_TOKEN || '';
-  if (!secretId || !secretKey) {
-    throw new Error('缺少腾讯云密钥，请设置 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY');
-  }
-  const app = tcb.init({
-    env: envId,
-    secretId,
-    secretKey,
-    sessionToken: sessionToken || undefined,
-  });
-  tcbAppCache.set(envId, app);
-  return app;
 }
 
 // 客户端时钟漂移容忍上限：event_ts 最多比服务端"现在"超前 5 分钟。
@@ -137,7 +115,7 @@ function normalizeRawEvent(doc: RawCloudEvent): AnalyticsEventRow | null {
 export async function ingestEventsForGame(game: AnalyticsGameConfig): Promise<IngestSummary> {
   const startedAt = Date.now();
   const cursorBefore = await getCursor(game.gameKey);
-  const app = getApp(game.cloudEnv);
+  const app = getTcbApp(game.cloudEnv);
   const db = app.database();
   const _ = db.command;
 
