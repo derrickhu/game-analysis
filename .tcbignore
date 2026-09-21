@@ -1,0 +1,12 @@
+.env
+.env.*
+data
+logs
+run
+node_modules
+.git
+.cursor
+.codebuddy
+*.md
+specs
+packages

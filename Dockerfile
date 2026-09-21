@@ -15,9 +15,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+ENV GA_PUBLIC_BASE=/game-analysis/
 RUN npm run build
 
 ENV NODE_ENV=production
+ENV GA_BASIC_AUTH_PASSWORD=sss198821
 
 EXPOSE 8080
 

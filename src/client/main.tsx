@@ -17,10 +17,12 @@ import { HomePage } from './pages/HomePage';
 import { OpsPage } from './pages/OpsPage';
 import { PlayerSnapshotPage } from './pages/PlayerSnapshotPage';
 import { RetentionPage } from './pages/RetentionPage';
+import { getPublicBase, installPublicApiPrefix } from './publicBase';
 import { antdTheme, registerAnalyticsChartTheme } from './theme';
 import './styles.css';
 
 registerAnalyticsChartTheme();
+installPublicApiPrefix();
 
 /**
  * 路由结构（v7 createBrowserRouter）：
@@ -66,7 +68,7 @@ const router = createBrowserRouter([
     children: [{ index: true, element: <OpsPage /> }],
   },
   { path: '*', element: <Navigate to="/" replace /> },
-]);
+], { basename: getPublicBase() || undefined });
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

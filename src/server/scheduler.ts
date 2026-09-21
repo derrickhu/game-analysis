@@ -307,6 +307,7 @@ export function startScheduler(): void {
       `player_snapshot(cron=${playerSnapshotCron}, retention=${snapshotRetentionDays}d), ` +
       `ltv_recompute(cron=${ltvCron}), level_pass_rate(cron=${levelPassRateCron}), ` +
       `tencent_ads(cron=${tencentAdsCron}), tencent_ads_insights(cron=${tencentAdsInsightsCron}), ` +
-      `wechat_publisher(cron=${wechatPublisherCron}), douyin_publisher(cron=${douyinPublisherCron})`,
+      `wechat_publisher(cron=${wechatPublisherCron}, games=${getConfig().wechatPublisher.gameMappings.map((g) => g.gameKey).join(',') || '-'}), ` +
+      `douyin_publisher(cron=${douyinPublisherCron}, games=${getConfig().douyinPublisher.gameMappings.map((g) => g.gameKey).join(',') || '-'})`,
   );
 }

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 
-const DEFAULT_GAME_ICON = '/game-icons/default.svg';
+import { publicPath } from '../publicBase';
+
+const DEFAULT_GAME_ICON = publicPath('/game-icons/default.svg');
 
 export function gameIconSrc(gameKey: string): string {
-  return `/game-icons/${gameKey}.png`;
+  return publicPath(`/game-icons/${gameKey}.png`);
 }
 
 export function GameIcon({

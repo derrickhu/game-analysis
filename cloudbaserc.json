@@ -1,6 +1,17 @@
 {
   "envId": "rosa-env-d7grf78r5dbd37323",
   "cloudrun": {
-    "name": "game-analysis"
+    "name": "game-analysis",
+    "ignore": [
+      ".env",
+      ".env.*",
+      "data",
+      "logs",
+      "run",
+      "node_modules",
+      ".git",
+      ".cursor",
+      ".codebuddy"
+    ]
   }
 }

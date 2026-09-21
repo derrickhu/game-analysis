@@ -25,14 +25,29 @@ import { registerRealtimeRoutes } from './routes/realtime';
 import { initSnapshotStorage } from './snapshot-db';
 
 const config = getConfig();
-const app = Fastify({ logger: true });
+const PUBLIC_PREFIX = '/game-analysis';
+
+function stripPublicPrefix(url: string): string {
+  const q = url.indexOf('?');
+  const pathname = q >= 0 ? url.slice(0, q) : url;
+  const search = q >= 0 ? url.slice(q) : '';
+  if (pathname === PUBLIC_PREFIX || pathname.startsWith(`${PUBLIC_PREFIX}/`)) {
+    return `${pathname.slice(PUBLIC_PREFIX.length) || '/'}${search}`;
+  }
+  return url;
+}
+
+const app = Fastify({
+  logger: true,
+  rewriteUrl: (req) => stripPublicPrefix(req.url || '/'),
+});
 
 function expectedBasicAuthorization(password: string): string {
   return `Basic ${Buffer.from(`ga:${password}`).toString('base64')}`;
 }
 
 app.addHook('onRequest', async (request, reply) => {
-  const password = process.env.GA_ACCESS_PASSWORD;
+  const password = process.env.GA_BASIC_AUTH_PASSWORD || process.env.GA_ACCESS_PASSWORD;
   if (!password) return;
   const urlPath = (request.url || '').split('?')[0];
   if (urlPath === '/api/health') return;
@@ -108,12 +123,7 @@ async function start(): Promise<void> {
     });
   }
 
-  await app.listen({ port: config.apiPort, host: config.apiHost });
-  app.log.info(
-    { processLog: getProcessLogPath(), host: config.apiHost, port: config.apiPort },
-    '进程诊断日志已启用（uncaughtException / 信号 / 心跳）',
-  );
-
+  // 云托管探活看端口是否起来。必须先连上 MySQL，再 listen，避免探活 200 后进程因连库失败退出。
   try {
     await initializeStorage();
     await initSnapshotStorage();
@@ -121,6 +131,12 @@ async function start(): Promise<void> {
     app.log.error(error, '存储初始化失败');
     process.exit(1);
   }
+
+  await app.listen({ port: config.apiPort, host: config.apiHost });
+  app.log.info(
+    { processLog: getProcessLogPath(), host: config.apiHost, port: config.apiPort },
+    '进程诊断日志已启用（uncaughtException / 信号 / 心跳）',
+  );
   startScheduler();
 }
 
