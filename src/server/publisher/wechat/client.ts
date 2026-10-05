@@ -1,5 +1,6 @@
 import type { WechatPublisherGameMapping } from './config';
 import { getExternalApiToken, upsertExternalApiToken } from '../../external-token-store';
+import { resolveCanonicalGameKey } from '../../../shared/games';
 
 interface WechatAccessTokenCacheEntry {
   accessToken: string;
@@ -70,11 +71,16 @@ async function getAccessToken(mapping: WechatPublisherGameMapping): Promise<stri
     return cached.accessToken;
   }
 
+  const tokenGameKey = resolveCanonicalGameKey(mapping.gameKey);
   const stored = await getExternalApiToken({
+    provider: 'wechat_publisher',
+    gameKey: tokenGameKey,
+    subjectId: mapping.appId,
+  }) ?? (tokenGameKey === mapping.gameKey ? null : await getExternalApiToken({
     provider: 'wechat_publisher',
     gameKey: mapping.gameKey,
     subjectId: mapping.appId,
-  });
+  }));
   if (stored?.access_token && stored.expires_at > Date.now() + 60_000) {
     tokenCache.set(mapping.appId, {
       accessToken: stored.access_token,
@@ -104,7 +110,7 @@ async function getAccessToken(mapping: WechatPublisherGameMapping): Promise<stri
   });
   await upsertExternalApiToken({
     provider: 'wechat_publisher',
-    gameKey: mapping.gameKey,
+    gameKey: tokenGameKey,
     subjectId: mapping.appId,
     accessToken: json.access_token,
     expiresAt,

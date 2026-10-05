@@ -19,6 +19,8 @@ export interface AnalyticsGameConfig {
   cloudEnv: string;
   /** 是否已经接入 SDK 在产数据。false 时 cron 跳过该游戏，节省配额、保持 dashboard 干净 */
   enabled: boolean;
+  /** 云上实际出现过的 game_key，含自身。入库统一写成 gameKey。 */
+  sourceKeys: string[];
 }
 
 export const ANALYTICS_EVENTS_COLLECTION = 'analytics_events';
@@ -30,6 +32,7 @@ export const ANALYTICS_GAMES: AnalyticsGameConfig[] = ALL_GAMES.map((g) => ({
   displayName: g.displayName,
   cloudEnv: DEFAULT_CLOUD_ENV,
   enabled: g.hasAnalyticsSdk,
+  sourceKeys: [g.gameKey, ...(g.ingestGameKeys ?? [])],
 }));
 
 export function getAnalyticsGameKeys(): string[] {
@@ -41,5 +44,5 @@ export function getEnabledAnalyticsGames(): AnalyticsGameConfig[] {
 }
 
 export function findAnalyticsGame(gameKey: string): AnalyticsGameConfig | undefined {
-  return ANALYTICS_GAMES.find((g) => g.gameKey === gameKey);
+  return ANALYTICS_GAMES.find((g) => g.gameKey === gameKey || g.sourceKeys.includes(gameKey));
 }

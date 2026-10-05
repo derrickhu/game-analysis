@@ -57,7 +57,7 @@ interface IngestSummary {
 // 否则未来时间戳会污染小时桶——曾经触发过 ad_uau=1/active=1 ⇒ 渗透率被算成 100% 的发版误报。
 const FUTURE_EVENT_TS_TOLERANCE_MS = 5 * 60_000;
 
-function normalizeRawEvent(doc: RawCloudEvent): AnalyticsEventRow | null {
+function normalizeRawEvent(doc: RawCloudEvent, canonicalGameKey: string): AnalyticsEventRow | null {
   const eventId = (doc.event_id || doc._id || '').toString();
   if (!eventId) return null;
   if (!doc.event_name || typeof doc.event_name !== 'string') return null;
@@ -77,7 +77,7 @@ function normalizeRawEvent(doc: RawCloudEvent): AnalyticsEventRow | null {
     event_name: String(doc.event_name),
     event_ts: safeEventTs,
     ingest_ts: ingestTs,
-    game_key: String(doc.game_key),
+    game_key: canonicalGameKey,
     app_version: String(doc.app_version || '0.0.0'),
     sdk_version: String(doc.sdk_version || '0.0.0'),
     platform: String(doc.platform || 'unknown'),
@@ -112,17 +112,18 @@ function normalizeRawEvent(doc: RawCloudEvent): AnalyticsEventRow | null {
  * - 更新 cursor 为本批最大的 ingest_ts
  * - 同时触发分钟级广告聚合 recomputeRealtimeAdMinute（按 event_ts 范围计算桶）
  */
-export async function ingestEventsForGame(game: AnalyticsGameConfig): Promise<IngestSummary> {
-  const startedAt = Date.now();
-  const cursorBefore = await getCursor(game.gameKey);
+async function ingestEventSource(
+  game: AnalyticsGameConfig,
+  sourceKey: string,
+): Promise<{ fetched: number; inserted: number; minEventTs: number; maxEventTs: number }> {
   const app = getTcbApp(game.cloudEnv);
   const db = app.database();
   const _ = db.command;
-
-  let cursor = cursorBefore;
+  // 游标按云上的原始 game_key 记。xiaochu 和 petTower 是两条流，不能共用一个水位。
+  let cursor = await getCursor(sourceKey);
   let lastEventId = '';
-  let totalFetched = 0;
-  let totalInserted = 0;
+  let fetched = 0;
+  let inserted = 0;
   let minEventTs = Number.POSITIVE_INFINITY;
   let maxEventTs = 0;
 
@@ -130,7 +131,7 @@ export async function ingestEventsForGame(game: AnalyticsGameConfig): Promise<In
     const res = await db
       .collection(ANALYTICS_EVENTS_COLLECTION)
       .where({
-        game_key: game.gameKey,
+        game_key: sourceKey,
         ingest_ts: _.gt(cursor),
       })
       .orderBy('ingest_ts', 'asc')
@@ -143,7 +144,7 @@ export async function ingestEventsForGame(game: AnalyticsGameConfig): Promise<In
     const rows: AnalyticsEventRow[] = [];
     let pageMaxIngestTs = cursor;
     for (const doc of docs) {
-      const normalized = normalizeRawEvent(doc);
+      const normalized = normalizeRawEvent(doc, game.gameKey);
       if (!normalized) continue;
       rows.push(normalized);
       if (normalized.ingest_ts > pageMaxIngestTs) {
@@ -154,13 +155,35 @@ export async function ingestEventsForGame(game: AnalyticsGameConfig): Promise<In
       if (normalized.event_ts > maxEventTs) maxEventTs = normalized.event_ts;
     }
 
-    const inserted = await insertEvents(rows);
-    totalFetched += docs.length;
-    totalInserted += inserted;
+    inserted += await insertEvents(rows);
+    fetched += docs.length;
     cursor = pageMaxIngestTs;
-    await updateCursor(game.gameKey, cursor, lastEventId);
+    await updateCursor(sourceKey, cursor, lastEventId);
 
     if (docs.length < PAGE_SIZE) break;
+  }
+
+  return { fetched, inserted, minEventTs, maxEventTs };
+}
+
+export async function ingestEventsForGame(game: AnalyticsGameConfig): Promise<IngestSummary> {
+  const startedAt = Date.now();
+  const cursorBefore = await getCursor(game.gameKey);
+  const sourceKeys = game.sourceKeys.length > 0 ? game.sourceKeys : [game.gameKey];
+
+  let cursor = cursorBefore;
+  let totalFetched = 0;
+  let totalInserted = 0;
+  let minEventTs = Number.POSITIVE_INFINITY;
+  let maxEventTs = 0;
+
+  for (const sourceKey of sourceKeys) {
+    const part = await ingestEventSource(game, sourceKey);
+    totalFetched += part.fetched;
+    totalInserted += part.inserted;
+    if (part.minEventTs < minEventTs) minEventTs = part.minEventTs;
+    if (part.maxEventTs > maxEventTs) maxEventTs = part.maxEventTs;
+    if (sourceKey === game.gameKey) cursor = await getCursor(game.gameKey);
   }
 
   let newAdMinuteRows = 0;

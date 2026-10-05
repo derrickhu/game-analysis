@@ -239,7 +239,7 @@ interface AdRevenueSummary {
   ad_uau: number;
   /** DAU：当前窗口内 session_start 事件去重用户数（与 overview 同口径） */
   dau: number;
-  /** 广告渗透率（%）：ad_uau / dau */
+  /** 广告渗透率（%）：看广告用户 / 窗口内任意事件活跃用户，不超过 100% */
   ad_penetration_rate: number;
   /** 人均广告次数：total_show / ad_uau */
   ad_show_per_uu: number;

@@ -104,6 +104,17 @@ function formatMonthLabel(monthKey: string): string {
   return `${year.slice(2)}年${Number(month)}月`;
 }
 
+/** 日轴大约留 8 个刻度，并且始终画出第一天和最后一天。 */
+function dailyAxisInterval(count: number): (index: number) => boolean {
+  const last = Math.max(0, count - 1);
+  const step = Math.max(1, Math.round(count / 8));
+  return (index: number) => {
+    if (index === 0 || index === last) return true;
+    if (last - index < step) return false;
+    return index % step === 0;
+  };
+}
+
 function formatDayLabel(dateKey: string): string {
   const [, month, day] = dateKey.split('-');
   if (!month || !day) return dateKey;
@@ -166,13 +177,15 @@ function buildRevenueChartOption(input: {
       selected,
       selectedMode: true,
     },
-    grid: { left: 4, right: 8, top: 28, bottom: 2, containLabel: true },
+    grid: { left: 4, right: input.isDaily ? 18 : 8, top: 28, bottom: 2, containLabel: true },
     xAxis: {
       type: 'category',
       data: input.buckets,
       boundaryGap: false,
       axisLabel: {
-        hideOverlap: true,
+        // 30 天挤在窄图里时，自动抽稀会把最后两天（往往是 1 日、2 日）的刻度藏掉，看起来像没数据。
+        hideOverlap: false,
+        interval: input.isDaily ? dailyAxisInterval(input.buckets.length) : 0,
         formatter: (value: string) => (input.isDaily ? formatDayLabel(value) : formatMonthLabel(value)),
       },
     },

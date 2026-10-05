@@ -448,7 +448,7 @@ export function PetTowerGameplayPanel() {
 
   if (!kpi) {
     return (
-      <Card title="灵宠消消塔2 · 玩法分析">
+      <Card title="灵宠消消塔 · 玩法分析">
         <Empty description="暂无塔2玩法事件。切到 petTower 并选抖音后，窗口内有对局才会出数。" />
       </Card>
     );
@@ -745,7 +745,7 @@ export function PetTowerGameplayPanel() {
 
   return (
     <Card
-      title="灵宠消消塔2 · 玩法分析"
+      title="灵宠消消塔 · 玩法分析"
       extra={<Text type="secondary" style={{ fontSize: 12 }}>指标只服务 petTower，不与其它游戏面板串数</Text>}
     >
       <Tabs

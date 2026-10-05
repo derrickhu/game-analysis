@@ -33,7 +33,7 @@ export type GameplayPanelId =
   | 'huahua_growth'         // 花花等级成长 + 新手引导漏斗
   | 'huahua_engagement'     // 花花参与度（任务/签到/抽奖/熟客/合成）
   | 'caizhu_gameplay'       // 彩珠五连：入口/经典模式/道具/教程
-  | 'pet_tower_gameplay'    // 灵宠消消塔2：时长 / 广告经济 / 通天塔层漏斗（只服务 petTower）
+  | 'pet_tower_gameplay'    // 灵宠消消塔：时长 / 广告经济 / 通天塔层漏斗（petTower，含并入的 xiaochu）
   | 'jiancai_gameplay'      // 扫荡菜场：新手引导 / 时长 / 出门局（只服务 jiancai）
   | 'wujin_gameplay'        // 无尽纹章：新手漏斗 / 时长 / 章节无尽（只服务 wujin_wenzhang）
   | 'match_progress';       // 消除关卡进度（caizhu 待补）
@@ -68,6 +68,11 @@ export interface GameDescriptor {
     /** eCPM 配置 profile；默认等于 gameKey，后续同一游戏多版本口径可在这里分流。 */
     ecpmProfile?: string;
   };
+  /**
+   * 历史客户端仍在上报的 game_key。入库时改写成 gameKey，首页和看板只保留这一款。
+   * 例：灵宠消消塔旧微信包上报 xiaochu，xiaochu2 上报 petTower。
+   */
+  ingestGameKeys?: string[];
 }
 
 export const ALL_GAMES: GameDescriptor[] = [
@@ -106,19 +111,13 @@ export const ALL_GAMES: GameDescriptor[] = [
   },
   {
     gameKey: 'petTower',
-    displayName: '灵宠消消塔2',
+    displayName: '灵宠消消塔',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['pet_tower_gameplay', 'level_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'petTower' },
-  },
-  {
-    gameKey: 'xiaochu',
-    displayName: '灵宠消消塔',
-    hasAnalyticsSdk: true,
-    hasSnapshotIngest: false,
-    gameplayPanels: ['level_progress', 'match_progress'],
-    monetization: { ads: true, iap: false, ecpmProfile: 'xiaochu' },
+    // 旧微信包（xiao_chu）仍上报 xiaochu。微信流量主用 xiaochu 的 AppID，抖音用 xiaochu2 的 AppID。
+    ingestGameKeys: ['xiaochu'],
   },
   {
     gameKey: 'wujin_wenzhang',
@@ -144,10 +143,27 @@ export const ALL_GAMES: GameDescriptor[] = [
     gameplayPanels: ['jiancai_gameplay'],
     monetization: { ads: true, iap: false, ecpmProfile: 'jiancai' },
   },
+  {
+    gameKey: 'blackrosa',
+    displayName: '墨字防线',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    gameplayPanels: ['level_progress'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'blackrosa' },
+  },
 ];
 
+/** 旧客户端 game_key 收到登记游戏的正式 key。xiaochu → petTower。 */
+export function resolveCanonicalGameKey(gameKey: string): string {
+  const exact = ALL_GAMES.find((g) => g.gameKey === gameKey);
+  if (exact) return exact.gameKey;
+  const aliased = ALL_GAMES.find((g) => g.ingestGameKeys?.includes(gameKey));
+  return aliased?.gameKey ?? gameKey;
+}
+
 export function getGameDescriptor(gameKey: string): GameDescriptor | undefined {
-  return ALL_GAMES.find((g) => g.gameKey === gameKey);
+  const canonical = resolveCanonicalGameKey(gameKey);
+  return ALL_GAMES.find((g) => g.gameKey === canonical);
 }
 
 export function getDefaultGameKey(): string {

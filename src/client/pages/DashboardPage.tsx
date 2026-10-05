@@ -582,7 +582,7 @@ export function DashboardPage() {
                 <KpiDeltaText delta={deltaText(currentCpi, previousCpi, { digits: 1, reverseGood: true, unavailableText: acquisitionSource })} />
               </Col>
               <Col xs={12} md={4}>
-                <Tooltip title="窗口内看过广告的去重用户 ÷ 活跃用户。">
+                <Tooltip title="窗口内看过广告的去重用户 ÷ 同期有任意行为的去重用户。跨日仍在线、今天没有新 session_start 的人也算进分母，所以不会超过 100%。">
                   <Statistic title="广告渗透" value={currentAd?.ad_penetration_rate ?? 0} suffix="%" precision={1} />
                 </Tooltip>
                 <KpiDeltaText delta={deltaText(currentAd?.ad_penetration_rate, previousAd?.ad_penetration_rate, { digits: 1 })} />

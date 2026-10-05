@@ -213,9 +213,7 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     free_gacha_pull: '免费召唤',
     checkin_double: '签到翻倍',
     tower_reset: '通天塔重置',
-  },
-  xiaochu: {
-    // 灵宠消消塔广告位定义见 xiao_chu/js/data/economyConfig.js 的 AD_REWARDS。
+    // 旧微信包广告位，见 xiao_chu/js/data/economyConfig.js 的 AD_REWARDS。
     revive: '战斗失败 - 局内复活',
     staminaRecovery: '体力不足 - 恢复体力',
     stamina_recovery_confirm: '体力不足 - 恢复体力弹窗',
@@ -790,7 +788,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           </Col>
           <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
             <Card style={kpiCardStyle} styles={kpiCardStyles}>
-              <Tooltip title="看广告 UAU / DAU。行业参考：超休闲品类 60%~80%，>80% 通常说明广告渗透充分。">
+              <Tooltip title="看广告用户 ÷ 窗口内有任意行为的去重用户。行业参考：超休闲品类 60%~80%。">
                 <Statistic
                   title="广告渗透率(%)"
                   value={data?.summary.ad_penetration_rate ?? 0}

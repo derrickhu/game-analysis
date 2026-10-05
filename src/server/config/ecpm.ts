@@ -37,7 +37,13 @@ const ECPM_TABLE: Record<string, number> = {
   'caizhu.interstitial': 9,
   'caizhu._default': 15,
 
-  // petTower（灵宠消消塔2）
+  // petTower（灵宠消消塔，含旧微信包 xiaochu 的广告位）
+  'petTower.reward.staminaRecovery': 24,
+  'petTower.reward.signDouble': 24,
+  'petTower.reward.dailyTaskBonus': 24,
+  'petTower.reward.newbieFirstClearDouble': 26,
+  'petTower.reward.settleDouble': 26,
+  'petTower.reward.revive': 28,
   'petTower.reward': 24,
   'petTower._default': 15,
 
@@ -57,6 +63,20 @@ const ECPM_TABLE: Record<string, number> = {
   'wujin_wenzhang.reward.dailyFreeRoll': 24,
   'wujin_wenzhang.reward': 25,
   'wujin_wenzhang._default': 15,
+
+  // blackrosa（墨字防线）
+  'blackrosa.reward.chest_speed': 24,
+  'blackrosa.reward.starter_gift': 26,
+  'blackrosa.reward.emitter': 24,
+  'blackrosa.reward.skin': 24,
+  'blackrosa.reward.reroll': 24,
+  'blackrosa.reward.stamina': 24,
+  'blackrosa.reward.checkin_double': 24,
+  'blackrosa.reward.checkin_bonus': 24,
+  'blackrosa.reward.double': 26,
+  'blackrosa.reward.revive': 28,
+  'blackrosa.reward': 25,
+  'blackrosa._default': 15,
 
   // jiancai（扫荡菜场）
   'jiancai.reward.basket': 24,

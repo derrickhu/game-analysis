@@ -10,6 +10,7 @@ import {
 } from '../ltv-db';
 import { getTencentAdsDailyReport, type TencentAdsDailyReportRow } from '../tencent-ads';
 import { toShanghaiDateKey } from '../time';
+import { resolveCanonicalGameKey } from '../../shared/games';
 
 export interface TencentAdsIngestGameSummary {
   game_key: string;
@@ -122,7 +123,7 @@ function buildRawRows(mapping: TencentAdsGameMapping, rows: TencentAdsDailyRepor
         ...(activation === null ? ['activation'] : []),
       ];
       return {
-        game_key: mapping.gameKey,
+        game_key: resolveCanonicalGameKey(mapping.gameKey),
         account_id: mapping.accountId,
         report_level: reportLevel,
         date_key: row.date,
@@ -163,10 +164,11 @@ function mergeNote(existing: BusinessDailyInputRow | undefined, autoNote: string
 }
 
 async function ingestMapping(mapping: TencentAdsGameMapping, fromDate: string, toDate: string): Promise<TencentAdsIngestGameSummary> {
+  const gameKey = resolveCanonicalGameKey(mapping.gameKey);
   try {
     const report = await getTencentAdsDailyReport({ mapping, fromDate, toDate });
     await replaceTencentAdsDailyReportRawRows(
-      mapping.gameKey,
+      gameKey,
       mapping.accountId,
       mapping.adgroupIds.length > 0 ? 'REPORT_LEVEL_ADGROUP' : 'REPORT_LEVEL_ADVERTISER',
       fromDate,
@@ -174,14 +176,14 @@ async function ingestMapping(mapping: TencentAdsGameMapping, fromDate: string, t
       buildRawRows(mapping, report.rows),
     );
     const dailyRows = aggregateDailyRows(report.rows);
-    const existingRows = await listBusinessDailyInputs(mapping.gameKey, fromDate, toDate);
+    const existingRows = await listBusinessDailyInputs(gameKey, fromDate, toDate);
     const existingByDate = new Map(existingRows.map((row) => [row.date_key, row]));
 
     let savedRows = 0;
     for (const row of dailyRows) {
       const existing = existingByDate.get(row.dateKey);
       await upsertBusinessDailyInput({
-        game_key: mapping.gameKey,
+        game_key: gameKey,
         date_key: row.dateKey,
         spend_cny: row.spendCny,
         wechat_clicks: row.hasClicks ? row.clicks : Number(existing?.wechat_clicks || 0),
@@ -198,7 +200,7 @@ async function ingestMapping(mapping: TencentAdsGameMapping, fromDate: string, t
     }
 
     return {
-      game_key: mapping.gameKey,
+      game_key: gameKey,
       account_id: mapping.accountId,
       from_date: fromDate,
       to_date: toDate,
@@ -208,7 +210,7 @@ async function ingestMapping(mapping: TencentAdsGameMapping, fromDate: string, t
     };
   } catch (error) {
     return {
-      game_key: mapping.gameKey,
+      game_key: gameKey,
       account_id: mapping.accountId,
       from_date: fromDate,
       to_date: toDate,
@@ -234,7 +236,9 @@ export async function ingestTencentAdsBusinessInputs(options: {
     return { ok: true, from_date: fromDate, to_date: toDate, games: [] };
   }
 
-  const mappings = config.gameMappings.filter((mapping) => !options.gameKey || mapping.gameKey === options.gameKey);
+  const mappings = config.gameMappings.filter((mapping) =>
+    !options.gameKey || resolveCanonicalGameKey(mapping.gameKey) === resolveCanonicalGameKey(options.gameKey),
+  );
   const games: TencentAdsIngestGameSummary[] = [];
   for (const mapping of mappings) {
     games.push(await ingestMapping(mapping, fromDate, toDate));

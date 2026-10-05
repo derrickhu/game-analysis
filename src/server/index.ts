@@ -22,6 +22,7 @@ import { ingestCloudbaseSnapshots } from './cloudbase-ingest';
 import { recomputeDailyMetrics, recomputeHourlyMetrics } from './metrics';
 import { startScheduler } from './scheduler';
 import { registerRealtimeRoutes } from './routes/realtime';
+import { findAnalyticsGame } from './config/analytics-games';
 import { initSnapshotStorage } from './snapshot-db';
 
 const config = getConfig();
@@ -45,6 +46,21 @@ const app = Fastify({
 function expectedBasicAuthorization(password: string): string {
   return `Basic ${Buffer.from(`ga:${password}`).toString('base64')}`;
 }
+
+function canonicalRequestGameKey(gameKey: string): string {
+  return findAnalyticsGame(gameKey)?.gameKey || gameKey;
+}
+
+app.addHook('preHandler', async (request) => {
+  const query = request.query as { game?: string } | undefined;
+  if (query && typeof query.game === 'string' && query.game) {
+    query.game = canonicalRequestGameKey(query.game);
+  }
+  const body = request.body as { game?: string } | null | undefined;
+  if (body && typeof body === 'object' && typeof body.game === 'string' && body.game) {
+    body.game = canonicalRequestGameKey(body.game);
+  }
+});
 
 app.addHook('onRequest', async (request, reply) => {
   const password = process.env.GA_BASIC_AUTH_PASSWORD || process.env.GA_ACCESS_PASSWORD;

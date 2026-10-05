@@ -11,6 +11,7 @@ import {
 } from '../../ltv-db';
 import { getWechatPublisherAdposGeneral, type WechatPublisherAdposRow } from './client';
 import { toShanghaiDateKey } from '../../time';
+import { resolveCanonicalGameKey } from '../../../shared/games';
 
 export interface WechatPublisherIngestGameSummary {
   game_key: string;
@@ -131,19 +132,20 @@ async function ingestMapping(
   fromDate: string,
   toDate: string,
 ): Promise<WechatPublisherIngestGameSummary> {
+  const gameKey = resolveCanonicalGameKey(mapping.gameKey);
   try {
     const report = await getWechatPublisherAdposGeneral({ mapping, fromDate, toDate });
-    const rawRows = buildRawRows(mapping.gameKey, report.rows);
+    const rawRows = buildRawRows(gameKey, report.rows);
     const dailyRows = aggregateDaily(report.rows);
-    const existingRows = await listBusinessDailyInputs(mapping.gameKey, fromDate, toDate);
+    const existingRows = await listBusinessDailyInputs(gameKey, fromDate, toDate);
     const existingByDate = new Map(existingRows.map((row) => [row.date_key, row]));
 
-    const savedRawRows = await replaceWechatPublisherAdDailyRows(mapping.gameKey, fromDate, toDate, rawRows);
+    const savedRawRows = await replaceWechatPublisherAdDailyRows(gameKey, fromDate, toDate, rawRows);
     let savedBusinessRows = 0;
     for (const row of dailyRows) {
       const existing = existingByDate.get(row.dateKey);
       await upsertBusinessDailyInput({
-        game_key: mapping.gameKey,
+        game_key: gameKey,
         date_key: row.dateKey,
         spend_cny: Number(existing?.spend_cny || 0),
         wechat_clicks: Number(existing?.wechat_clicks || 0),
@@ -159,7 +161,7 @@ async function ingestMapping(
     }
 
     return {
-      game_key: mapping.gameKey,
+      game_key: gameKey,
       app_id: mapping.appId,
       from_date: fromDate,
       to_date: toDate,
@@ -170,7 +172,7 @@ async function ingestMapping(
     };
   } catch (error) {
     return {
-      game_key: mapping.gameKey,
+      game_key: gameKey,
       app_id: mapping.appId,
       from_date: fromDate,
       to_date: toDate,
@@ -221,7 +223,9 @@ export async function ingestWechatPublisherBusinessInputs(options: {
     return summary;
   }
 
-  const mappings = config.gameMappings.filter((mapping) => !options.gameKey || mapping.gameKey === options.gameKey);
+  const mappings = config.gameMappings.filter((mapping) =>
+    !options.gameKey || resolveCanonicalGameKey(mapping.gameKey) === resolveCanonicalGameKey(options.gameKey),
+  );
   const games: WechatPublisherIngestGameSummary[] = [];
   for (const mapping of mappings) {
     games.push(await ingestMapping(mapping, fromDate, toDate));

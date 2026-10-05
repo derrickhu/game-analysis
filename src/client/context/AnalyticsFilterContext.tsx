@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { message } from 'antd';
 
-import { getDefaultGameKey, getGameDescriptor } from '../../shared/games';
+import { getDefaultGameKey, getGameDescriptor, resolveCanonicalGameKey } from '../../shared/games';
 import {
   DEFAULT_PLATFORM,
   parsePlatformFromUrl,
@@ -64,7 +64,8 @@ export function AnalyticsFilterProvider({ children }: { children: ReactNode }) {
   // 用 lazy initializer 保证只在 mount 时读一次，避免后续 URL 变化触发的重渲染又重新走默认分支
   const [gameKey, setGameKeyState] = useState<string>(() => {
     const fromUrl = searchParams.get('game');
-    return fromUrl && getGameDescriptor(fromUrl) ? fromUrl : getDefaultGameKey();
+    const canonical = fromUrl ? resolveCanonicalGameKey(fromUrl) : '';
+    return canonical && getGameDescriptor(canonical) ? canonical : getDefaultGameKey();
   });
   const [platform, setPlatformState] = useState<PlatformFilter>(() =>
     parsePlatformFromUrl(searchParams.get('platform')),
@@ -117,8 +118,9 @@ export function AnalyticsFilterProvider({ children }: { children: ReactNode }) {
     const urlPlatform = parsePlatformFromUrl(searchParams.get('platform'));
     const urlWindowRaw = searchParams.get('window');
     const urlWindow = parseWindowFromUrl(urlWindowRaw);
-    if (urlGame && getGameDescriptor(urlGame)) {
-      setGameKeyState((cur) => (urlGame !== cur ? urlGame : cur));
+    const canonicalGame = urlGame ? resolveCanonicalGameKey(urlGame) : '';
+    if (canonicalGame && getGameDescriptor(canonicalGame)) {
+      setGameKeyState((cur) => (canonicalGame !== cur ? canonicalGame : cur));
     }
     setPlatformState((cur) => (urlPlatform !== cur ? urlPlatform : cur));
     setWindowSelState((cur) =>

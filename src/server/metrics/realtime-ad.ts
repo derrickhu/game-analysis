@@ -76,7 +76,11 @@ export interface AdUserMetrics {
   ad_uau: number;
   /** DAU：当前窗口内 session_start 事件去重用户数（与 overview 同口径） */
   dau: number;
-  /** 广告渗透率（%）：ad_uau / dau */
+  /**
+   * 广告渗透率（%）：看广告用户 / 窗口内活跃用户。
+   * 分母用任意事件去重，不用 session_start。跨日还在玩的人今天可能没有新的 session_start，
+   * 若用 session_start 做分母，渗透率会超过 100%。
+   */
   ad_penetration_rate: number;
   /** 人均广告次数：total_show / ad_uau */
   ad_show_per_uu: number;
@@ -92,11 +96,12 @@ export async function getAdUserMetrics(
   totalRevenue: number,
   platform?: string,
 ): Promise<AdUserMetrics> {
-  const [adUau, dau] = await Promise.all([
+  const [adUau, dau, activeUsers] = await Promise.all([
     countDistinctUsersByEvent(gameKey, fromTs, toTs, 'ad_show', platform),
     countDistinctUsersByEvent(gameKey, fromTs, toTs, 'session_start', platform),
+    countDistinctActiveUsers(gameKey, fromTs, toTs, platform),
   ]);
-  const adPenetrationRate = dau > 0 ? Math.round((adUau / dau) * 10000) / 100 : 0;
+  const adPenetrationRate = activeUsers > 0 ? Math.round((adUau / activeUsers) * 10000) / 100 : 0;
   const adShowPerUu = adUau > 0 ? Math.round((totalShow / adUau) * 100) / 100 : 0;
   const arpdauEstimatedCny = dau > 0 ? Math.round((totalRevenue / dau) * 100) / 100 : 0;
   return {
@@ -206,6 +211,28 @@ export async function listSeriesUserBuckets(
     }
   }
   return { adUau, activeUu, adUauHourly, activeUuHourly, adUauDaily, activeUuDaily };
+}
+
+async function countDistinctActiveUsers(
+  gameKey: string,
+  fromTs: number,
+  toTs: number,
+  platform?: string,
+): Promise<number> {
+  if (toTs < fromTs) return 0;
+  const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
+  const platformParams = platformSqlParams(platform);
+  const sql = `SELECT COUNT(DISTINCT ${userKeySql}) AS c
+                 FROM analytics_events
+                WHERE game_key = ?
+                  AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`;
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [rows] = await pool.query(sql, [gameKey, fromTs, toTs, ...platformParams]);
+    return Number((rows as Array<{ c: number }>)[0]?.c || 0);
+  }
+  const row = getDb().prepare(sql).get(gameKey, fromTs, toTs, ...platformParams) as { c: number };
+  return Number(row?.c || 0);
 }
 
 async function countDistinctUsersByEvent(
