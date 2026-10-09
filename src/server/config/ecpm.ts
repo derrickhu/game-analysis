@@ -47,11 +47,15 @@ const ECPM_TABLE: Record<string, number> = {
   'petTower.reward': 24,
   'petTower._default': 15,
 
-  // cunkou（村口大战外星人）
+  // cunkou（村口大战外星人）广告位跟 code_1 现网按钮对齐
   'cunkou.reward.revive': 28,
   'cunkou.reward.settleDouble': 26,
+  'cunkou.reward.loseBonus': 24,
+  'cunkou.reward.stallPellets': 24,
+  'cunkou.reward.craftParts': 24,
   'cunkou.reward.dailyGift': 24,
   'cunkou.reward.junkyard': 24,
+  'cunkou.reward.pileFill': 24,
   'cunkou.reward': 25,
   'cunkou._default': 15,
 
@@ -77,6 +81,12 @@ const ECPM_TABLE: Record<string, number> = {
   'blackrosa.reward.revive': 28,
   'blackrosa.reward': 25,
   'blackrosa._default': 15,
+
+  // dresssort（一裙又一裙）
+  'dresssort.reward.energy': 24,
+  'dresssort.reward.pack_column': 24,
+  'dresssort.reward': 25,
+  'dresssort._default': 15,
 
   // jiancai（扫荡菜场）
   'jiancai.reward.basket': 24,

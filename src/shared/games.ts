@@ -151,6 +151,14 @@ export const ALL_GAMES: GameDescriptor[] = [
     gameplayPanels: ['level_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'blackrosa' },
   },
+  {
+    gameKey: 'dresssort',
+    displayName: '一裙又一裙',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    gameplayPanels: ['level_progress'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'dresssort' },
+  },
 ];
 
 /** 旧客户端 game_key 收到登记游戏的正式 key。xiaochu → petTower。 */

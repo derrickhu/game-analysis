@@ -26,6 +26,7 @@ import {
   aggregateAdMinuteFromEvents,
   getAdUserMetrics,
   listAdErrorTopN,
+  listAdShowCountDistribution,
   listSeriesUserBuckets,
   recomputeRealtimeAdMinute,
 } from '../metrics/realtime-ad';
@@ -239,7 +240,7 @@ interface AdRevenueSummary {
   ad_uau: number;
   /** DAU：当前窗口内 session_start 事件去重用户数（与 overview 同口径） */
   dau: number;
-  /** 广告渗透率（%）：看广告用户 / 窗口内任意事件活跃用户，不超过 100% */
+  /** 广告渗透率（%）：日活里看过广告的人数 / 日活（session_start），不超过 100% */
   ad_penetration_rate: number;
   /** 人均广告次数：total_show / ad_uau */
   ad_show_per_uu: number;
@@ -272,6 +273,13 @@ interface AdRevenueBreakdown {
  */
 type AdRevenueHourlySeriesItem = AdRevenueSeriesItem;
 
+interface AdShowHistogramBin {
+  /** 横轴：精确次数，或尾部合并区间如 21-30、201+ */
+  label: string;
+  /** 纵轴：看了这么多次的人数 */
+  users: number;
+}
+
 interface AdRevenueResponse {
   ok: true;
   estimated: boolean;
@@ -284,6 +292,8 @@ interface AdRevenueResponse {
   /** 同窗口的天桶聚合，给跨日观察使用 */
   series_daily: AdRevenueHourlySeriesItem[];
   breakdown_by_scene: AdRevenueBreakdown[];
+  /** 看过广告的人，按次数统计人数。不含 0 次。 */
+  ad_show_histogram: AdShowHistogramBin[];
 }
 
 /** 给 series 每个槽位的新字段先填 0，handler 拿到桶级 user 集合后再 patch 派生指标 */
@@ -584,7 +594,10 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const fillRate = totalRequest > 0 ? Math.round((totalShow / totalRequest) * 10000) / 100 : 0;
     const errorRate = totalRequest > 0 ? Math.round((totalError / totalRequest) * 10000) / 100 : 0;
     // 用户维度指标：与 ad-revenue 共用 [fromTs, toTs] 窗口口径，避免按自然日跨窗口漂移
-    const userMetrics = await getAdUserMetrics(gameKey, fromTs, toTs, totalShow, totalRevenue, platform);
+    const [userMetrics, adShowHistogram] = await Promise.all([
+      getAdUserMetrics(gameKey, fromTs, toTs, totalShow, totalRevenue, platform),
+      listAdShowCountDistribution(gameKey, fromTs, toTs, platform),
+    ]);
 
     const response: AdRevenueResponse = {
       ok: true,
@@ -621,6 +634,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       series_hourly: seriesHourly,
       series_daily: seriesDaily,
       breakdown_by_scene: breakdown,
+      ad_show_histogram: adShowHistogram,
     };
     return response;
   });

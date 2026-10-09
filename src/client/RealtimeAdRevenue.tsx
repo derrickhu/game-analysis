@@ -73,6 +73,11 @@ interface AdBreakdown {
   ecpm_cny: number;
 }
 
+interface AdShowHistogramBin {
+  label: string;
+  users: number;
+}
+
 interface AdRevenueResponse {
   ok: true;
   estimated: boolean;
@@ -85,6 +90,7 @@ interface AdRevenueResponse {
   /** 天桶 series：字段同 5 分钟桶，给跨日走势使用 */
   series_daily: AdSeriesItem[];
   breakdown_by_scene: AdBreakdown[];
+  ad_show_histogram?: AdShowHistogramBin[];
 }
 
 /**
@@ -248,12 +254,14 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     doubleStar: '结算加星（历史）',
     dailyFreeRoll: '每日免费抽（历史）',
   },
-  // cunkou 广告位 = code_1/src/core/AdDay.ts AdPlacement + 弹弓摊 stallPellets
+  // cunkou 广告位 = code_1 现在在用的按钮，文案跟玩家看到的一致
   cunkou: {
-    revive: '战斗失败 - 队灭原地复活',
-    settleDouble: '结算页 - 奖励翻倍',
-    stallPellets: '弹弓摊 - 看广告补弹子',
-    dailyGift: '每日首局 - 多带一件（历史）',
+    stallPellets: '弹弓摊 - 看一段补弹子',
+    revive: '战斗失败 - 漏怪归零，原地复活',
+    settleDouble: '赢了结算 - 这关再拿一份',
+    loseBonus: '输了结算 - 看视频领补给',
+    craftParts: '升手艺 - 看视频拿零件',
+    dailyGift: '村口每日礼包 - 今天再领一份',
     junkyard: '废品站 - 每日免费翻一件（历史）',
     pileFill: '废品堆 - 一键涨满（历史）',
   },
@@ -669,6 +677,56 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
     },
   ];
 
+  const histogram = data?.ad_show_histogram || [];
+  const histogramOption = useMemo(() => {
+    const bins = histogram;
+    const crowded = bins.length > 24;
+    return {
+      tooltip: {
+        trigger: 'axis' as const,
+        axisPointer: { type: 'shadow' as const },
+        formatter: (params: unknown) => {
+          const row = (Array.isArray(params) ? params[0] : params) as { name?: string; value?: number } | undefined;
+          const label = String(row?.name ?? '');
+          const users = Number(row?.value ?? 0);
+          return `${label} 次<br/>${users.toLocaleString('zh-CN')} 人`;
+        },
+      },
+      grid: { left: 12, right: 28, top: 36, bottom: crowded ? 52 : 24, containLabel: true },
+      dataZoom: crowded
+        ? [
+            { type: 'inside' as const, start: 0, end: 100 },
+            { type: 'slider' as const, height: 18, bottom: 8, start: 0, end: 100 },
+          ]
+        : [],
+      xAxis: {
+        type: 'category' as const,
+        name: '次数',
+        nameTextStyle: { fontSize: 12, color: '#64748b' },
+        data: bins.map((bin) => bin.label),
+        axisLabel: { fontSize: 11 },
+        axisTick: { alignWithLabel: true },
+      },
+      yAxis: {
+        type: 'value' as const,
+        name: '人数',
+        minInterval: 1,
+        nameTextStyle: { fontSize: 12, color: '#2563eb' },
+        axisLabel: { fontSize: 11, color: '#2563eb' },
+        splitLine: { lineStyle: { type: 'dashed' as const, opacity: 0.5 } },
+      },
+      series: [
+        {
+          name: '人数',
+          type: 'bar' as const,
+          barMaxWidth: 28,
+          itemStyle: { color: '#2563eb', borderRadius: [6, 6, 2, 2] },
+          data: bins.map((bin) => bin.users),
+        },
+      ],
+    };
+  }, [histogram]);
+
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       <Card
@@ -788,7 +846,7 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
           </Col>
           <Col xs={12} md={8} xl={8} style={{ display: 'flex' }}>
             <Card style={kpiCardStyle} styles={kpiCardStyles}>
-              <Tooltip title="看广告用户 ÷ 窗口内有任意行为的去重用户。行业参考：超休闲品类 60%~80%。">
+              <Tooltip title="日活里看过广告的人数 ÷ 日活。日活是 session_start 去重，和上面的日活同一批人。">
                 <Statistic
                   title="广告渗透率(%)"
                   value={data?.summary.ad_penetration_rate ?? 0}
@@ -810,6 +868,23 @@ export function RealtimeAdRevenue(props: RealtimeAdRevenueProps): ReactElement {
             </Card>
           </Col>
         </Row>
+      </Card>
+
+      <Card
+        size="small"
+        title="广告次数分布"
+        extra={(
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            只统计看过广告的人。横轴是次数，纵轴是人数
+            {data ? `；人均 ${data.summary.ad_show_per_uu.toFixed(2)} 次` : ''}
+          </Typography.Text>
+        )}
+      >
+        {histogram.some((bin) => bin.users > 0) ? (
+          <ReactECharts option={histogramOption} style={{ height: 320 }} notMerge lazyUpdate />
+        ) : (
+          <Empty description="这段时间没有活跃用户" />
+        )}
       </Card>
 
       <Card

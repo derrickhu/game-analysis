@@ -77,9 +77,10 @@ export interface AdUserMetrics {
   /** DAU：当前窗口内 session_start 事件去重用户数（与 overview 同口径） */
   dau: number;
   /**
-   * 广告渗透率（%）：看广告用户 / 窗口内活跃用户。
-   * 分母用任意事件去重，不用 session_start。跨日还在玩的人今天可能没有新的 session_start，
-   * 若用 session_start 做分母，渗透率会超过 100%。
+   * 广告渗透率（%）：今日日活里看过广告的人数 / 日活。
+   * 日活是 session_start 去重，和总览「日活」同一批人。
+   * 分子只算这批日活里有 ad_show 的人，所以不会超过 100%。
+   * 不能用任意事件做分母：归因触点会把没进游戏的人算进来，渗透率会被压低。
    */
   ad_penetration_rate: number;
   /** 人均广告次数：total_show / ad_uau */
@@ -96,12 +97,12 @@ export async function getAdUserMetrics(
   totalRevenue: number,
   platform?: string,
 ): Promise<AdUserMetrics> {
-  const [adUau, dau, activeUsers] = await Promise.all([
+  const [adUau, dau, adUsersInDau] = await Promise.all([
     countDistinctUsersByEvent(gameKey, fromTs, toTs, 'ad_show', platform),
     countDistinctUsersByEvent(gameKey, fromTs, toTs, 'session_start', platform),
-    countDistinctActiveUsers(gameKey, fromTs, toTs, platform),
+    countAdUsersAmongDau(gameKey, fromTs, toTs, platform),
   ]);
-  const adPenetrationRate = activeUsers > 0 ? Math.round((adUau / activeUsers) * 10000) / 100 : 0;
+  const adPenetrationRate = dau > 0 ? Math.round((adUsersInDau / dau) * 10000) / 100 : 0;
   const adShowPerUu = adUau > 0 ? Math.round((totalShow / adUau) * 100) / 100 : 0;
   const arpdauEstimatedCny = dau > 0 ? Math.round((totalRevenue / dau) * 100) / 100 : 0;
   return {
@@ -111,6 +112,107 @@ export async function getAdUserMetrics(
     ad_show_per_uu: adShowPerUu,
     arpdau_estimated_cny: arpdauEstimatedCny,
   };
+}
+
+/** 广告次数分布的一根柱：label 是次数（或尾部合并区间），users 是人数。 */
+export interface AdShowHistogramBin {
+  label: string;
+  users: number;
+}
+
+/**
+ * 把「看过广告的人，每人 ad_show 次数 → 人数」收成可读的柱。
+ * 只留有人的次数，0 人的空档不占柱。
+ * 30 次以内每根柱就是一个整数；再往上按 10 次一档合并，超过 200 次收成一档。
+ */
+export function buildAdShowHistogram(rows: Array<{ show_cnt: number; users: number }>): AdShowHistogramBin[] {
+  const counts = new Map<number, number>();
+  let max = 0;
+  for (const row of rows) {
+    const cnt = Math.max(0, Math.floor(Number(row.show_cnt) || 0));
+    const users = Math.max(0, Math.floor(Number(row.users) || 0));
+    if (users <= 0) continue;
+    counts.set(cnt, (counts.get(cnt) || 0) + users);
+    if (cnt > max) max = cnt;
+  }
+  counts.delete(0);
+  if (counts.size === 0) return [];
+  max = Math.max(...counts.keys());
+
+  const exactEnd = max <= 30 ? max : 20;
+  const bins: AdShowHistogramBin[] = [];
+  for (let i = 1; i <= exactEnd; i += 1) {
+    const users = counts.get(i) || 0;
+    if (users > 0) bins.push({ label: String(i), users });
+  }
+  if (max <= exactEnd) return bins;
+
+  const pushRange = (from: number, to: number) => {
+    const end = Math.min(to, max);
+    if (from > end) return;
+    let users = 0;
+    for (let i = from; i <= end; i += 1) users += counts.get(i) || 0;
+    if (users <= 0) return;
+    bins.push({ label: from === end ? String(from) : `${from}-${end}`, users });
+  };
+
+  for (let start = 21; start <= Math.min(max, 50); start += 10) {
+    pushRange(start, start + 9);
+  }
+  if (max > 50) pushRange(51, 100);
+  if (max > 100) pushRange(101, 200);
+  if (max > 200) {
+    let users = 0;
+    for (let i = 201; i <= max; i += 1) users += counts.get(i) || 0;
+    if (users > 0) bins.push({ label: '201+', users });
+  }
+  return bins;
+}
+
+/**
+ * 当前窗口里，看过广告的人各看了几次，再按次数统计人数。
+ * 没看广告的人不进这张图。人数合计等于看广告 UAU。
+ * 身份口径与渗透率相同：COALESCE(NULLIF(user_id,''), anonymous_id)。
+ */
+export async function listAdShowCountDistribution(
+  gameKey: string,
+  fromTs: number,
+  toTs: number,
+  platform?: string,
+): Promise<AdShowHistogramBin[]> {
+  if (toTs < fromTs) return [];
+  const platformParams = platformSqlParams(platform);
+  const sql = `SELECT show_cnt, COUNT(*) AS users
+                 FROM (
+                   SELECT user_key, COUNT(*) AS show_cnt
+                     FROM (
+                       SELECT COALESCE(NULLIF(user_id, ''), anonymous_id) AS user_key
+                         FROM analytics_events
+                        WHERE game_key = ?
+                          AND event_name = 'ad_show'
+                          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
+                     ) ev
+                    WHERE user_key IS NOT NULL AND user_key <> ''
+                    GROUP BY user_key
+                 ) per_user
+                GROUP BY show_cnt
+                ORDER BY show_cnt`;
+  const params = [gameKey, fromTs, toTs, ...platformParams];
+  let rows: Array<{ show_cnt: number; users: number }> = [];
+  if (isMysqlMode()) {
+    const pool = await getMysqlPool();
+    const [result] = await pool.query(sql, params);
+    rows = (result as Array<{ show_cnt: number; users: number }>).map((row) => ({
+      show_cnt: Number(row.show_cnt || 0),
+      users: Number(row.users || 0),
+    }));
+  } else {
+    rows = (getDb().prepare(sql).all(...params) as Array<{ show_cnt: number; users: number }>).map((row) => ({
+      show_cnt: Number(row.show_cnt || 0),
+      users: Number(row.users || 0),
+    }));
+  }
+  return buildAdShowHistogram(rows);
 }
 
 /**
@@ -213,25 +315,37 @@ export async function listSeriesUserBuckets(
   return { adUau, activeUu, adUauHourly, activeUuHourly, adUauDaily, activeUuDaily };
 }
 
-async function countDistinctActiveUsers(
+/** 日活里看过广告的人数：同一用户窗口内既有 session_start 也有 ad_show。 */
+async function countAdUsersAmongDau(
   gameKey: string,
   fromTs: number,
   toTs: number,
   platform?: string,
 ): Promise<number> {
   if (toTs < fromTs) return 0;
-  const userKeySql = "COALESCE(NULLIF(user_id, ''), anonymous_id)";
   const platformParams = platformSqlParams(platform);
-  const sql = `SELECT COUNT(DISTINCT ${userKeySql}) AS c
-                 FROM analytics_events
-                WHERE game_key = ?
-                  AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`;
+  const sql = `SELECT COUNT(*) AS c
+                 FROM (
+                   SELECT user_key
+                     FROM (
+                       SELECT COALESCE(NULLIF(user_id, ''), anonymous_id) AS user_key, event_name
+                         FROM analytics_events
+                        WHERE game_key = ?
+                          AND event_name IN ('session_start', 'ad_show')
+                          AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
+                     ) ev
+                    WHERE user_key IS NOT NULL AND user_key <> ''
+                    GROUP BY user_key
+                   HAVING SUM(CASE WHEN event_name = 'session_start' THEN 1 ELSE 0 END) > 0
+                      AND SUM(CASE WHEN event_name = 'ad_show' THEN 1 ELSE 0 END) > 0
+                 ) both_events`;
+  const params = [gameKey, fromTs, toTs, ...platformParams];
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
-    const [rows] = await pool.query(sql, [gameKey, fromTs, toTs, ...platformParams]);
+    const [rows] = await pool.query(sql, params);
     return Number((rows as Array<{ c: number }>)[0]?.c || 0);
   }
-  const row = getDb().prepare(sql).get(gameKey, fromTs, toTs, ...platformParams) as { c: number };
+  const row = getDb().prepare(sql).get(...params) as { c: number };
   return Number(row?.c || 0);
 }
 
