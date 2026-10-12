@@ -1,7 +1,13 @@
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
 import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
-import { emptyDurationKpi, loadSessionDuration, type SessionDurationKpi } from './session-duration';
+import {
+  buildUserDurationHistogram,
+  emptyDurationKpi,
+  loadSessionDuration,
+  type DurationHistogramBin,
+  type SessionDurationKpi,
+} from './session-duration';
 
 /**
  * 实时综合看板（DAU / 新增 / 留存 / 活跃趋势）
@@ -78,6 +84,8 @@ export interface OverviewSeriesPoint {
 export interface OverviewResult {
   kpi: OverviewKpi;
   series: OverviewSeriesPoint[];
+  /** 每人窗口内在线分钟的人数分布，横轴分钟、纵轴人数 */
+  duration_histogram: DurationHistogramBin[];
 }
 
 /**
@@ -142,6 +150,7 @@ export async function getOverview(
       duration_source: duration.kpi.duration_source,
     },
     series,
+    duration_histogram: buildUserDurationHistogram(duration.sessions),
   };
 }
 

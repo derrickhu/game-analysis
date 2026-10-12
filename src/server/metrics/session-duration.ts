@@ -33,6 +33,12 @@ export interface SessionBucket {
   count: number;
 }
 
+/** 在线时长分布的一根柱：label 是分钟（或尾部合并区间），users 是人数。 */
+export interface DurationHistogramBin {
+  label: string;
+  users: number;
+}
+
 export function emptyDurationKpi(): SessionDurationKpi {
   return {
     play_users: 0,
@@ -86,6 +92,60 @@ export function summarizeSessions(sessions: SessionSpan[]): SessionDurationKpi {
     minutes_per_user: playUsers.size > 0 ? round1(playMs / 60_000 / playUsers.size) : 0,
     duration_source: 'reconstructed_idle_gap',
   };
+}
+
+/**
+ * 把「每人窗口内在线分钟 → 人数」收成和广告次数分布同款的柱。
+ * 每人先把各次有效会话时长相加，再四舍五入到分钟；不足 1 分钟单独成「<1」。
+ * 只留有人的分钟，空档不占柱。30 分钟以内每根柱就是一个整数；再往上按 10 分钟一档，超过 200 分钟收成一档。
+ */
+export function buildUserDurationHistogram(sessions: SessionSpan[]): DurationHistogramBin[] {
+  const msByUser = new Map<string, number>();
+  for (const session of sessions) {
+    if (!session.uk) continue;
+    msByUser.set(session.uk, (msByUser.get(session.uk) || 0) + session.dur);
+  }
+  const counts = new Map<number, number>();
+  for (const ms of msByUser.values()) {
+    const minutes = Math.max(0, Math.round(ms / 60_000));
+    counts.set(minutes, (counts.get(minutes) || 0) + 1);
+  }
+  if (counts.size === 0) return [];
+
+  const underOne = counts.get(0) || 0;
+  counts.delete(0);
+  const bins: DurationHistogramBin[] = [];
+  if (underOne > 0) bins.push({ label: '<1', users: underOne });
+  if (counts.size === 0) return bins;
+
+  const max = Math.max(...counts.keys());
+  const exactEnd = max <= 30 ? max : 20;
+  for (let i = 1; i <= exactEnd; i += 1) {
+    const users = counts.get(i) || 0;
+    if (users > 0) bins.push({ label: String(i), users });
+  }
+  if (max <= exactEnd) return bins;
+
+  const pushRange = (from: number, to: number) => {
+    const end = Math.min(to, max);
+    if (from > end) return;
+    let users = 0;
+    for (let i = from; i <= end; i += 1) users += counts.get(i) || 0;
+    if (users <= 0) return;
+    bins.push({ label: from === end ? String(from) : `${from}-${end}`, users });
+  };
+
+  for (let start = 21; start <= Math.min(max, 50); start += 10) {
+    pushRange(start, start + 9);
+  }
+  if (max > 50) pushRange(51, 100);
+  if (max > 100) pushRange(101, 200);
+  if (max > 200) {
+    let users = 0;
+    for (let i = 201; i <= max; i += 1) users += counts.get(i) || 0;
+    if (users > 0) bins.push({ label: '201+', users });
+  }
+  return bins;
 }
 
 export function buildSessionBuckets(durs: number[]): SessionBucket[] {

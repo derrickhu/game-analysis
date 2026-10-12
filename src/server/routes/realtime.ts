@@ -805,6 +805,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       query: { game_key: gameKey, from: fromBucket, to: toBucket, window_minutes: windowMinutes },
       kpi: result.kpi,
       series: result.series,
+      duration_histogram: result.duration_histogram,
     };
   });
 

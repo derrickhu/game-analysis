@@ -58,11 +58,17 @@ interface OverviewSeriesPoint {
   new_users: number;
 }
 
+interface DurationHistogramBin {
+  label: string;
+  users: number;
+}
+
 interface OverviewResponse {
   ok: boolean;
   query?: { game_key: string; from: string; to: string; window_minutes: number };
   kpi?: OverviewKpi;
   series?: OverviewSeriesPoint[];
+  duration_histogram?: DurationHistogramBin[];
   code?: string;
   error?: string;
 }
@@ -382,6 +388,57 @@ export function DashboardPage() {
     };
   }, [overview?.series]);
 
+  const durationHistogram = overview?.duration_histogram || [];
+  const durationHistogramOption = useMemo(() => {
+    const bins = durationHistogram;
+    const crowded = bins.length > 24;
+    return {
+      tooltip: {
+        trigger: 'axis' as const,
+        axisPointer: { type: 'shadow' as const },
+        formatter: (params: unknown) => {
+          const row = (Array.isArray(params) ? params[0] : params) as { name?: string; value?: number } | undefined;
+          const label = String(row?.name ?? '');
+          const users = Number(row?.value ?? 0);
+          const minuteText = label === '<1' ? '不足 1 分钟' : `${label} 分钟`;
+          return `${minuteText}<br/>${users.toLocaleString('zh-CN')} 人`;
+        },
+      },
+      grid: { left: 12, right: 28, top: 36, bottom: crowded ? 52 : 24, containLabel: true },
+      dataZoom: crowded
+        ? [
+            { type: 'inside' as const, start: 0, end: 100 },
+            { type: 'slider' as const, height: 18, bottom: 8, start: 0, end: 100 },
+          ]
+        : [],
+      xAxis: {
+        type: 'category' as const,
+        name: '分钟',
+        nameTextStyle: { fontSize: 12, color: '#64748b' },
+        data: bins.map((bin) => bin.label),
+        axisLabel: { fontSize: 11 },
+        axisTick: { alignWithLabel: true },
+      },
+      yAxis: {
+        type: 'value' as const,
+        name: '人数',
+        minInterval: 1,
+        nameTextStyle: { fontSize: 12, color: chartColors.tertiary },
+        axisLabel: { fontSize: 11, color: chartColors.tertiary },
+        splitLine: { lineStyle: { type: 'dashed' as const, opacity: 0.5 } },
+      },
+      series: [
+        {
+          name: '人数',
+          type: 'bar' as const,
+          barMaxWidth: 28,
+          itemStyle: { color: chartColors.tertiary, borderRadius: [6, 6, 2, 2] },
+          data: bins.map((bin) => bin.users),
+        },
+      ],
+    };
+  }, [durationHistogram]);
+
   const recentD3RoiRows = useMemo(
     () => (businessRoi?.rows || [])
       .filter((row) => row.d3_ltv_cny !== null)
@@ -686,6 +743,23 @@ export function DashboardPage() {
               <ReactECharts option={activeChartOption} style={{ height: 320 }} />
             ) : (
               <Empty description="暂无打点数据，请确认游戏端已上报 session_start 事件" />
+            )}
+          </Card>
+        </Col>
+        <Col span={24}>
+          <Card
+            title="在线时长分布"
+            extra={(
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                只统计拼出有效会话的人。横轴是分钟，纵轴是人数
+                {overviewKpi?.minutes_per_user != null ? `；人均 ${overviewKpi.minutes_per_user.toFixed(1)} 分钟` : ''}
+              </Text>
+            )}
+          >
+            {durationHistogram.some((bin) => bin.users > 0) ? (
+              <ReactECharts option={durationHistogramOption} style={{ height: 320 }} notMerge lazyUpdate />
+            ) : (
+              <Empty description="这段时间拼不出有效会话" />
             )}
           </Card>
         </Col>
