@@ -1042,6 +1042,32 @@ export async function recordDouyinPublisherIngestRun(input: DouyinPublisherInges
   );
 }
 
+const PUBLISHER_RAW_TABLE = {
+  wechat: 'wechat_publisher_ad_daily',
+  douyin: 'douyin_publisher_ad_daily',
+} as const;
+
+/** 这些游戏在指定日期已经有流量主原始行。没有行表示平台当天还没给出数据。 */
+export async function listPublisherGamesWithDate(
+  source: keyof typeof PUBLISHER_RAW_TABLE,
+  dateKey: string,
+  gameKeys: string[],
+): Promise<Set<string>> {
+  if (!isMysqlMode() || gameKeys.length === 0 || !dateKey) return new Set();
+  await ensureLtvTables();
+  const pool = await getMysqlPool();
+  const table = PUBLISHER_RAW_TABLE[source];
+  const placeholders = gameKeys.map(() => '?').join(', ');
+  const [rows] = await pool.query(
+    `SELECT DISTINCT game_key
+       FROM ${table}
+      WHERE date_key = ?
+        AND game_key IN (${placeholders})`,
+    [dateKey, ...gameKeys],
+  );
+  return new Set((rows as Array<{ game_key: string }>).map((row) => String(row.game_key)));
+}
+
 export async function recordWechatPublisherIngestRun(input: WechatPublisherIngestRunDraft): Promise<void> {
   await ensureLtvTables();
   const pool = await getMysqlPool();

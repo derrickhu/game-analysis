@@ -217,6 +217,7 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     realm_extra_run: '秘境加次',
     stamina_refill: '体力回复',
     free_gacha_pull: '免费召唤',
+    skin_unlock: '外观兑换',
     checkin_double: '签到翻倍',
     tower_reset: '通天塔重置',
     // 旧微信包广告位，见 xiao_chu/js/data/economyConfig.js 的 AD_REWARDS。
@@ -270,6 +271,22 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     basket: '菜篮 - 看广告解锁弹性格',
     stamina: '体力不足 - 看广告回体力',
     special: '特殊菜场 - 看广告出门',
+  },
+  // blackrosa 广告位 = black-rosa/Assets/Scripts/Platform/AdStub.cs，文案跟玩家看到的按钮一致
+  blackrosa: {
+    emitter: '战斗中 - 看广告再加一门炮',
+    chest_speed: '宝箱 - 看广告当场开',
+    checkin_double: '每日签到 - 看广告双倍',
+    checkin_bonus: '每日签到 - 看广告再领一份',
+    event_plays: '招财进宝 - 看广告加次数',
+    event_double: '招财进宝 - 存入翻倍',
+    event_salvage: '招财进宝 - 看广告存回一半',
+    stamina: '体力不足 - 看广告补体力',
+    skin: '炮台皮肤 - 看广告解锁',
+    starter_gift: '新手礼包 - 看广告领取',
+    reroll: '选字 - 看广告重刷',
+    double: '结算 - 墨翻倍并开宝箱',
+    revive: '战斗失败 - 续命再战',
   },
 };
 

@@ -10,6 +10,9 @@ import { ingestTencentAdsBusinessInputs } from './jobs/ingest-tencent-ads';
 import { ingestTencentAdsInsights } from './jobs/ingest-tencent-ads-insights';
 import { ingestDouyinPublisherBusinessInputs } from './publisher/douyin/ingest';
 import { ingestWechatPublisherBusinessInputs } from './publisher/wechat/ingest';
+import { listPublisherGamesWithDate } from './ltv-db';
+import { toShanghaiDateKey } from './time';
+import { resolveCanonicalGameKey } from '../shared/games';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { ingestHotpotSnapshots } from './jobs/ingest-hotpot-snapshot';
 import { ingestPetTowerSnapshots } from './jobs/ingest-pettower-snapshot';
@@ -20,6 +23,23 @@ import { recomputeAttribution } from './metrics/attribution';
 import { runLoggedTask } from './process-lifecycle';
 
 let started = false;
+
+function publisherYesterday(): string {
+  return toShanghaiDateKey(Date.now() - 86_400_000);
+}
+
+/** 每个已配置游戏在昨天都有流量主原始行，才算拉全。查库失败时继续拉，避免漏数。 */
+async function publisherYesterdayComplete(source: 'wechat' | 'douyin', gameKeys: string[]): Promise<boolean> {
+  const keys = [...new Set(gameKeys.filter(Boolean))];
+  if (keys.length === 0) return false;
+  try {
+    const present = await listPublisherGamesWithDate(source, publisherYesterday(), keys);
+    return keys.every((key) => present.has(key));
+  } catch (error) {
+    console.warn(`[scheduler] 检查${source === 'wechat' ? '微信' : '抖音'}昨日收入是否拉全失败，继续拉取:`, error);
+    return false;
+  }
+}
 
 export function startScheduler(): void {
   const config = getConfig();
@@ -246,11 +266,16 @@ export function startScheduler(): void {
     void runTencentAdsInsightsIngest('startup');
   }, 18_000);
 
-  // 9) 微信流量主日报：当天多次回拉最近窗口真实收入/曝光，覆盖商业化 LTV 真实 eCPM。
-  // 微信侧昨日数据经常晚于上午开放，保留 16:10 / 23:10 二次补偿，避免 ROI 页连续缺收入。
-  const wechatPublisherCron = process.env.WECHAT_PUBLISHER_INGEST_CRON || '10 10,16,23 * * *';
+  // 9) 微信流量主日报：上海时间 8:00–22:00 每小时拉一次，截止昨天。
+  // 已配置游戏的昨天都有原始行就跳过；平台经常上午还没出数，缺任何一款就继续拉。
+  const wechatPublisherCron = process.env.WECHAT_PUBLISHER_INGEST_CRON || '5 8-22 * * *';
   const runWechatPublisherIngest = async (trigger: 'cron' | 'startup') => {
     try {
+      const mappings = getConfig().wechatPublisher.gameMappings;
+      if (mappings.length > 0 && await publisherYesterdayComplete('wechat', mappings.map((mapping) => resolveCanonicalGameKey(mapping.gameKey)))) {
+        console.log(`[scheduler] wechat_publisher(${trigger}) 昨日收入已拉全，跳过`);
+        return;
+      }
       const result = await ingestWechatPublisherBusinessInputs({ triggerSource: trigger });
       const summary = result.games
         .map((game) =>
@@ -268,15 +293,20 @@ export function startScheduler(): void {
   };
   cron.schedule(wechatPublisherCron, () => {
     void runWechatPublisherIngest('cron');
-  });
+  }, { timezone: 'Asia/Shanghai' });
   setTimeout(() => {
     void runWechatPublisherIngest('startup');
   }, 15_000);
 
-  // 10) 抖音流量主日报：广告变现 ad/income/query（分成后，元），与微信分列落库后汇总到首页 T-1。
-  const douyinPublisherCron = process.env.DOUYIN_PUBLISHER_INGEST_CRON || '20 10,16,23 * * *';
+  // 10) 抖音流量主日报：与微信错开 15 分钟，同样是 8:00–22:00 每小时一次。昨天都拉全则跳过。
+  const douyinPublisherCron = process.env.DOUYIN_PUBLISHER_INGEST_CRON || '20 8-22 * * *';
   const runDouyinPublisherIngest = async (trigger: 'cron' | 'startup') => {
     try {
+      const mappings = getConfig().douyinPublisher.gameMappings;
+      if (mappings.length > 0 && await publisherYesterdayComplete('douyin', mappings.map((mapping) => mapping.gameKey))) {
+        console.log(`[scheduler] douyin_publisher(${trigger}) 昨日收入已拉全，跳过`);
+        return;
+      }
       const result = await ingestDouyinPublisherBusinessInputs({ triggerSource: trigger });
       const summary = result.games
         .map((game) =>
@@ -294,7 +324,7 @@ export function startScheduler(): void {
   };
   cron.schedule(douyinPublisherCron, () => {
     void runDouyinPublisherIngest('cron');
-  });
+  }, { timezone: 'Asia/Shanghai' });
   setTimeout(() => {
     void runDouyinPublisherIngest('startup');
   }, 20_000);
