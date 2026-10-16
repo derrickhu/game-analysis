@@ -288,6 +288,17 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     double: '结算 - 墨翻倍并开宝箱',
     revive: '战斗失败 - 续命再战',
   },
+  // songjiang 广告位 = code_3/Assets/Scripts/Game/AdStub.cs 与各入口按钮
+  songjiang: {
+    stamina: '体力不足 - 看广告补体力',
+    double_coin: '结算 - 铜钱翻倍',
+    keep_star: '战斗失败 - 看广告保星',
+    double_salary: '俸禄 - 看广告双倍领取',
+    lottery: '孙二娘摊子 - 看广告抽奖',
+    shovel: '战斗中 - 看广告拿铲子开荒',
+    rescue: '宋江危急 - 看广告作法救回',
+    free_item: '摊子 - 看广告免费领取',
+  },
 };
 
 /**

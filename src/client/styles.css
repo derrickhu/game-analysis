@@ -471,6 +471,33 @@ code,
   color: #7c3aed;
 }
 
+.home-activity-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 0 2px;
+}
+
+.home-activity-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.home-activity-dau .home-revenue-panel-num {
+  color: #0f766e;
+}
+
+.home-activity-ad .home-revenue-panel-num {
+  color: #c2410c;
+}
+
+.home-activity-online .home-revenue-panel-num {
+  color: #0369a1;
+}
+
 .home-revenue-panel-unit {
   font-size: 12px;
   color: var(--ga-text-muted);
@@ -504,7 +531,9 @@ code,
 
 .home-month-chart-head-left {
   display: flex;
+  flex: 1 1 0;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
@@ -519,6 +548,11 @@ code,
 
 .home-month-chart-hint {
   font-size: 12px !important;
+  min-width: 0;
+}
+
+.home-month-chart-head .ant-segmented {
+  flex-shrink: 0;
 }
 
 .home-month-chart-empty {

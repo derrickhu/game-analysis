@@ -82,6 +82,18 @@ const ECPM_TABLE: Record<string, number> = {
   'blackrosa.reward': 25,
   'blackrosa._default': 15,
 
+  // songjiang（营救宋江）广告位跟 code_3 AdStub 的按钮对齐
+  'songjiang.reward.stamina': 24,
+  'songjiang.reward.double_coin': 26,
+  'songjiang.reward.keep_star': 28,
+  'songjiang.reward.double_salary': 24,
+  'songjiang.reward.lottery': 24,
+  'songjiang.reward.shovel': 24,
+  'songjiang.reward.rescue': 28,
+  'songjiang.reward.free_item': 24,
+  'songjiang.reward': 25,
+  'songjiang._default': 15,
+
   // dresssort（一裙又一裙）
   'dresssort.reward.energy': 24,
   'dresssort.reward.pack_column': 24,

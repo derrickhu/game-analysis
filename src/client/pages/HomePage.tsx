@@ -57,6 +57,31 @@ interface HomeDailyTrend {
   douyin: HomeChannelTrend;
 }
 
+interface HomeActivitySeries {
+  game_key: string;
+  display_name: string;
+  values: number[];
+}
+
+interface HomeActivityTrend {
+  games: HomeActivitySeries[];
+  total: number[];
+}
+
+interface HomeActivityWindow {
+  buckets: string[];
+  dau: HomeActivityTrend;
+  ad_show: HomeActivityTrend;
+}
+
+interface HomeOnlineWindow {
+  buckets: string[];
+  games: HomeActivitySeries[];
+  total: number[];
+}
+
+type ActivityMetric = 'dau' | 'ad';
+
 interface HomeDauResponse {
   ok: boolean;
   date_key?: string;
@@ -69,9 +94,23 @@ interface HomeDauResponse {
   month_t1_douyin_revenue_cny?: number;
   daily_trend?: HomeDailyTrend;
   monthly_trend?: HomeMonthlyTrend;
+  today_total_dau?: number;
+  today_total_ad_show?: number;
+  activity_daily?: HomeActivityWindow;
+  activity_monthly?: HomeActivityWindow;
+  online_now?: number;
+  online_today?: HomeOnlineWindow;
   games?: HomeGameDau[];
   error?: string;
 }
+
+const ACTIVITY_META: Record<
+  ActivityMetric,
+  { title: string; unit: string; color: string; empty: string }
+> = {
+  dau: { title: '总日活', unit: '人', color: '#0f766e', empty: '暂无日活' },
+  ad: { title: '总曝光', unit: '次', color: '#c2410c', empty: '暂无曝光' },
+};
 
 const CHANNEL_META: Record<
   RevenueChannel,
@@ -125,6 +164,18 @@ function barPct(value: number, max: number): number {
   return Math.round((value / Math.max(1, max)) * 100);
 }
 
+/** 在线曲线刻度：整点里的偶数小时，再加上第一个和最后一个点。 */
+function clockAxisInterval(buckets: string[]): (index: number) => boolean {
+  const last = Math.max(0, buckets.length - 1);
+  return (index: number) => {
+    if (index === 0 || index === last) return true;
+    const time = (buckets[index] || '').split(' ').pop() || '';
+    const [hour, minute] = time.split(':');
+    if (minute !== '00') return false;
+    return Number(hour) % 2 === 0;
+  };
+}
+
 function pickChannelTrend(
   channel: RevenueChannel,
   daily: HomeDailyTrend | null,
@@ -149,13 +200,16 @@ function pickChannelTrend(
   };
 }
 
-function buildRevenueChartOption(input: {
-  channel: RevenueChannel;
+function buildTrendChartOption(input: {
+  color: string;
   isDaily: boolean;
+  /** 今天的实时在线：横轴已经是「时:分」，点很密，不再画圆点 */
+  clock?: boolean;
   buckets: string[];
-  games: HomeMonthlyGameSeries[];
+  games: Array<{ display_name: string; values: number[] }>;
   totals: number[];
   legendSelected: Record<string, boolean> | null;
+  formatValue: (value: number) => string;
 }): EChartsOption {
   const selected: Record<string, boolean> = { 合计: true };
   for (const game of input.games) selected[game.display_name] = false;
@@ -168,7 +222,7 @@ function buildRevenueChartOption(input: {
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value) =>
-        typeof value === 'number' ? `${formatYuan(value)} 元` : String(value ?? ''),
+        typeof value === 'number' ? input.formatValue(value) : String(value ?? ''),
     },
     legend: {
       type: 'scroll',
@@ -177,16 +231,21 @@ function buildRevenueChartOption(input: {
       selected,
       selectedMode: true,
     },
-    grid: { left: 4, right: input.isDaily ? 18 : 8, top: 28, bottom: 2, containLabel: true },
+    grid: { left: 4, right: input.clock || input.isDaily ? 18 : 8, top: 28, bottom: 2, containLabel: true },
     xAxis: {
       type: 'category',
       data: input.buckets,
       boundaryGap: false,
       axisLabel: {
-        // 30 天挤在窄图里时，自动抽稀会把最后两天（往往是 1 日、2 日）的刻度藏掉，看起来像没数据。
-        hideOverlap: false,
-        interval: input.isDaily ? dailyAxisInterval(input.buckets.length) : 0,
-        formatter: (value: string) => (input.isDaily ? formatDayLabel(value) : formatMonthLabel(value)),
+        // 按天时不要自动抽稀，否则最后两天的刻度会被藏掉。按月标签较长，重叠的月份交给图表自己藏。
+        hideOverlap: Boolean(input.clock) || !input.isDaily,
+        interval: input.clock
+          ? clockAxisInterval(input.buckets)
+          : input.isDaily
+            ? dailyAxisInterval(input.buckets.length)
+            : 0,
+        formatter: (value: string) =>
+          input.clock ? value : input.isDaily ? formatDayLabel(value) : formatMonthLabel(value),
       },
     },
     yAxis: {
@@ -202,11 +261,11 @@ function buildRevenueChartOption(input: {
         name: '合计',
         type: 'line' as const,
         smooth: 0.35,
-        showSymbol: true,
-        symbolSize: input.isDaily ? 5 : 7,
+        showSymbol: !input.clock,
+        symbolSize: input.clock ? 0 : input.isDaily ? 5 : 7,
         z: 3,
         lineStyle: { width: 3, type: 'solid' as const },
-        itemStyle: { color: CHANNEL_META[input.channel].color },
+        itemStyle: { color: input.color },
         areaStyle: { opacity: 0.14 },
         data: input.totals,
       },
@@ -214,12 +273,31 @@ function buildRevenueChartOption(input: {
         name: game.display_name,
         type: 'line' as const,
         smooth: 0.35,
-        showSymbol: true,
-        symbolSize: 6,
-        data: game.revenue,
+        showSymbol: !input.clock,
+        symbolSize: input.clock ? 0 : 6,
+        data: game.values,
       })),
     ],
   };
+}
+
+function buildRevenueChartOption(input: {
+  channel: RevenueChannel;
+  isDaily: boolean;
+  buckets: string[];
+  games: HomeMonthlyGameSeries[];
+  totals: number[];
+  legendSelected: Record<string, boolean> | null;
+}): EChartsOption {
+  return buildTrendChartOption({
+    color: CHANNEL_META[input.channel].color,
+    isDaily: input.isDaily,
+    buckets: input.buckets,
+    games: input.games.map((game) => ({ display_name: game.display_name, values: game.revenue })),
+    totals: input.totals,
+    legendSelected: input.legendSelected,
+    formatValue: (value) => `${formatYuan(value)} 元`,
+  });
 }
 
 function PlatformMetric({
@@ -263,8 +341,17 @@ export function HomePage() {
   const [dailyFromDate, setDailyFromDate] = useState('');
   const [dailyTrend, setDailyTrend] = useState<HomeDailyTrend | null>(null);
   const [monthlyTrend, setMonthlyTrend] = useState<HomeMonthlyTrend | null>(null);
+  const [todayTotalDau, setTodayTotalDau] = useState(0);
+  const [todayTotalAdShow, setTodayTotalAdShow] = useState(0);
+  const [activityDaily, setActivityDaily] = useState<HomeActivityWindow | null>(null);
+  const [activityMonthly, setActivityMonthly] = useState<HomeActivityWindow | null>(null);
+  const [onlineNow, setOnlineNow] = useState(0);
+  const [onlineToday, setOnlineToday] = useState<HomeOnlineWindow | null>(null);
   const [revenueGranularity, setRevenueGranularity] = useState<RevenueGranularity>('day');
   const [legendSelected, setLegendSelected] = useState<Record<string, boolean> | null>(null);
+  const [dauLegendSelected, setDauLegendSelected] = useState<Record<string, boolean> | null>(null);
+  const [adLegendSelected, setAdLegendSelected] = useState<Record<string, boolean> | null>(null);
+  const [onlineLegendSelected, setOnlineLegendSelected] = useState<Record<string, boolean> | null>(null);
   const [games, setGames] = useState<HomeGameDau[]>([]);
 
   const load = useCallback(async () => {
@@ -285,6 +372,17 @@ export function HomePage() {
       setDailyFromDate(data.daily_from_date || '');
       setDailyTrend(data.daily_trend || null);
       setMonthlyTrend(data.monthly_trend || null);
+      setTodayTotalDau(data.today_total_dau ?? (data.games || []).reduce((sum, game) => sum + (game.total_dau || 0), 0));
+      setTodayTotalAdShow(data.today_total_ad_show ?? (data.games || []).reduce((sum, game) => sum + (game.total_ad_show || 0), 0));
+      setActivityDaily(data.activity_daily || null);
+      setActivityMonthly(data.activity_monthly || null);
+      setOnlineToday(data.online_today || null);
+      setOnlineNow(
+        data.online_now ??
+          (data.online_today?.total?.length
+            ? data.online_today.total[data.online_today.total.length - 1] || 0
+            : 0),
+      );
       setGames(data.games || []);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -332,6 +430,55 @@ export function HomePage() {
       }),
     ) as Record<RevenueChannel, EChartsOption>;
   }, [dailyTrend, isDaily, legendSelected, monthlyTrend]);
+
+  const activityWindow = isDaily ? activityDaily : activityMonthly;
+  const activityOptions = useMemo(() => {
+    const metrics: ActivityMetric[] = ['dau', 'ad'];
+    return Object.fromEntries(
+      metrics.map((metric) => {
+        const branch = metric === 'dau' ? activityWindow?.dau : activityWindow?.ad_show;
+        const meta = ACTIVITY_META[metric];
+        return [
+          metric,
+          buildTrendChartOption({
+            color: meta.color,
+            isDaily,
+            buckets: activityWindow?.buckets || [],
+            games: (branch?.games || []).map((game) => ({
+              display_name: game.display_name,
+              values: game.values || [],
+            })),
+            totals: branch?.total || [],
+            legendSelected: metric === 'dau' ? dauLegendSelected : adLegendSelected,
+            formatValue: (value) => `${formatCount(value)} ${meta.unit}`,
+          }),
+        ];
+      }),
+    ) as Record<ActivityMetric, EChartsOption>;
+  }, [activityWindow, adLegendSelected, dauLegendSelected, isDaily]);
+
+  const onlineOption = useMemo(
+    () =>
+      buildTrendChartOption({
+        color: '#0369a1',
+        isDaily: false,
+        clock: true,
+        buckets: onlineToday?.buckets || [],
+        games: (onlineToday?.games || []).map((game) => ({
+          display_name: game.display_name,
+          values: game.values || [],
+        })),
+        totals: onlineToday?.total || [],
+        legendSelected: onlineLegendSelected,
+        formatValue: (value) => `${formatCount(value)} 人`,
+      }),
+    [onlineLegendSelected, onlineToday],
+  );
+
+  const todayByActivity: Record<ActivityMetric, number> = {
+    dau: todayTotalDau,
+    ad: todayTotalAdShow,
+  };
 
   const openGamePlatform = (gameKey: string, platform: PlatformFilter) => {
     navigate(
@@ -413,6 +560,76 @@ export function HomePage() {
               </section>
             );
           })}
+        </div>
+        <div className="home-activity-head">
+          <span className="home-month-chart-title">全部游戏 · 日活、曝光与在线</span>
+          <Text type="secondary" className="home-month-chart-hint">
+            {isDaily
+              ? '日活和曝光是近 30 天含今天 · 在线是近 24 小时 · 默认只看合计'
+              : '日活和曝光按月 · 在线仍是近 24 小时 · 默认只看合计'}
+          </Text>
+        </div>
+        <div className="home-activity-grid">
+          {(['dau', 'ad'] as const).map((metric) => {
+            const meta = ACTIVITY_META[metric];
+            const buckets = activityWindow?.buckets || [];
+            return (
+              <section key={metric} className={`home-revenue-panel home-activity-${metric}`}>
+                <div className="home-revenue-panel-head">
+                  <div className="home-revenue-panel-title-row">
+                    <span className="home-revenue-panel-title">{meta.title}</span>
+                    <span className="home-revenue-panel-num mono">{formatCount(todayByActivity[metric])}</span>
+                    <span className="home-revenue-panel-unit">{meta.unit}</span>
+                  </div>
+                  <Text type="secondary" className="home-revenue-panel-hint">
+                    今日 · 全部游戏
+                  </Text>
+                </div>
+                {buckets.length ? (
+                  <ReactECharts
+                    option={activityOptions[metric]}
+                    height={148}
+                    framed={false}
+                    onEvents={{
+                      legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
+                        const selected = event.selected || null;
+                        if (metric === 'dau') setDauLegendSelected(selected);
+                        else setAdLegendSelected(selected);
+                      },
+                    }}
+                  />
+                ) : (
+                  <div className="home-month-chart-empty">{meta.empty}</div>
+                )}
+              </section>
+            );
+          })}
+          <section className="home-revenue-panel home-activity-online">
+            <div className="home-revenue-panel-head">
+              <div className="home-revenue-panel-title-row">
+                <span className="home-revenue-panel-title">当前在线</span>
+                <span className="home-revenue-panel-num mono">{formatCount(onlineNow)}</span>
+                <span className="home-revenue-panel-unit">人</span>
+              </div>
+              <Text type="secondary" className="home-revenue-panel-hint">
+                近 24 小时 · 最右是此刻
+              </Text>
+            </div>
+            {onlineToday?.buckets.length ? (
+              <ReactECharts
+                option={onlineOption}
+                height={148}
+                framed={false}
+                onEvents={{
+                  legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
+                    setOnlineLegendSelected(event.selected || null);
+                  },
+                }}
+              />
+            ) : (
+              <div className="home-month-chart-empty">暂无在线</div>
+            )}
+          </section>
         </div>
       </div>
 
