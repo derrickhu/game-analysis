@@ -42,9 +42,9 @@ export interface ProgressKpi {
 export interface LevelDistributionRow {
   level_id: number;
   start_users: number;   // 尝试这一关的去重用户数
-  clear_users: number;   // 通关这一关的去重用户数
-  fail_users: number;    // 在这一关放弃的去重用户数
-  pass_rate: number | null; // = clear_users / start_users
+  clear_users: number;   // 窗口内开了这关、并且也通关的去重用户数
+  fail_users: number;    // 窗口内开了这关、并且放弃过的去重用户数
+  pass_rate: number | null; // = clear_users / start_users，不会超过 100%
 }
 
 export interface ProgressSeriesPoint {
@@ -146,7 +146,10 @@ async function getMaxClearedLevel(
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
-      `SELECT MAX(CAST(JSON_EXTRACT(params_json, '$.level_id') AS UNSIGNED)) AS max_lv
+      `SELECT MAX(CASE
+                WHEN CAST(JSON_EXTRACT(params_json, '$.level_id') AS SIGNED) > 0
+                THEN CAST(JSON_EXTRACT(params_json, '$.level_id') AS SIGNED)
+              END) AS max_lv
          FROM analytics_events
         WHERE game_key = ? AND event_name = 'level_clear'
           AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
@@ -158,7 +161,10 @@ async function getMaxClearedLevel(
   // sqlite 用 json_extract（better-sqlite3 默认编译带 JSON1）
   const r = getDb()
     .prepare(
-      `SELECT MAX(CAST(json_extract(params_json, '$.level_id') AS INTEGER)) AS max_lv
+      `SELECT MAX(CASE
+                WHEN CAST(json_extract(params_json, '$.level_id') AS INTEGER) > 0
+                THEN CAST(json_extract(params_json, '$.level_id') AS INTEGER)
+              END) AS max_lv
          FROM analytics_events
         WHERE game_key = ? AND event_name = 'level_clear'
           AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}`,
@@ -219,18 +225,30 @@ async function computeDistribution(
   }
   const out: LevelDistributionRow[] = [];
   for (const lv of Array.from(allLevels).sort((a, b) => a - b)) {
-    const start_users = startMap.get(lv)?.size || 0;
-    const clear_users = clearMap.get(lv)?.size || 0;
-    const fail_users = failMap.get(lv)?.size || 0;
+    const starters = startMap.get(lv);
+    const start_users = starters?.size || 0;
+    if (start_users === 0) continue;
+    const clear_users = countOverlap(starters, clearMap.get(lv));
+    const fail_users = countOverlap(starters, failMap.get(lv));
     out.push({
       level_id: lv,
       start_users,
       clear_users,
       fail_users,
-      pass_rate: start_users > 0 ? clear_users / start_users : null,
+      pass_rate: clear_users / start_users,
     });
   }
   return out;
+}
+
+function countOverlap(left: Set<string> | undefined, right: Set<string> | undefined): number {
+  if (!left || !right || left.size === 0 || right.size === 0) return 0;
+  const [small, large] = left.size <= right.size ? [left, right] : [right, left];
+  let count = 0;
+  for (const user of small) {
+    if (large.has(user)) count += 1;
+  }
+  return count;
 }
 
 async function listLevelUserSet(

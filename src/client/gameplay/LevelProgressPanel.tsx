@@ -160,7 +160,7 @@ export function LevelProgressPanel() {
           const row = dist[params[0].dataIndex];
           if (!row) return lv;
           const passText = row.pass_rate === null ? '-' : `${(row.pass_rate * 100).toFixed(1)}%`;
-          return `${lv}<br/>尝试用户: ${row.start_users}<br/>通关用户: ${row.clear_users}<br/>放弃用户: ${row.fail_users}<br/>通关率: ${passText}`;
+          return `${lv}<br/>尝试用户: ${row.start_users}<br/>其中通关: ${row.clear_users}<br/>其中放弃: ${row.fail_users}<br/>通关率: ${passText}`;
         },
       },
       legend: {
@@ -407,7 +407,7 @@ export function LevelProgressPanel() {
           </Col>
           <Col xs={12} md={6}>
             <Card size="small">
-              <Tooltip title="当前时间窗口内 level_clear 事件中最大的 level_id；切窗口会跟随变化。">
+              <Tooltip title="当前窗口里主线通关的最大关号。活动关用负数编号，不计入。">
                 <Statistic
                   title="窗口内最高通关"
                   value={progressKpi?.max_cleared_level ?? 0}
