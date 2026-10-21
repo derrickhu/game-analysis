@@ -203,16 +203,10 @@ async function resolveAccessToken(mapping: TencentAdsGameMapping): Promise<strin
     return refreshTencentAccessToken(mapping, refreshToken);
   }
 
+  // 环境变量里的 access_token 先直接用，不提前写入数据库。
+  // 腾讯广告的 access_token 只有一天左右，写进去会把已经失效的种子缓存 23 小时，
+  // 后面即使换了新 token，也会继续拿这条失效记录。刷新成功的结果仍由 refresh 分支落库。
   if (seed.accessToken) {
-    await upsertExternalApiToken({
-      provider: 'tencent_ads',
-      gameKey: mapping.gameKey,
-      subjectId: mapping.accountId,
-      accessToken: seed.accessToken,
-      refreshToken: seed.refreshToken,
-      expiresAt: Date.now() + 23 * 60 * 60 * 1000,
-      metadata: { accountId: mapping.accountId, seededFromEnv: true },
-    });
     return seed.accessToken;
   }
 

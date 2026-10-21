@@ -60,6 +60,8 @@ import { getPetTowerGameplayOverview, PET_TOWER_GAME_KEY } from '../metrics/real
 import { getWujinGameplayOverview, WUJIN_GAME_KEY } from '../metrics/realtime-wujin';
 import { ingestHuahuaSnapshots } from '../jobs/ingest-huahua-snapshot';
 import { getHomeDau } from '../metrics/home-dau';
+import { getLivePaybackToday } from '../metrics/live-payback';
+import { getOnlineCurve } from '../metrics/online-curve';
 import { getOverview } from '../metrics/realtime-overview';
 import { getProgressOverview } from '../metrics/realtime-progress';
 import { getShareOverview } from '../metrics/realtime-share';
@@ -809,6 +811,30 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     };
   });
 
+  /** 单游戏实时在线曲线。5 分钟口径与总览当前在线一致；超过 48 小时改按小时。 */
+  app.get('/api/realtime/online-curve', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    const { fromTs, toTs, windowMinutes } = parseTimeRange(query);
+    try {
+      const curve = await getOnlineCurve(gameKey, fromTs, toTs, query.platform);
+      return {
+        ok: true,
+        query: { game_key: gameKey, from: tsToBucket(fromTs), to: tsToBucket(toTs), window_minutes: windowMinutes },
+        ...curve,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'ONLINE_CURVE_FAILED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   /** 经分主页：今日各游戏日活/曝光、全部游戏合计，以及收益、活跃和实时在线曲线 */
   app.get('/api/realtime/home-dau', async () => {
     const result = await getHomeDau();
@@ -959,6 +985,25 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
       query: { game_key: gameKey, from_date: fromDate, to_date: toDate, window_minutes: windowMinutes },
       ...result,
     };
+  });
+
+  /** 留存与回本的今天：新增、消耗、回收和正在发生的次留/3留/7留，按当前累计现算。 */
+  app.get('/api/realtime/payback-today', async (request) => {
+    const query = (request.query || {}) as AdRevenueQuery;
+    const gameKey = query.game || 'hotpot';
+    if (!findAnalyticsGame(gameKey)) {
+      return { ok: false, code: 'UNKNOWN_GAME', error: `unknown game: ${gameKey}` };
+    }
+    try {
+      const today = await getLivePaybackToday(gameKey, query.platform);
+      return { ok: true, ...today };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'PAYBACK_TODAY_FAILED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   // 投放洞察：读取腾讯广告定向标签、创意素材、画像洞察原始表，并与现有 cohort/LTV 做日期级关联。

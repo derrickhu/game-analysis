@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import 'antd/dist/reset.css';
-import { Navigate, RouterProvider, createBrowserRouter } from 'react-router-dom';
+import { Navigate, RouterProvider, createBrowserRouter, useLocation } from 'react-router-dom';
 
 import { BusinessLayout } from './layouts/BusinessLayout';
 import { HomeLayout } from './layouts/HomeLayout';
@@ -16,7 +16,6 @@ import { GameplayPage } from './pages/GameplayPage';
 import { HomePage } from './pages/HomePage';
 import { OpsPage } from './pages/OpsPage';
 import { PlayerSnapshotPage } from './pages/PlayerSnapshotPage';
-import { RetentionPage } from './pages/RetentionPage';
 import { getPublicBase, installPublicApiPrefix } from './publicBase';
 import { antdTheme, registerAnalyticsChartTheme } from './theme';
 import './styles.css';
@@ -24,12 +23,17 @@ import './styles.css';
 registerAnalyticsChartTheme();
 installPublicApiPrefix();
 
+function KeepSearchRedirect({ to }: { to: string }) {
+  const location = useLocation();
+  return <Navigate to={{ pathname: to, search: location.search }} replace />;
+}
+
 /**
  * 路由结构（v7 createBrowserRouter）：
  *   /                                         总览主页（各游戏今日各平台日活）
  *   /business                  → 重定向 /business/dashboard
- *   /business/dashboard?game=&window=         大盘运营（通用：KPI + 活跃趋势 + 广告 + 分享）
- *   /business/retention?game=                 留存分析（cohort D0-D30 + 设备拆分）
+ *   /business/dashboard?game=&window=         大盘运营（通用：KPI + 留存回本 + 活跃趋势 + 广告 + 分享）
+ *   /business/retention                        旧留存页，并入大盘
  *   /business/commercial?game=&window=        商业化分析（ROI 决策 + LTV 回收 + 真实录入）
  *   /business/attribution?game=                 广告归因（Campaign 质量 + 回传 dry-run）
  *   /business/gameplay?game=&window=          玩法分析（按 gameKey 渲染各自漏斗 panel）
@@ -52,7 +56,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/business/dashboard" replace /> },
       { path: 'dashboard', element: <DashboardPage /> },
-      { path: 'retention', element: <RetentionPage /> },
+      { path: 'retention', element: <KeepSearchRedirect to="/business/dashboard" /> },
       { path: 'commercial', element: <CommercialPage /> },
       { path: 'attribution', element: <AttributionPage /> },
       { path: 'ltv', element: <Navigate to="/business/commercial" replace /> },

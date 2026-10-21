@@ -28,7 +28,6 @@ function BusinessSubTabs() {
   const navigate = useNavigate();
   const location = useLocation();
   const subKey = (() => {
-    if (location.pathname.startsWith('/business/retention')) return 'retention';
     if (location.pathname.startsWith('/business/attribution')) return 'attribution';
     if (
       location.pathname.startsWith('/business/commercial') ||
@@ -51,7 +50,6 @@ function BusinessSubTabs() {
       }}
       items={[
         { key: 'dashboard', label: '大盘运营' },
-        { key: 'retention', label: '留存分析' },
         { key: 'commercial', label: '商业化分析' },
         { key: 'attribution', label: '广告归因' },
         { key: 'gameplay', label: '玩法分析' },

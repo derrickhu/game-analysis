@@ -21,6 +21,7 @@ import { useAnalyticsFilter } from '../context/AnalyticsFilterContext';
 import { fetchJson } from '../fetchJson';
 import { RealtimeAdRevenue } from '../RealtimeAdRevenue';
 import { RealtimeShare } from '../RealtimeShare';
+import { PaybackSection } from './PaybackSection';
 import { chartColors } from '../theme/chartPalette';
 import { buildWindowQuery, resolveWindow, tsToUtcBucketStr, type WindowValue } from '../timeWindow';
 
@@ -63,6 +64,24 @@ interface DurationHistogramBin {
   users: number;
 }
 
+interface OnlineCurvePoint {
+  ts: number;
+  label: string;
+  online: number;
+}
+
+interface OnlineCurveResponse {
+  ok: boolean;
+  bucket_minutes?: number;
+  live?: boolean;
+  current?: number;
+  peak?: number;
+  peak_label?: string;
+  points?: OnlineCurvePoint[];
+  code?: string;
+  error?: string;
+}
+
 interface OverviewResponse {
   ok: boolean;
   query?: { game_key: string; from: string; to: string; window_minutes: number };
@@ -84,6 +103,7 @@ interface AdSummaryLiteResponse {
     ad_penetration_rate?: number;
     ad_show_per_uu?: number;
     fill_rate?: number;
+    completion_rate?: number;
   };
   code?: string;
   error?: string;
@@ -96,25 +116,6 @@ interface AcquisitionCostResponse {
   source?: string;
   error?: string;
   code?: string;
-}
-
-interface BusinessRoiLiteRow {
-  date_key: string;
-  spend_cny: number;
-  game_new_users: number;
-  cpi_cny: number | null;
-  d3_ltv_cny: number | null;
-  d3_roi: number | null;
-  d7_ltv_cny: number | null;
-  d7_roi: number | null;
-  data_status_label: string;
-}
-
-interface BusinessRoiLiteResponse {
-  ok: boolean;
-  rows?: BusinessRoiLiteRow[];
-  code?: string;
-  error?: string;
 }
 
 function formatRetentionRate(value: number | null | undefined): string {
@@ -144,12 +145,6 @@ function dateKey(ts: number): string {
   const date = new Date(ts);
   const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function addDaysDateKey(value: string, days: number): string {
-  const date = new Date(`${value}T00:00:00`);
-  date.setDate(date.getDate() + days);
-  return dateKey(date.getTime());
 }
 
 function buildDateRangeQuery(window: WindowValue, shiftMs = 0): string {
@@ -206,6 +201,22 @@ const kpiCardStyles = {
  * 后端 tsToBucket 给的是 UTC 字符串（"YYYY-MM-DDTHH:mm" + 隐含 Z），直接 slice 显示出来是 UTC，
  * 北京用户会看到偏移 8 小时的奇怪刻度，这里转回本地。
  */
+function clockOf(label: string): string {
+  const time = label.includes(' ') ? label.split(' ').pop() || label : label;
+  return time;
+}
+
+/** 5 分钟在线曲线刻度：整点里的偶数小时，再加上首尾。 */
+function onlineAxisInterval(labels: string[]): (index: number) => boolean {
+  const last = Math.max(0, labels.length - 1);
+  return (index: number) => {
+    if (index === 0 || index === last) return true;
+    const [hour, minute] = clockOf(labels[index] || '').split(':');
+    if (minute !== '00') return false;
+    return Number(hour) % 2 === 0;
+  };
+}
+
 function bucketShort(bucket: string): string {
   if (!bucket) return '';
   const utcDate = new Date(`${bucket}:00.000Z`);
@@ -214,13 +225,8 @@ function bucketShort(bucket: string): string {
   return `${pad(utcDate.getMonth() + 1)}-${pad(utcDate.getDate())} ${pad(utcDate.getHours())}:${pad(utcDate.getMinutes())}`;
 }
 
-function yuan(value: number | null | undefined, digits = 2): string {
-  if (value === null || value === undefined) return '-';
-  return `${value.toFixed(digits)} 元`;
-}
-
 /**
- * 大盘运营页面 = 通用 KPI + 活跃/新增趋势 + 广告变现 + 分享传播。
+ * 大盘运营页面 = 通用 KPI + 留存回本 + 实时在线 + 活跃/新增趋势 + 广告变现 + 分享传播。
  *
  * 这里只展示对所有游戏一致的"经营大盘"指标，游戏专属玩法（关卡漏斗/任务漏斗等）
  * 在 /business/gameplay 单独承载。这样所有游戏的大盘视图视觉对齐、产品决策口径一致。
@@ -246,7 +252,8 @@ export function DashboardPage() {
     ad: null,
   });
   const [comparisonCost, setComparisonCost] = useState<AcquisitionCostResponse | null>(null);
-  const [businessRoi, setBusinessRoi] = useState<BusinessRoiLiteResponse | null>(null);
+  const [onlineCurve, setOnlineCurve] = useState<OnlineCurveResponse | null>(null);
+  const [onlineCompare, setOnlineCompare] = useState<OnlineCurveResponse | null>(null);
   const requestSeqRef = useRef(0);
 
   const loadAll = useCallback(
@@ -258,7 +265,8 @@ export function DashboardPage() {
         setAcquisitionCost(null);
         setComparison({ overview: null, ad: null });
         setComparisonCost(null);
-        setBusinessRoi(null);
+        setOnlineCurve(null);
+        setOnlineCompare(null);
         setLastRefreshedAt(Date.now());
         return;
       }
@@ -288,11 +296,11 @@ export function DashboardPage() {
         const compareCostPromise = fetchJson<AcquisitionCostResponse>(
           `/api/realtime/acquisition-cost?game=${encodeURIComponent(nextGameKey)}&${appendPlatformQuery(buildDateRangeQuery(nextWindow, -86_400_000), platform)}`,
         );
-        // D3 ROI 只展示已经完整出数的 cohort：cohort 日 + 3 天必须已经结束。
-        const roiToDate = addDaysDateKey(dateKey(Date.now()), -4);
-        const roiFromDate = addDaysDateKey(roiToDate, -30);
-        const businessRoiPromise = fetchJson<BusinessRoiLiteResponse>(
-          `/api/realtime/business-inputs?game=${encodeURIComponent(nextGameKey)}&${appendPlatformQuery(`from_date=${encodeURIComponent(roiFromDate)}&to_date=${encodeURIComponent(roiToDate)}`, platform)}`,
+        const onlinePromise = fetchJson<OnlineCurveResponse>(
+          `/api/realtime/online-curve?game=${encodeURIComponent(nextGameKey)}&${queryStr}`,
+        );
+        const onlineComparePromise = fetchJson<OnlineCurveResponse>(
+          `/api/realtime/online-curve?game=${encodeURIComponent(nextGameKey)}&${compareQueryStr}`,
         );
         const [
           ovRes,
@@ -301,7 +309,8 @@ export function DashboardPage() {
           compareOvRes,
           compareAdRes,
           compareCostRes,
-          businessRoiRes,
+          onlineRes,
+          onlineCompareRes,
         ] = await Promise.all([
           overviewPromise,
           adSummaryPromise,
@@ -309,7 +318,8 @@ export function DashboardPage() {
           compareOverviewPromise,
           compareAdSummaryPromise,
           compareCostPromise,
-          businessRoiPromise,
+          onlinePromise,
+          onlineComparePromise,
         ]);
         // 防止竞态：仅最新一次请求结果生效
         if (seq !== requestSeqRef.current) return;
@@ -324,7 +334,8 @@ export function DashboardPage() {
           ad: compareAdRes.ok ? compareAdRes : null,
         });
         setComparisonCost(compareCostRes);
-        setBusinessRoi(businessRoiRes.ok ? businessRoiRes : null);
+        setOnlineCurve(onlineRes);
+        setOnlineCompare(onlineCompareRes.ok ? onlineCompareRes : null);
         setLastRefreshedAt(Date.now());
       } catch (error) {
         if (seq !== requestSeqRef.current) return;
@@ -388,6 +399,65 @@ export function DashboardPage() {
     };
   }, [overview?.series]);
 
+  const onlineChartOption = useMemo(() => {
+    const points = onlineCurve?.points || [];
+    const clocks = points.map((point) => clockOf(point.label));
+    const clocksUnique = new Set(clocks).size === clocks.length;
+    const fine = onlineCurve?.bucket_minutes === 5 && clocksUnique;
+    const yesterday = fine ? onlineCompare?.points || [] : [];
+    const yesterdayByClock = new Map(yesterday.map((point) => [clockOf(point.label), point.online]));
+    const labels = points.map((point) => point.label);
+    return {
+      tooltip: { trigger: 'axis' as const },
+      legend: {
+        data: yesterday.length ? ['在线', '昨日同期'] : ['在线'],
+        textStyle: { fontSize: 13, fontWeight: 560 },
+      },
+      grid: { left: 16, right: 20, top: 48, bottom: 16, containLabel: true },
+      xAxis: {
+        type: 'category' as const,
+        data: labels,
+        boundaryGap: false,
+        axisLabel: {
+          hideOverlap: true,
+          interval: fine ? onlineAxisInterval(labels) : 0,
+        },
+      },
+      yAxis: {
+        type: 'value' as const,
+        name: '人数',
+        min: 0,
+        minInterval: 1,
+      },
+      series: [
+        {
+          name: '在线',
+          type: 'line' as const,
+          smooth: 0.3,
+          showSymbol: points.length <= 48,
+          symbolSize: 6,
+          z: 3,
+          itemStyle: { color: chartColors.primary },
+          lineStyle: { width: 2.5, color: chartColors.primary },
+          areaStyle: { opacity: 0.14 },
+          data: points.map((point) => point.online),
+        },
+        ...(yesterday.length
+          ? [{
+              name: '昨日同期',
+              type: 'line' as const,
+              smooth: 0.3,
+              showSymbol: false,
+              z: 2,
+              itemStyle: { color: chartColors.muted },
+              lineStyle: { width: 1.5, type: 'dashed' as const, color: chartColors.muted },
+              data: points.map((point) => yesterdayByClock.get(clockOf(point.label)) ?? null),
+            }]
+          : []),
+      ],
+    };
+  }, [onlineCompare?.points, onlineCurve?.bucket_minutes, onlineCurve?.points]);
+
   const durationHistogram = overview?.duration_histogram || [];
   const durationHistogramOption = useMemo(() => {
     const bins = durationHistogram;
@@ -438,21 +508,6 @@ export function DashboardPage() {
       ],
     };
   }, [durationHistogram]);
-
-  const recentD3RoiRows = useMemo(
-    () => (businessRoi?.rows || [])
-      .filter((row) => row.d3_ltv_cny !== null)
-      .sort((a, b) => a.date_key.localeCompare(b.date_key))
-      .slice(-3),
-    [businessRoi?.rows],
-  );
-  const recentD7RoiRows = useMemo(
-    () => (businessRoi?.rows || [])
-      .filter((row) => row.d7_ltv_cny !== null)
-      .sort((a, b) => a.date_key.localeCompare(b.date_key))
-      .slice(-3),
-    [businessRoi?.rows],
-  );
 
   // 未接入 SDK 的游戏：拦截整页（不要让用户看到一堆 0 误以为"线上没人玩"）
   if (!isIntegrated) {
@@ -626,37 +681,43 @@ export function DashboardPage() {
             }
           >
             <Row gutter={[16, 16]}>
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6} xl={3}>
                 <Tooltip title="窗口内投放消耗（元）。优先腾讯广告实时；接口失败见下方对比文案。">
                   <Statistic title="投放消耗" value={currentSpend ?? '-'} suffix={currentSpend === undefined ? undefined : '元'} precision={2} />
                 </Tooltip>
                 <KpiDeltaText delta={deltaText(currentSpend, previousSpend, { digits: 1, unavailableText: acquisitionSource })} />
               </Col>
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6} xl={3}>
                 <Tooltip title="投放消耗 ÷ 窗口内新增用户。越低获客越便宜（对比箭头反向解读）。">
                   <Statistic title="投放 CPI" value={currentCpi ?? '-'} suffix={currentCpi === null ? undefined : '元'} precision={4} />
                 </Tooltip>
                 <KpiDeltaText delta={deltaText(currentCpi, previousCpi, { digits: 1, reverseGood: true, unavailableText: acquisitionSource })} />
               </Col>
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6} xl={3}>
                 <Tooltip title="日活里看过广告的人数 ÷ 日活。日活是 session_start 去重，和本页日活同一批人。">
                   <Statistic title="广告渗透" value={currentAd?.ad_penetration_rate ?? 0} suffix="%" precision={1} />
                 </Tooltip>
                 <KpiDeltaText delta={deltaText(currentAd?.ad_penetration_rate, previousAd?.ad_penetration_rate, { digits: 1 })} />
               </Col>
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6} xl={3}>
                 <Tooltip title="窗口内广告展示次数 ÷ 活跃用户。">
                   <Statistic title="人均广告展示" value={currentAd?.ad_show_per_uu ?? 0} suffix="次" precision={2} />
                 </Tooltip>
                 <KpiDeltaText delta={deltaText(currentAd?.ad_show_per_uu, previousAd?.ad_show_per_uu, { digits: 1 })} />
               </Col>
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6} xl={3}>
                 <Tooltip title="广告填充成功次数 ÷ 请求次数。">
                   <Statistic title="填充率" value={currentAd?.fill_rate ?? 0} suffix="%" precision={1} />
                 </Tooltip>
                 <KpiDeltaText delta={deltaText(currentAd?.fill_rate, previousAd?.fill_rate, { digits: 1 })} />
               </Col>
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6} xl={3}>
+                <Tooltip title="完播次数 ÷ 曝光次数。激励视频看完的比例，和下面广告变现里的完播率同一口径。">
+                  <Statistic title="完播率" value={currentAd?.completion_rate ?? 0} suffix="%" precision={1} />
+                </Tooltip>
+                <KpiDeltaText delta={deltaText(currentAd?.completion_rate, previousAd?.completion_rate, { digits: 1 })} />
+              </Col>
+              <Col xs={12} md={6} xl={3}>
                 <Tooltip title="窗口内广告预估收益（元）。优先流量主真实 eCPM，缺失时用配置 eCPM。">
                   <Statistic title="广告收益" value={currentAd?.total_revenue_estimated_cny ?? 0} suffix="元" precision={2} />
                 </Tooltip>
@@ -667,74 +728,46 @@ export function DashboardPage() {
                 />
               </Col>
             </Row>
-            <div style={{ marginTop: 16, marginBottom: 8 }}>
-              <Tooltip title="只展示 D3 已完整出数的投放日；未成熟日期不展示。">
-                <Text strong style={{ cursor: 'help' }}>最近 3 个已出数投放日 D3 ROI</Text>
-              </Tooltip>
-            </div>
-            <Row gutter={[12, 12]}>
-              {recentD3RoiRows.length > 0 ? recentD3RoiRows.map((row) => (
-                <Col xs={24} md={8} key={row.date_key}>
-                  <Card size="small">
-                    <Tooltip title="D3 ROI = 该日期新增 cohort 的 D3 累计 LTV / 当日 CPI；只使用已完整结束的 D3 数据。">
-                      <Statistic
-                        title={`${row.date_key.slice(5)} D3 ROI`}
-                        value={row.d3_roi === null ? (row.spend_cny > 0 ? '-' : '未投放') : row.d3_roi * 100}
-                        suffix={row.d3_roi === null ? undefined : '%'}
-                        precision={1}
-                      />
-                    </Tooltip>
-                    <Space orientation="vertical" size={0}>
-                      <Text type="secondary">消耗 {yuan(row.spend_cny)}，新增 {row.game_new_users} 人</Text>
-                      <Text type="secondary">
-                        D3 LTV {yuan(row.d3_ltv_cny, 4)}，CPI {yuan(row.cpi_cny, 4)}
-                      </Text>
-                    </Space>
-                  </Card>
-                </Col>
-              )) : (
-                <Col span={24}>
-                  <Text type="secondary">暂无可展示的已出数 D3 数据：需要有新增 cohort，并等待 D3 数据成熟。</Text>
-                </Col>
-              )}
-            </Row>
-            <div style={{ marginTop: 16, marginBottom: 8 }}>
-              <Tooltip title="只展示 D7 已完整出数的日期；未成熟日期不展示。">
-                <Text strong style={{ cursor: 'help' }}>最近 3 个已出数日期 D7 ROI</Text>
-              </Tooltip>
-            </div>
-            <Row gutter={[12, 12]}>
-              {recentD7RoiRows.length > 0 ? recentD7RoiRows.map((row) => (
-                <Col xs={24} md={8} key={row.date_key}>
-                  <Card size="small">
-                    <Tooltip title="D7 ROI = 该日期新增 cohort 的 D7 累计 LTV / 当日 CPI；只使用已完整结束的 D7 数据。">
-                      <Statistic
-                        title={`${row.date_key.slice(5)} D7 ROI`}
-                        value={row.d7_roi === null ? (row.spend_cny > 0 ? '-' : '未投放') : row.d7_roi * 100}
-                        suffix={row.d7_roi === null ? undefined : '%'}
-                        precision={1}
-                      />
-                    </Tooltip>
-                    <Space orientation="vertical" size={0}>
-                      <Text type="secondary">消耗 {yuan(row.spend_cny)}，新增 {row.game_new_users} 人</Text>
-                      <Text type="secondary">
-                        D7 LTV {yuan(row.d7_ltv_cny, 4)}，CPI {yuan(row.cpi_cny, 4)}
-                      </Text>
-                    </Space>
-                  </Card>
-                </Col>
-              )) : (
-                <Col span={24}>
-                  <Text type="secondary">暂无可展示的已出数 D7 数据：需要有新增 cohort，并等待 D7 数据成熟。</Text>
-                </Col>
-              )}
-            </Row>
           </Card>
         </Col>
         <Col span={24}>
           <Card
             title={
-              <Tooltip title="按 5 分钟桶聚合的活跃 / 新增趋势；数据来自 analytics_events，约每 5 分钟增量刷新。">
+              <Tooltip
+                title={
+                  onlineCurve?.bucket_minutes === 60
+                    ? '窗口超过 2 天，改成每小时一个点：这一小时里出现过任意事件的人数。比 5 分钟在线更宽，数字会更高。'
+                    : '每个点是这一小段 5 分钟里出现过任意事件的人数。超过 5 分钟没有操作算出线，和总览「当前在线」同一口径。虚线是昨日同一时刻。'
+                }
+              >
+                <span>实时在线</span>
+              </Tooltip>
+            }
+            extra={
+              onlineCurve?.ok ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {onlineCurve.live ? '当前' : onlineCurve.bucket_minutes === 60 ? '最后一小时' : '结束时'}{' '}
+                  <Text strong>{onlineCurve.current ?? 0}</Text> 人
+                  {' · '}
+                  峰值 <Text strong>{onlineCurve.peak ?? 0}</Text> 人
+                  {onlineCurve.peak_label ? `（${onlineCurve.peak_label}）` : ''}
+                </Text>
+              ) : null
+            }
+          >
+            {onlineCurve?.ok === false ? (
+              <Empty description={`在线曲线没有读到：${onlineCurve.error || onlineCurve.code || '接口失败'}`} />
+            ) : (onlineCurve?.points?.length || 0) > 0 ? (
+              <ReactECharts option={onlineChartOption} style={{ height: 280 }} notMerge lazyUpdate />
+            ) : (
+              <Empty description="这段时间没有在线记录" />
+            )}
+          </Card>
+        </Col>
+        <Col span={24}>
+          <Card
+            title={
+              <Tooltip title="按 5 分钟桶聚合的活跃 / 新增趋势。这里是每个桶里有 session_start 的人，不是此刻还在线的人。">
                 <span>活跃 / 新增趋势</span>
               </Tooltip>
             }
@@ -765,6 +798,7 @@ export function DashboardPage() {
         </Col>
       </Row>
 
+      <PaybackSection gameKey={gameKey} platform={platform} refreshToken={refreshToken} />
       <RealtimeAdRevenue fixedGameKey={gameKey} platform={platform} windowSel={windowSel} refreshToken={refreshToken} />
       <RealtimeShare fixedGameKey={gameKey} platform={platform} windowSel={windowSel} refreshToken={refreshToken} />
     </Space>
