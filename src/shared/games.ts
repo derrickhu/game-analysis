@@ -122,6 +122,7 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'wujin_wenzhang',
     displayName: '无尽纹章',
+    // 抖音包 appid tt0dfa7b479384039202。埋点 gameKey 仍用这一档，端别只看 platform=douyin。
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['wujin_gameplay', 'level_progress'],
