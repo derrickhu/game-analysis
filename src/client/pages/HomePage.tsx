@@ -164,6 +164,10 @@ function barPct(value: number, max: number): number {
   return Math.round((value / Math.max(1, max)) * 100);
 }
 
+function sumMoney(values: number[] | undefined): number {
+  return Math.round((values || []).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0) * 100) / 100;
+}
+
 /** 在线曲线刻度：整点里的偶数小时，再加上第一个和最后一个点。 */
 function clockAxisInterval(buckets: string[]): (index: number) => boolean {
   const last = Math.max(0, buckets.length - 1);
@@ -403,13 +407,23 @@ export function HomePage() {
     monthFromDate && monthT1Date ? `${monthFromDate} ~ ${monthT1Date}` : '当月截至昨天，不含今日';
   const chartHint = isDaily
     ? `${dailyFromDate && monthT1Date ? `${dailyFromDate} ~ ${monthT1Date}` : '截止昨天'} · 默认只看合计`
-    : '默认只看合计 · 当月按 T-1 · 点图例可对比单款游戏';
+    : '默认只看合计 · 本月只计到昨天 · 点图例可对比单款游戏';
 
   const monthByChannel: Record<RevenueChannel, number> = {
     total: monthT1Revenue,
     wechat: monthT1WechatRevenue,
     douyin: monthT1DouyinRevenue,
   };
+  const yearByChannel: Record<RevenueChannel, number> = {
+    total: sumMoney(monthlyTrend?.total),
+    wechat: sumMoney(monthlyTrend?.wechat.total),
+    douyin: sumMoney(monthlyTrend?.douyin.total),
+  };
+  const headlineByChannel = isDaily ? monthByChannel : yearByChannel;
+  const yearMonths = monthlyTrend?.months || [];
+  const yearHint = yearMonths.length
+    ? `${yearMonths[0]} ~ ${yearMonths[yearMonths.length - 1]}`
+    : '近十二个月';
 
   const chartOptions = useMemo(() => {
     const channels: RevenueChannel[] = ['total', 'wechat', 'douyin'];
@@ -536,11 +550,11 @@ export function HomePage() {
                 <div className="home-revenue-panel-head">
                   <div className="home-revenue-panel-title-row">
                     <span className="home-revenue-panel-title">{meta.title}</span>
-                    <span className="home-revenue-panel-num mono">{formatYuan(monthByChannel[channel])}</span>
+                    <span className="home-revenue-panel-num mono">{formatYuan(headlineByChannel[channel])}</span>
                     <span className="home-revenue-panel-unit">元</span>
                   </div>
                   <Text type="secondary" className="home-revenue-panel-hint">
-                    当月 T-1 · {monthHint}
+                    {isDaily ? `当月 T-1 · ${monthHint}` : `近一年 · ${yearHint}`}
                   </Text>
                 </div>
                 {picked.buckets.length ? (

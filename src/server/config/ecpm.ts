@@ -94,6 +94,18 @@ const ECPM_TABLE: Record<string, number> = {
   'songjiang.reward': 25,
   'songjiang._default': 15,
 
+  // biehuang（宋江别慌张）广告位跟 code_2 Ads.Show 的入口对齐
+  'biehuang.reward.shop_ingot': 24,
+  'biehuang.reward.shop_stamina': 24,
+  'biehuang.reward.recruit': 24,
+  'biehuang.reward.stamina': 24,
+  'biehuang.reward.idle': 24,
+  'biehuang.reward.reroll': 24,
+  'biehuang.reward.double': 26,
+  'biehuang.reward.revive': 28,
+  'biehuang.reward': 25,
+  'biehuang._default': 15,
+
   // dresssort（一裙又一裙）
   'dresssort.reward.energy': 24,
   'dresssort.reward.pack_column': 24,

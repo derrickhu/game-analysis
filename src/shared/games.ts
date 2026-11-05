@@ -168,6 +168,14 @@ export const ALL_GAMES: GameDescriptor[] = [
     gameplayPanels: ['level_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'songjiang' },
   },
+  {
+    gameKey: 'biehuang',
+    displayName: '宋江别慌张',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    gameplayPanels: ['level_progress'],
+    monetization: { ads: true, iap: false, ecpmProfile: 'biehuang' },
+  },
 ];
 
 /** 旧客户端 game_key 收到登记游戏的正式 key。xiaochu → petTower。 */

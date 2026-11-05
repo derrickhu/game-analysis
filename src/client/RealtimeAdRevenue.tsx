@@ -299,6 +299,17 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     rescue: '宋江危急 - 看广告作法救回',
     free_item: '摊子 - 看广告免费领取',
   },
+  // biehuang 广告位 = code_2 Ads.Show 的入口
+  biehuang: {
+    shop_ingot: '集市 - 看广告领元宝',
+    shop_stamina: '集市 - 看广告领体力',
+    recruit: '招募 - 看广告免费招募',
+    stamina: '体力不足 - 看广告补体力',
+    idle: '巡山 - 看广告快速巡山',
+    reroll: '三选一 - 看广告刷新',
+    double: '结算 - 奖励翻倍',
+    revive: '战斗失败 - 复活再战',
+  },
 };
 
 /**
