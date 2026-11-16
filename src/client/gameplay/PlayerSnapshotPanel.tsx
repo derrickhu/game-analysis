@@ -531,7 +531,7 @@ export function PlayerSnapshotPanel() {
             </Row>
 
             {/* 30 天趋势 */}
-            <Card size="small" title="最近 30 天每日趋势（横切面平均）">
+            <Card size="small" title="最近 7 天每日趋势（横切面平均）">
               <ReactECharts option={trendOption} style={{ height: 320 }} />
             </Card>
 

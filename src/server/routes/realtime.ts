@@ -14,7 +14,7 @@ import {
   type AdMinuteRow,
 } from '../analytics-db';
 import { listBusinessDailyInputs } from '../ltv-db';
-import { cleanExpiredEvents } from '../jobs/clean-expired-events';
+import { cleanExpiredEvents, resolveEventRetentionDays } from '../jobs/clean-expired-events';
 import { getEstimatedEcpm } from '../config/ecpm';
 import { ingestEventsByGameKey } from '../jobs/ingest-events';
 import { ingestTencentAdsBusinessInputs } from '../jobs/ingest-tencent-ads';
@@ -679,16 +679,10 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
     const rawDry = body.dry_run;
     // 默认 dry_run=true，必须显式传 false / "false" / 0 才真删
     const dryRun = !(rawDry === false || rawDry === 'false' || rawDry === 0 || rawDry === '0');
-    const legacyRetention = Number(process.env.ANALYTICS_RETENTION_DAYS);
-    const retentionDaysLocal =
-      Number(process.env.ANALYTICS_RETENTION_DAYS_LOCAL) ||
-      (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 90);
-    const retentionDaysCloud =
-      Number(process.env.ANALYTICS_RETENTION_DAYS_CLOUD) ||
-      (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 7);
+    const retention = resolveEventRetentionDays();
     const summary = await cleanExpiredEvents({
-      retentionDaysLocal,
-      retentionDaysCloud,
+      retentionDaysLocal: retention.local,
+      retentionDaysCloud: retention.cloud,
       dryRun,
       triggerSource: 'manual',
     });

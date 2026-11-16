@@ -1,4 +1,5 @@
 import { getDb, getMysqlPool, isMysqlMode } from '../db';
+import { DURABLE_FIRST_SEEN_SQL, durableFirstSeenParams, ensureUserFirstSeenTable, queryDurableFirstSeen } from '../user-first-seen';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
 import { PLATFORM_SQL, platformSqlParams } from './platform-filter';
 import {
@@ -14,7 +15,7 @@ import {
  *
  * 设计原则：
  * - 完全基于 analytics_events 流水表实时聚合（5 分钟桶），不做中间汇总表
- * - events 表 30 天 TTL，单游戏每天 ~ 几万行（按当前数据量），实时 SQL 完全够
+ * - events 表保留 7 天；新增口径合并 analytics_user_first_seen，避免老用户被算成新增
  * - 用户身份归一：优先 user_id（业务侧 openid），为空时降级到 anonymous_id
  *   这样可以避免「未登录前」的 anonymous 用户被错误丢失
  * - DAU 统计基于 session_start 事件（这是入会唯一可信入口）；
@@ -215,16 +216,13 @@ export async function countNewUsersInWindow(
   if (toTs < fromTs) return 0;
   const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
+    await ensureUserFirstSeenTable();
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT COUNT(*) AS c FROM (
-         SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
-           FROM analytics_events
-          WHERE game_key = ?
-            AND event_name = ?${PLATFORM_SQL}
-          GROUP BY ${USER_KEY_SQL_MYSQL}
+         ${DURABLE_FIRST_SEEN_SQL}
        ) t WHERE t.first_ts BETWEEN ? AND ?`,
-      [gameKey, SESSION_START, ...platformParams, fromTs, toTs],
+      [...durableFirstSeenParams(gameKey, platform), fromTs, toTs],
     );
     return Number((rows as Array<{ c: number }>)[0]?.c || 0);
   }
@@ -259,18 +257,16 @@ async function cohortRetention(
   if (baseTo < baseFrom || retainTo < retainFrom) return empty;
   const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
+    await ensureUserFirstSeenTable();
     const pool = await getMysqlPool();
     const [rows] = await pool.query(
       `SELECT
          COUNT(DISTINCT base.uk) AS base_cnt,
          COUNT(DISTINCT CASE WHEN ret.uk IS NOT NULL THEN base.uk END) AS retain_cnt
        FROM (
-         SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
-           FROM analytics_events
-          WHERE game_key = ?
-            AND event_name = ?${PLATFORM_SQL}
-          GROUP BY ${USER_KEY_SQL_MYSQL}
-         HAVING first_ts BETWEEN ? AND ?
+         SELECT uk, first_ts
+           FROM (${DURABLE_FIRST_SEEN_SQL}) first_seen
+          WHERE first_ts BETWEEN ? AND ?
        ) base
        LEFT JOIN (
          SELECT DISTINCT ${USER_KEY_SQL_MYSQL} AS uk
@@ -280,9 +276,7 @@ async function cohortRetention(
             AND event_ts BETWEEN ? AND ?${PLATFORM_SQL}
        ) ret ON base.uk = ret.uk`,
       [
-        gameKey,
-        SESSION_START,
-        ...platformParams,
+        ...durableFirstSeenParams(gameKey, platform),
         baseFrom,
         baseTo,
         gameKey,
@@ -414,18 +408,8 @@ async function getFirstSeenMap(gameKey: string, platform?: string): Promise<Map<
   const map = new Map<string, number>();
   const platformParams = platformSqlParams(platform);
   if (isMysqlMode()) {
-    const pool = await getMysqlPool();
-    const [rows] = await pool.query(
-      `SELECT ${USER_KEY_SQL_MYSQL} AS uk, MIN(event_ts) AS first_ts
-         FROM analytics_events
-        WHERE game_key = ?
-          AND event_name = ?${PLATFORM_SQL}
-        GROUP BY ${USER_KEY_SQL_MYSQL}`,
-      [gameKey, SESSION_START, ...platformParams],
-    );
-    for (const r of rows as Array<{ uk: string; first_ts: number }>) {
-      map.set(r.uk, Number(r.first_ts));
-    }
+    const rows = await queryDurableFirstSeen(gameKey, platform);
+    for (const row of rows) map.set(row.uk, Number(row.first_ts));
     return map;
   }
   const rows = getDb()

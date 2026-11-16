@@ -241,7 +241,7 @@ async function computeDailyTrend(
      WHERE snapshot_date <= ?${pf.sql}
      GROUP BY snapshot_date
      ORDER BY snapshot_date DESC
-     LIMIT 30`,
+     LIMIT 7`,
     [snapshotDate, ...pf.params],
   );
   return (rows as Array<Record<string, unknown>>)

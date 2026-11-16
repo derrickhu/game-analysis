@@ -2,7 +2,7 @@
  * 别捞水果（hotpot）玩家档案快照拉取 job
  *
  * 从 CloudBase 存档集合全量分页拉取，解析 payload 中各 JSON 存档键，
- * 写入 hotpot_player_snapshots（每日每用户一行，保留 30 天）。
+ * 写入 hotpot_player_snapshots（每日每用户一行，保留 7 天）。
  *
  * 多平台现状（与 huahua 的关键差异）：
  *   - 微信：hotpot_playerData（userId 前缀 wx:），主集合，永远存在
@@ -28,7 +28,7 @@ import {
 } from '../snapshot-db';
 
 const PAGE_SIZE = 200;
-const DEFAULT_RETENTION_DAYS = 30;
+const DEFAULT_RETENTION_DAYS = 7;
 
 export interface HotpotSnapshotIngestResult {
   ok: boolean;

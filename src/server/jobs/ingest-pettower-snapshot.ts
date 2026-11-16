@@ -21,7 +21,7 @@ import {
 } from '../snapshot-db';
 
 const PAGE_SIZE = 200;
-const DEFAULT_RETENTION_DAYS = 30;
+const DEFAULT_RETENTION_DAYS = 7;
 const GAME_KEY = 'petTower';
 
 type UserPrefix = 'wx' | 'dy' | 'tap' | 'hw';

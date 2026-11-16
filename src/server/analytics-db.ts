@@ -378,14 +378,27 @@ export async function insertEvents(events: AnalyticsEventRow[]): Promise<number>
   return inserted;
 }
 
-/** 删除超过 expireMs 毫秒的老事件，返回删除条数。给 daily cron 兜底用 */
+/** 删除超过 expireMs 毫秒的老事件，返回删除条数。按游戏分批，走 (game_key, event_ts) 索引。 */
 export async function deleteOldEvents(expireMs: number): Promise<number> {
   await ensureMigrated();
   const cutoff = Date.now() - expireMs;
   if (isMysqlMode()) {
     const pool = await getMysqlPool();
-    const [result] = await pool.query('DELETE FROM analytics_events WHERE event_ts < ?', [cutoff]);
-    return (result as mysql.ResultSetHeader).affectedRows || 0;
+    const [gameRows] = await pool.query('SELECT DISTINCT game_key FROM analytics_events');
+    const gameKeys = (gameRows as Array<{ game_key: string }>).map((row) => row.game_key).filter(Boolean);
+    let total = 0;
+    for (const gameKey of gameKeys) {
+      for (;;) {
+        const [result] = await pool.query(
+          'DELETE FROM analytics_events WHERE game_key = ? AND event_ts < ? LIMIT 8000',
+          [gameKey, cutoff],
+        );
+        const removed = (result as mysql.ResultSetHeader).affectedRows || 0;
+        total += removed;
+        if (removed < 8000) break;
+      }
+    }
+    return total;
   }
   const info = getDb().prepare('DELETE FROM analytics_events WHERE event_ts < ?').run(cutoff);
   return info.changes;

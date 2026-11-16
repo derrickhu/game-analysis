@@ -469,7 +469,7 @@ export function PetTowerPlayerSnapshotPanel() {
               </Col>
             </Row>
 
-            <Card size="small" title="最近 30 天每日趋势">
+            <Card size="small" title="最近 7 天每日趋势">
               <ReactECharts option={trendOption} style={{ height: 280 }} />
             </Card>
 

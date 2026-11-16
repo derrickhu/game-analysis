@@ -294,7 +294,7 @@ async function computeTutorialSteps(
   }));
 }
 
-/** 最近 30 天每日趋势：人均关键指标 + 总玩家数 */
+/** 最近 7 天每日趋势：人均关键指标 + 总玩家数 */
 async function computeDailyTrend(
   gameKey: string,
   snapshotDate: string,
@@ -302,7 +302,7 @@ async function computeDailyTrend(
 ): Promise<DailyTrendPoint[]> {
   const pool = await getMysqlPool();
   const pf = platformWhere(platform);
-  // 取最近 30 个 snapshot_date（含当天），按日期升序
+  // 取最近 7 个 snapshot_date（含当天），按日期升序
   const [rows] = await pool.query(
     `SELECT
        snapshot_date,
@@ -315,7 +315,7 @@ async function computeDailyTrend(
      WHERE snapshot_date <= ?${pf.sql}
      GROUP BY snapshot_date
      ORDER BY snapshot_date DESC
-     LIMIT 30`,
+     LIMIT 7`,
     [snapshotDate, ...pf.params],
   );
   const list = (rows as Array<Record<string, any>>).map((r) => {

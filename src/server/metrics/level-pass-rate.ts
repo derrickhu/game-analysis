@@ -70,6 +70,7 @@ export interface RecomputeLevelPassRatesResult {
   rows: number;
   published: boolean;
   computed_at: number;
+  skipped_reason?: string;
 }
 
 export interface LevelPassRateOverview {
@@ -105,6 +106,22 @@ export async function recomputeLevelPassRates(options: RecomputeOptions = {}): P
   const { fromDate, toDate, fromTs, toTs } = getCompleteDayWindow(windowDays);
   const computedAt = Date.now();
   await ensureLevelPassPlatformColumn();
+  if (!(await levelEventsCoverWindow(gameKey, fromTs))) {
+    console.warn(
+      `[level-pass] ${gameKey} 原始对局盖不住 ${windowDays} 天窗口（${fromDate}），保留已发布通关率`,
+    );
+    return {
+      game_key: gameKey,
+      mode_key: MODE_KEY,
+      window_days: windowDays,
+      window_start_date: fromDate,
+      window_end_date: toDate,
+      rows: 0,
+      published: false,
+      computed_at: computedAt,
+      skipped_reason: 'event_history_shorter_than_window',
+    };
+  }
   let totalRows = 0;
   let publishRows: LevelPassRateRow[] = [];
   for (const platform of PRECOMPUTE_PLATFORMS) {
@@ -290,6 +307,22 @@ function getCompleteDayWindow(windowDays: number): { fromDate: string; toDate: s
 function toLocalDateKey(date: Date): string {
   const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** 窗口开头两天内要有对局，才允许覆盖已经发布的通关率。事件只留 7 天时，30 天窗口会跳过。 */
+async function levelEventsCoverWindow(gameKey: string, fromTs: number): Promise<boolean> {
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `SELECT MIN(event_ts) AS min_ts
+       FROM analytics_events
+      WHERE game_key = ?
+        AND event_name IN ('level_start', 'level_clear', 'level_fail')
+        AND event_ts >= ?`,
+    [gameKey, fromTs],
+  );
+  const minTs = Number((rows as Array<{ min_ts: number | null }>)[0]?.min_ts || 0);
+  if (!minTs) return false;
+  return minTs <= fromTs + 2 * 86_400_000;
 }
 
 async function listRawLevelEvents(gameKey: string, fromTs: number, toTs: number, platform?: string): Promise<RawLevelEvent[]> {

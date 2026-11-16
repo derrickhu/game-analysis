@@ -1,4 +1,5 @@
 import { getMysqlPool } from '../db';
+import { DURABLE_FIRST_SEEN_SQL, durableFirstSeenParams, ensureUserFirstSeenTable } from '../user-first-seen';
 import { toLocalDateKey } from './ltv';
 import { PLATFORM_SQL, PRECOMPUTE_PLATFORMS, normalizePlatformFilter, platformSqlParams } from './platform-filter';
 
@@ -185,41 +186,34 @@ function buildSegment(
 }
 
 async function listCohortUsers(gameKey: string, cohortDate: string, platform?: string): Promise<CohortUserRow[]> {
+  await ensureUserFirstSeenTable();
   const pool = await getMysqlPool();
   const fromTs = dateKeyToStartTs(cohortDate);
   const toTs = dateKeyToStartTs(addDays(cohortDate, 1)) - 1;
-  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
-    `SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
-       FROM analytics_events
-      WHERE game_key = ?
-        AND event_name = ?${PLATFORM_SQL}
-      GROUP BY ${USER_KEY_SQL}
-     HAVING first_ts BETWEEN ? AND ?`,
-    [gameKey, SESSION_START, ...platformParams, fromTs, toTs],
+    `SELECT uk AS user_key, first_ts
+       FROM (${DURABLE_FIRST_SEEN_SQL}) first_seen
+      WHERE first_ts BETWEEN ? AND ?`,
+    [...durableFirstSeenParams(gameKey, platform), fromTs, toTs],
   );
   return (rows as CohortUserRow[]).filter((row) => row.user_key);
 }
 
 export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7, platform?: string): Promise<string | null> {
+  await ensureUserFirstSeenTable();
   const pool = await getMysqlPool();
-  const platformParams = platformSqlParams(platform);
   const latestCompleteDate = addDays(toLocalDateKey(Date.now()), -Math.max(1, maxAge + 1));
   const cutoffTs = dateKeyToStartTs(addDays(latestCompleteDate, 1)) - 1;
   const [completeRows] = await pool.query(
     `SELECT DATE_FORMAT(FROM_UNIXTIME(first_ts / 1000), '%Y-%m-%d') AS cohort_date, COUNT(*) AS users
        FROM (
-         SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
-           FROM analytics_events
-          WHERE game_key = ?
-            AND event_name = ?${PLATFORM_SQL}
-          GROUP BY ${USER_KEY_SQL}
+         ${DURABLE_FIRST_SEEN_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, SESSION_START, ...platformParams, cutoffTs],
+    [...durableFirstSeenParams(gameKey, platform), cutoffTs],
   );
   const completeDate = (completeRows as Array<{ cohort_date: string | null }>)[0]?.cohort_date;
   if (completeDate) return completeDate;
@@ -229,17 +223,13 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7,
   const [d1Rows] = await pool.query(
     `SELECT DATE_FORMAT(FROM_UNIXTIME(first_ts / 1000), '%Y-%m-%d') AS cohort_date, COUNT(*) AS users
        FROM (
-         SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
-           FROM analytics_events
-          WHERE game_key = ?
-            AND event_name = ?${PLATFORM_SQL}
-          GROUP BY ${USER_KEY_SQL}
+         ${DURABLE_FIRST_SEEN_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, SESSION_START, ...platformParams, d1CutoffTs],
+    [...durableFirstSeenParams(gameKey, platform), d1CutoffTs],
   );
   const d1Date = (d1Rows as Array<{ cohort_date: string | null }>)[0]?.cohort_date;
   if (d1Date) return d1Date;
@@ -248,17 +238,13 @@ export async function findLatestRetentionCohortDate(gameKey: string, maxAge = 7,
   const [latestRows] = await pool.query(
     `SELECT DATE_FORMAT(FROM_UNIXTIME(first_ts / 1000), '%Y-%m-%d') AS cohort_date, COUNT(*) AS users
        FROM (
-         SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
-           FROM analytics_events
-          WHERE game_key = ?
-            AND event_name = ?${PLATFORM_SQL}
-          GROUP BY ${USER_KEY_SQL}
+         ${DURABLE_FIRST_SEEN_SQL}
        ) first_seen
       WHERE first_ts <= ?
       GROUP BY cohort_date
       ORDER BY cohort_date DESC
       LIMIT 1`,
-    [gameKey, SESSION_START, ...platformParams, yesterdayCutoffTs],
+    [...durableFirstSeenParams(gameKey, platform), yesterdayCutoffTs],
   );
   return (latestRows as Array<{ cohort_date: string | null }>)[0]?.cohort_date || null;
 }
@@ -543,23 +529,19 @@ function buildCohortsFromRows(
 }
 
 async function listCohortDatesInRange(gameKey: string, fromDate: string, toDate: string, platform?: string): Promise<string[]> {
+  await ensureUserFirstSeenTable();
   const pool = await getMysqlPool();
   const fromTs = dateKeyToStartTs(fromDate);
   const toTs = dateKeyToStartTs(addDays(toDate, 1)) - 1;
-  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `SELECT DATE_FORMAT(FROM_UNIXTIME(first_ts / 1000), '%Y-%m-%d') AS cohort_date, COUNT(*) AS users
        FROM (
-         SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
-           FROM analytics_events
-          WHERE game_key = ?
-            AND event_name = ?${PLATFORM_SQL}
-          GROUP BY ${USER_KEY_SQL}
+         ${DURABLE_FIRST_SEEN_SQL}
        ) first_seen
       WHERE first_ts BETWEEN ? AND ?
       GROUP BY cohort_date
       ORDER BY cohort_date ASC`,
-    [gameKey, SESSION_START, ...platformParams, fromTs, toTs],
+    [...durableFirstSeenParams(gameKey, platform), fromTs, toTs],
   );
   return (rows as Array<{ cohort_date: string | null }>).map((row) => row.cohort_date).filter(Boolean) as string[];
 }

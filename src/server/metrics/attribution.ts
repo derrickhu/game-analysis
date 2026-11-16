@@ -1,4 +1,5 @@
 import { getMysqlPool } from '../db';
+import { ensureUserFirstSeenTable } from '../user-first-seen';
 import {
   initAttributionStorage,
   replaceAttributedUserDaily,
@@ -311,17 +312,30 @@ export async function syncAttributionTouchpoints(
 }
 
 async function listFirstSeen(gameKey: string): Promise<FirstSeenRow[]> {
+  await ensureUserFirstSeenTable();
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
-    `SELECT ${USER_KEY_SQL} AS user_key,
+    `SELECT user_key,
             MAX(user_id) AS user_id,
             MAX(anonymous_id) AS anonymous_id,
-            MIN(event_ts) AS first_seen_ts
-       FROM analytics_events
-      WHERE game_key = ?
-        AND event_name = 'session_start'
-      GROUP BY ${USER_KEY_SQL}`,
-    [gameKey],
+            MIN(first_seen_ts) AS first_seen_ts
+       FROM (
+         SELECT user_key, user_id, anonymous_id, first_ts AS first_seen_ts
+           FROM analytics_user_first_seen
+          WHERE game_key = ?
+         UNION ALL
+         SELECT ${USER_KEY_SQL} AS user_key,
+                MAX(user_id) AS user_id,
+                MAX(anonymous_id) AS anonymous_id,
+                MIN(event_ts) AS first_seen_ts
+           FROM analytics_events
+          WHERE game_key = ?
+            AND event_name = 'session_start'
+            AND ${USER_KEY_SQL} <> ''
+          GROUP BY ${USER_KEY_SQL}
+       ) src
+      GROUP BY user_key`,
+    [gameKey, gameKey],
   );
   // 埋点渠道从已按平台预聚合的 user_daily 取，避免再扫 events
   const [platRows] = await pool.query(

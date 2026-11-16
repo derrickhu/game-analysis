@@ -404,7 +404,7 @@ export function HotpotPlayerSnapshotPanel() {
                 </Card>
               </Col>
               <Col xs={24} md={12}>
-                <Card size="small" title="最近 30 天每日趋势">
+                <Card size="small" title="最近 7 天每日趋势">
                   <ReactECharts option={trendOption} style={{ height: 280 }} />
                 </Card>
               </Col>

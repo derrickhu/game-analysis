@@ -23,6 +23,7 @@
  */
 
 import { getMysqlPool, isMysqlMode } from '../db';
+import { DURABLE_FIRST_SEEN_SQL, durableFirstSeenParams, ensureUserFirstSeenTable } from '../user-first-seen';
 import { countNewUsersInWindow } from './realtime-overview';
 import { toLocalDateKey } from './ltv';
 import { BUCKET_SIZE_MS, bucketToTs, tsToBucket } from './bucket';
@@ -804,14 +805,12 @@ async function computeNewUserCohortMetrics(
   new_user_order_deliver_users: number;
   new_user_ad_show_users: number;
 }> {
+  await ensureUserFirstSeenTable();
   const pool = await getMysqlPool();
   const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
     `WITH      first_sess AS (
-       SELECT ${USER_KEY_SQL} AS uk, MIN(event_ts) AS first_ts
-         FROM analytics_events
-        WHERE game_key = ? AND event_name = 'session_start'${PLATFORM_SQL}
-        GROUP BY ${USER_KEY_SQL}
+       ${DURABLE_FIRST_SEEN_SQL}
      ),
      new_users AS (
        SELECT uk FROM first_sess WHERE first_ts BETWEEN ? AND ?
@@ -854,7 +853,7 @@ async function computeNewUserCohortMetrics(
        LEFT JOIN order_deliver od ON n.uk = od.uk
        LEFT JOIN ad_show ads ON n.uk = ads.uk`,
     [
-      gameKey, ...platformParams,
+      ...durableFirstSeenParams(gameKey, platform),
       fromTs, toTs,
       gameKey, ...platformParams,
       gameKey, fromTs, toTs, ...platformParams,
@@ -902,13 +901,11 @@ async function computeNewUserTutorialDailySeries(
   const toTs = dateKeyToStartTs(addDays(today, 1)) - 1;
   const platformParams = platformSqlParams(platform);
 
+  await ensureUserFirstSeenTable();
   const pool = await getMysqlPool();
   const [rows] = await pool.query(
     `WITH first_sess AS (
-       SELECT ${USER_KEY_SQL} AS uk, MIN(event_ts) AS first_ts
-         FROM analytics_events
-        WHERE game_key = ? AND event_name = ?${PLATFORM_SQL}
-        GROUP BY ${USER_KEY_SQL}
+       ${DURABLE_FIRST_SEEN_SQL}
      ),
      cohort AS (
        SELECT uk, first_ts
@@ -952,7 +949,7 @@ async function computeNewUserTutorialDailySeries(
        LEFT JOIN order_deliver od ON c.uk = od.uk
        LEFT JOIN ad_show ads ON c.uk = ads.uk`,
     [
-      gameKey, SESSION_START, ...platformParams,
+      ...durableFirstSeenParams(gameKey, platform),
       fromTs, toTs,
       gameKey, ...platformParams,
       gameKey, ...platformParams,

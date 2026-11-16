@@ -1,4 +1,5 @@
 import { getMysqlPool } from '../db';
+import { queryDurableFirstSeen, withRawRetentionLock } from '../user-first-seen';
 import { getEstimatedEcpm } from '../config/ecpm';
 import {
   listBusinessDailyInputs,
@@ -27,11 +28,6 @@ interface RawEventForDaily {
   event_ts: number;
   user_key: string;
   params_json: string | Record<string, unknown>;
-}
-
-interface FirstSeenRow {
-  user_key: string;
-  first_ts: number;
 }
 
 export interface RecomputeUserDailyResult {
@@ -164,14 +160,6 @@ function diffDays(fromDate: string, toDate: string): number {
   return Math.floor((dateKeyToStartTs(toDate) - dateKeyToStartTs(fromDate)) / 86_400_000);
 }
 
-function normalizeDateRange(fromDate?: string, toDate?: string): { fromDate: string; toDate: string } {
-  const today = toLocalDateKey(Date.now());
-  return {
-    fromDate: fromDate || today,
-    toDate: toDate || today,
-  };
-}
-
 async function buildActualEcpmMap(
   gameKey: string,
   fromDate: string,
@@ -187,6 +175,37 @@ async function buildActualEcpmMap(
     }
   }
   return map;
+}
+
+/**
+ * 定时回算只覆盖这么多天，和原始事件保留期一致。
+ * 更早的日活、留存、LTV 以已经入库的统计为准，一条迟到的旧事件不能把起点拉回去。
+ * 手动传入 from/to 时不受这个上限约束，用来补指定的历史区间。
+ */
+const SCHEDULED_RECOMPUTE_DAYS = 7;
+
+function scheduledRecomputeFrom(today: string): string {
+  return addDays(today, -(SCHEDULED_RECOMPUTE_DAYS - 1));
+}
+
+function resolveUserDailyRange(
+  eventRange: { fromDate: string; toDate: string } | null,
+  options: { fromDate?: string; toDate?: string },
+): { fromDate: string; toDate: string; rewrite: boolean } {
+  const today = toLocalDateKey(Date.now());
+  if (options.fromDate || options.toDate) {
+    const fromDate = options.fromDate || scheduledRecomputeFrom(today);
+    const toDate = options.toDate || today;
+    if (fromDate > toDate) return { fromDate: toDate, toDate, rewrite: true };
+    return { fromDate, toDate, rewrite: true };
+  }
+  const earliest = scheduledRecomputeFrom(today);
+  if (!eventRange || eventRange.toDate < earliest) {
+    return { fromDate: today, toDate: today, rewrite: false };
+  }
+  const fromDate = eventRange.fromDate > earliest ? eventRange.fromDate : earliest;
+  const toDate = eventRange.toDate > today ? today : eventRange.toDate;
+  return { fromDate, toDate, rewrite: fromDate <= toDate };
 }
 
 async function getEventDateRange(gameKey: string): Promise<{ fromDate: string; toDate: string } | null> {
@@ -206,20 +225,10 @@ async function getEventDateRange(gameKey: string): Promise<{ fromDate: string; t
 }
 
 async function listFirstSeen(gameKey: string, platform: string): Promise<Map<string, string>> {
-  const pool = await getMysqlPool();
-  const platformParams = platformSqlParams(platform);
-  const [rows] = await pool.query(
-    `SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
-       FROM analytics_events
-      WHERE game_key = ?
-        AND event_name = ?${PLATFORM_SQL}
-      GROUP BY ${USER_KEY_SQL}`,
-    [gameKey, SESSION_START, ...platformParams],
-  );
+  const rows = await queryDurableFirstSeen(gameKey, platform);
   const map = new Map<string, string>();
-  for (const row of rows as FirstSeenRow[]) {
-    if (!row.user_key) continue;
-    map.set(row.user_key, toLocalDateKey(Number(row.first_ts)));
+  for (const row of rows) {
+    map.set(row.uk, toLocalDateKey(Number(row.first_ts)));
   }
   return map;
 }
@@ -351,14 +360,19 @@ export async function recomputeUserDaily(
   gameKey: string,
   options: { fromDate?: string; toDate?: string } = {},
 ): Promise<RecomputeUserDailyResult> {
+  return withRawRetentionLock(() => recomputeUserDailyUnlocked(gameKey, options));
+}
+
+async function recomputeUserDailyUnlocked(
+  gameKey: string,
+  options: { fromDate?: string; toDate?: string } = {},
+): Promise<RecomputeUserDailyResult> {
   const eventRange = await getEventDateRange(gameKey);
-  const normalized = eventRange
-    ? {
-        fromDate: options.fromDate || eventRange.fromDate,
-        toDate: options.toDate || eventRange.toDate,
-      }
-    : normalizeDateRange(options.fromDate, options.toDate);
-  const { fromDate, toDate } = normalized;
+  const range = resolveUserDailyRange(eventRange, options);
+  if (!range.rewrite) {
+    return { game_key: gameKey, from_date: range.fromDate, to_date: range.toDate, rows: 0 };
+  }
+  const { fromDate, toDate } = range;
   const actualEcpmByDate = await buildActualEcpmMap(gameKey, fromDate, toDate);
   let inserted = 0;
   for (const platform of PRECOMPUTE_PLATFORMS) {
@@ -460,14 +474,14 @@ export async function recomputeCohortLtv(
   gameKey: string,
   options: { fromCohortDate?: string; toCohortDate?: string } = {},
 ): Promise<RecomputeLtvResult> {
+  const today = toLocalDateKey(Date.now());
   let fromCohortDate = options.fromCohortDate || '';
   let toCohortDate = options.toCohortDate || '';
   let inserted = 0;
   for (const platform of PRECOMPUTE_PLATFORMS) {
     const userRows = await listUserDailyRows(gameKey, platform);
-    const cohortDates = userRows.map((r) => r.first_seen_date).sort();
-    const platformFrom = options.fromCohortDate || cohortDates[0] || toLocalDateKey(Date.now());
-    const platformTo = options.toCohortDate || cohortDates[cohortDates.length - 1] || platformFrom;
+    const platformFrom = options.fromCohortDate || scheduledRecomputeFrom(today);
+    const platformTo = options.toCohortDate || today;
     if (!fromCohortDate || platformFrom < fromCohortDate) fromCohortDate = platformFrom;
     if (!toCohortDate || platformTo > toCohortDate) toCohortDate = platformTo;
     const out = buildCohortLtvRows(gameKey, userRows, platformFrom, platformTo, platform);

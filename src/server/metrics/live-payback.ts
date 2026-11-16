@@ -1,6 +1,7 @@
 import { listAdMinute } from '../analytics-db';
 import { getEstimatedEcpm } from '../config/ecpm';
 import { getMysqlPool } from '../db';
+import { DURABLE_FIRST_SEEN_SQL, durableFirstSeenParams, ensureUserFirstSeenTable } from '../user-first-seen';
 import { listBusinessDailyInputs } from '../ltv-db';
 import { tsToBucket } from './bucket';
 import { toLocalDateKey } from './ltv';
@@ -65,16 +66,13 @@ async function loadCohorts(
   toTs: number,
   platform?: string,
 ): Promise<Array<{ user_key: string; first_ts: number }>> {
+  await ensureUserFirstSeenTable();
   const pool = await getMysqlPool();
-  const platformParams = platformSqlParams(platform);
   const [rows] = await pool.query(
-    `SELECT ${USER_KEY_SQL} AS user_key, MIN(event_ts) AS first_ts
-       FROM analytics_events
-      WHERE game_key = ?
-        AND event_name = ?${PLATFORM_SQL}
-      GROUP BY ${USER_KEY_SQL}
-     HAVING first_ts BETWEEN ? AND ?`,
-    [gameKey, SESSION_START, ...platformParams, fromTs, toTs],
+    `SELECT uk AS user_key, first_ts
+       FROM (${DURABLE_FIRST_SEEN_SQL}) first_seen
+      WHERE first_ts BETWEEN ? AND ?`,
+    [...durableFirstSeenParams(gameKey, platform), fromTs, toTs],
   );
   return (rows as Array<{ user_key: string; first_ts: number }>).filter((row) => row.user_key);
 }

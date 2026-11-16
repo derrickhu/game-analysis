@@ -9,7 +9,7 @@
  *   每游戏一张 ${gameKey}_player_snapshots，按 (user_id, snapshot_date) 复合主键。
  *   每日 cron 全量扫 CloudBase 集合（如 huahua_playerData），扁平化字段后 upsert，
  *   原始 payload 不落地（避免存 JSON 大对象 + 隐私 + schema 演化复杂）。
- *   同一 user_id 同一天多次拉取覆盖最新一行；保留 30 天可看长尺度趋势。
+ *   同一 user_id 同一天多次拉取覆盖最新一行；默认保留 7 天，只供近期分析。
  *
  * 通用：
  *   player_snapshot_runs 跨游戏复用（含 game_key 列），用于审计 cron 跑没跑成。
@@ -20,7 +20,16 @@ import { toShanghaiDateKey } from './time';
 
 export { toShanghaiDateKey };
 
-const ALLOWED_GAME_KEYS = new Set(['huahua', 'hotpot', 'petTower']);
+export const SNAPSHOT_GAME_KEYS = ['huahua', 'hotpot', 'petTower'] as const;
+const ALLOWED_GAME_KEYS = new Set<string>(SNAPSHOT_GAME_KEYS);
+export const DEFAULT_SNAPSHOT_RETENTION_DAYS = 7;
+const MIN_SNAPSHOT_RETENTION_DAYS = 7;
+
+export function resolveSnapshotRetentionDays(): number {
+  const raw = Number(process.env.PLAYER_SNAPSHOT_RETENTION_DAYS);
+  const days = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SNAPSHOT_RETENTION_DAYS;
+  return Math.max(MIN_SNAPSHOT_RETENTION_DAYS, Math.floor(days));
+}
 
 /** 防 SQL 注入：拼接表名前必须经过白名单校验 */
 function ensureGameKey(gameKey: string): void {
@@ -387,20 +396,42 @@ export async function upsertPetTowerPlayerSnapshots(rows: PetTowerPlayerSnapshot
   return total;
 }
 
-/** 删除指定日期之前的所有快照（保留 N 天） */
-export async function pruneOldSnapshots(gameKey: string, retentionDays: number): Promise<number> {
-  ensureGameKey(gameKey);
-  if (retentionDays <= 0 || !Number.isFinite(retentionDays)) return 0;
-  const pool = await getMysqlPool();
-  // 用客户端日期算 cutoff，避免 MySQL 时区差异
+function snapshotCutoffDate(retentionDays: number): string | null {
+  if (retentionDays <= 0 || !Number.isFinite(retentionDays)) return null;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - Math.floor(retentionDays));
-  const cutoffDate = toShanghaiDateKey(cutoff.getTime());
-  const [res] = await pool.query(
-    `DELETE FROM ${snapshotTable(gameKey)} WHERE snapshot_date < ?`,
+  return toShanghaiDateKey(cutoff.getTime());
+}
+
+export async function countOldSnapshots(gameKey: string, retentionDays: number): Promise<number> {
+  ensureGameKey(gameKey);
+  const cutoffDate = snapshotCutoffDate(retentionDays);
+  if (!cutoffDate) return 0;
+  const pool = await getMysqlPool();
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS c FROM ${snapshotTable(gameKey)} WHERE snapshot_date < ?`,
     [cutoffDate],
   );
-  return Number((res as { affectedRows?: number })?.affectedRows ?? 0);
+  return Number((rows as Array<{ c: number }>)[0]?.c || 0);
+}
+
+/** 删除指定日期之前的快照（保留 N 天）。按批删，避免一次锁住整张大表。 */
+export async function pruneOldSnapshots(gameKey: string, retentionDays: number): Promise<number> {
+  ensureGameKey(gameKey);
+  const cutoffDate = snapshotCutoffDate(retentionDays);
+  if (!cutoffDate) return 0;
+  const pool = await getMysqlPool();
+  let total = 0;
+  for (;;) {
+    const [res] = await pool.query(
+      `DELETE FROM ${snapshotTable(gameKey)} WHERE snapshot_date < ? LIMIT 8000`,
+      [cutoffDate],
+    );
+    const removed = Number((res as { affectedRows?: number })?.affectedRows ?? 0);
+    total += removed;
+    if (removed < 8000) break;
+  }
+  return total;
 }
 
 // ============================================================

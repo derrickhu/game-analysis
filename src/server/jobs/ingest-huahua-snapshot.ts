@@ -8,7 +8,7 @@
  *   2. 分页全量扫表（pageSize=200）
  *   3. 每个 doc 通过 parseHuahuaPlayerSnapshot 抽取扁平化字段
  *   4. 批量 upsert 到 huahua_player_snapshots 表，主键 (user_id, snapshot_date)
- *   5. 顺手 prune 30 天前的旧快照
+ *   5. 顺手 prune 7 天前的旧快照
  *
  * 用法：
  *   - cron 自动：两端集合都拉
@@ -32,8 +32,8 @@ import {
 } from '../snapshot-db';
 
 const PAGE_SIZE = 200;
-/** 默认保留 30 天，覆盖月度 KPI 趋势够用 */
-const DEFAULT_RETENTION_DAYS = 30;
+/** 默认保留 7 天，只供近期分析 */
+const DEFAULT_RETENTION_DAYS = 7;
 
 interface SnapshotSource {
   /** 埋点/全局筛选口径 */

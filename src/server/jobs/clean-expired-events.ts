@@ -6,12 +6,16 @@ import {
   type CleanupRunRecord,
 } from '../analytics-db';
 import { getTcbApp } from '../tcb-client';
+import { refreshUserFirstSeen, withRawRetentionLock } from '../user-first-seen';
+import { SNAPSHOT_GAME_KEYS, countOldSnapshots, pruneOldSnapshots, resolveSnapshotRetentionDays } from '../snapshot-db';
 
 /**
  * ── 设计要点 ──────────────────────────────────────────────────────────
  *
- * 1. 双 retention：本地保留 90 天（长期分析回看 / D7 留存兜底），云端只保留 7 天
- *    （CloudBase 配额有限、文档体积大）。两个 retention 独立，环境变量分别控制。
+ * 1. 双 retention：经分 MySQL 和云端文档库都只留 7 天原始事件。
+ *    留存 / LTV / 日活这些统计表不在这里删。首次出现写在 analytics_user_first_seen，
+ *    删事件之前先刷一遍，避免回算把老用户当成新用户。
+ *    环境变量 ANALYTICS_RETENTION_DAYS_LOCAL / _CLOUD 可单独覆盖。
  *
  * 2. 防呆白名单：清理操作只能命中 DELETION_WHITELIST 里的集合名 / 表名。
  *    任何尝试操作 *_playerData / 玩家数据库等敏感集合都会立即抛异常拒绝执行。
@@ -28,8 +32,9 @@ import { getTcbApp } from '../tcb-client';
  * 6. trigger_source：cron 自动跑 vs manual 手动触发，区分开排查方便。
  */
 
-const DEFAULT_RETENTION_DAYS_LOCAL = 90;
-const DEFAULT_RETENTION_DAYS_CLOUD = 7;
+export const DEFAULT_RETENTION_DAYS_LOCAL = 7;
+export const DEFAULT_RETENTION_DAYS_CLOUD = 7;
+export const MIN_RETENTION_DAYS_LOCAL = 7;
 const CLOUD_BATCH_SIZE = 1000;
 const CLOUD_BATCH_SLEEP_MS = 500;
 const CLOUD_MAX_DELETE_PER_GAME_PER_RUN = 500_000;
@@ -51,6 +56,15 @@ function assertWhitelisted(collection: string, where: string): void {
   }
 }
 
+export function resolveEventRetentionDays(): { local: number; cloud: number } {
+  const legacyRetention = Number(process.env.ANALYTICS_RETENTION_DAYS);
+  const legacy = Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 0;
+  return {
+    local: Number(process.env.ANALYTICS_RETENTION_DAYS_LOCAL) || legacy || DEFAULT_RETENTION_DAYS_LOCAL,
+    cloud: Number(process.env.ANALYTICS_RETENTION_DAYS_CLOUD) || legacy || DEFAULT_RETENTION_DAYS_CLOUD,
+  };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -62,6 +76,7 @@ export interface CleanupSummary {
   cutoffCloudMs: number;
   localDeleted: number;
   cloudDeleted: number;
+  snapshotsPruned: number;
   cloudErrors: string[];
   dryRun: boolean;
   triggerSource: 'cron' | 'manual';
@@ -97,10 +112,10 @@ export async function cleanExpiredEvents(options: CleanupOptions = {}): Promise<
   const dryRun = options.dryRun === true;
   const triggerSource = options.triggerSource || 'cron';
 
-  // D1/D7 留存依赖至少 7 天的事件流；本地保留期硬下限 14 天兜底。
-  if (retentionDaysLocal < 14) {
+  // 统计表已经落库。原始事件至少留 7 天，覆盖近一周的实时分析和未完成的 D7。
+  if (retentionDaysLocal < MIN_RETENTION_DAYS_LOCAL) {
     throw new Error(
-      `[cleanup] retentionDaysLocal=${retentionDaysLocal} < 14 days, refused (retention 计算需要)`,
+      `[cleanup] retentionDaysLocal=${retentionDaysLocal} < ${MIN_RETENTION_DAYS_LOCAL} days, refused`,
     );
   }
   if (retentionDaysCloud < 1) {
@@ -117,6 +132,7 @@ export async function cleanExpiredEvents(options: CleanupOptions = {}): Promise<
     cutoffCloudMs,
     localDeleted: 0,
     cloudDeleted: 0,
+    snapshotsPruned: 0,
     cloudErrors: [],
     dryRun,
     triggerSource,
@@ -126,12 +142,23 @@ export async function cleanExpiredEvents(options: CleanupOptions = {}): Promise<
   // ── 本地 MySQL ──
   // 白名单守卫（即使表名是写死的，也走一遍断言，便于以后误改时立刻报错）
   assertWhitelisted('analytics_events', 'local-mysql');
+  const snapshotRetentionDays = resolveSnapshotRetentionDays();
   try {
-    if (dryRun) {
-      summary.localDeleted = await countOldEvents(retentionDaysLocal * 86400_000);
-    } else {
+    await withRawRetentionLock(async () => {
+      if (dryRun) {
+        summary.localDeleted = await countOldEvents(retentionDaysLocal * 86400_000);
+        for (const gameKey of SNAPSHOT_GAME_KEYS) {
+          summary.snapshotsPruned += await countOldSnapshots(gameKey, snapshotRetentionDays);
+        }
+        return;
+      }
+      // 先把首次出现落表。这一步失败就不要删事件，否则留存回算会把老用户算成新增。
+      await refreshUserFirstSeen();
       summary.localDeleted = await deleteOldEvents(retentionDaysLocal * 86400_000);
-    }
+      for (const gameKey of SNAPSHOT_GAME_KEYS) {
+        summary.snapshotsPruned += await pruneOldSnapshots(gameKey, snapshotRetentionDays);
+      }
+    }, 600);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     summary.cloudErrors.push(`local: ${msg}`);

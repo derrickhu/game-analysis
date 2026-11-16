@@ -5,7 +5,7 @@ import { getConfig } from './config';
 import { ingestCloudbaseSnapshots } from './cloudbase-ingest';
 import { ANALYTICS_GAMES, getEnabledAnalyticsGames } from './config/analytics-games';
 import { ingestEventsForGame } from './jobs/ingest-events';
-import { cleanExpiredEvents } from './jobs/clean-expired-events';
+import { cleanExpiredEvents, resolveEventRetentionDays } from './jobs/clean-expired-events';
 import { ingestTencentAdsBusinessInputs } from './jobs/ingest-tencent-ads';
 import { ingestTencentAdsInsights } from './jobs/ingest-tencent-ads-insights';
 import { ingestDouyinPublisherBusinessInputs } from './publisher/douyin/ingest';
@@ -16,6 +16,7 @@ import { resolveCanonicalGameKey } from '../shared/games';
 import { ingestHuahuaSnapshots } from './jobs/ingest-huahua-snapshot';
 import { ingestHotpotSnapshots } from './jobs/ingest-hotpot-snapshot';
 import { ingestPetTowerSnapshots } from './jobs/ingest-pettower-snapshot';
+import { resolveSnapshotRetentionDays } from './snapshot-db';
 import { recomputeCohortLtv, recomputeUserDaily } from './metrics/ltv';
 import { recomputeRetentionCohorts } from './metrics/retention';
 import { recomputeLevelPassRates } from './metrics/level-pass-rate';
@@ -90,18 +91,16 @@ export function startScheduler(): void {
     });
   });
 
-  // 3) 兜底清理过期事件：每天凌晨 3 点（可通过 ANALYTICS_CLEAN_CRON 覆盖）
+  // 3) 兜底清理过期事件和玩家快照：每天凌晨 3 点（可通过 ANALYTICS_CLEAN_CRON 覆盖）
   //    与 LTV 默认 cron（7,22,37,52 分）错开，降低同进程 node-cron 漏触发风险。
-  // 双 retention：本地 90 天（D7 留存兜底 + 历史回看）/ 云端 7 天（CloudBase 配额限制）
+  // 原始事件、玩家快照默认 7 天。留存 / LTV / 日活等统计表不删。
   // 通过 ANALYTICS_RETENTION_DAYS_LOCAL / ANALYTICS_RETENTION_DAYS_CLOUD 单独覆盖
   // 兼容老变量 ANALYTICS_RETENTION_DAYS：未设新变量时，老变量同时作用于本地和云端
   const cleanCron = process.env.ANALYTICS_CLEAN_CRON || '0 3 * * *';
-  const legacyRetention = Number(process.env.ANALYTICS_RETENTION_DAYS);
-  const retentionDaysLocal =
-    Number(process.env.ANALYTICS_RETENTION_DAYS_LOCAL) || (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 90);
-  const retentionDaysCloud =
-    Number(process.env.ANALYTICS_RETENTION_DAYS_CLOUD) || (Number.isFinite(legacyRetention) && legacyRetention > 0 ? legacyRetention : 7);
-  cron.schedule(cleanCron, async () => {
+  const retention = resolveEventRetentionDays();
+  const retentionDaysLocal = retention.local;
+  const retentionDaysCloud = retention.cloud;
+  const runCleanup = async (trigger: 'cron' | 'startup') => {
     try {
       const summary = await cleanExpiredEvents({
         retentionDaysLocal,
@@ -109,24 +108,31 @@ export function startScheduler(): void {
         triggerSource: 'cron',
       });
       console.log(
-        `[scheduler] events 清理: local_retention=${summary.retentionDaysLocal}d cloud_retention=${summary.retentionDaysCloud}d ` +
-          `local_deleted=${summary.localDeleted} cloud_deleted=${summary.cloudDeleted} ` +
+        `[scheduler] events 清理(${trigger}): local_retention=${summary.retentionDaysLocal}d cloud_retention=${summary.retentionDaysCloud}d ` +
+          `local_deleted=${summary.localDeleted} snapshots_pruned=${summary.snapshotsPruned} cloud_deleted=${summary.cloudDeleted} ` +
           `errors=${summary.cloudErrors.length} duration=${summary.durationMs}ms`,
       );
       if (summary.cloudErrors.length > 0) {
         for (const err of summary.cloudErrors) console.warn(`[scheduler] events 清理警告: ${err}`);
       }
     } catch (error) {
-      console.error('[scheduler] events 清理失败:', error);
+      console.error(`[scheduler] events 清理失败 (${trigger}):`, error);
     }
+  };
+  cron.schedule(cleanCron, () => {
+    void runCleanup('cron');
   });
+  // 部署后不用等到凌晨。晚于启动时的留存回算和通关率发布，避免边删边算。
+  setTimeout(() => {
+    void runCleanup('startup');
+  }, 180_000);
 
   // 4) 玩家档案快照（player snapshot）：每天上海时区凌晨 4 点全量拉一次
   //    与事件流互补：事件流看"做了什么"，快照看"现在是什么状态"
   //    cron 用 'America/Los_Angeles' 调时区会更稳，这里默认服务器/容器时区已是 UTC+8（华东）
   //    通过 PLAYER_SNAPSHOT_CRON 环境变量可覆盖（如 '0 4 * * *'）
   const playerSnapshotCron = process.env.PLAYER_SNAPSHOT_CRON || '0 4 * * *';
-  const snapshotRetentionDays = Math.max(7, Number(process.env.PLAYER_SNAPSHOT_RETENTION_DAYS) || 30);
+  const snapshotRetentionDays = resolveSnapshotRetentionDays();
   const runPlayerSnapshotIngest = async (gameKey: 'huahua' | 'hotpot' | 'petTower') => {
     try {
       console.log(`[scheduler] 开始拉取 ${gameKey} 玩家档案快照`);
@@ -158,6 +164,8 @@ export function startScheduler(): void {
   //    （7,22,37,52），避免与 03:00 事件清理、04:00 玩家快照等同进程运维任务撞车。
   //    Node 单线程：LTV 重算若与 cleanup 同时落在 03:00，会占满 event loop，node-cron 会漏触发清理。
   //    通过 LTV_RECOMPUTE_CRON 覆盖；服务启动后 5s 仍立即跑一次保证刚部署也有最新底座。
+  //    不传日期时只重写最近 7 天（见 ltv.ts SCHEDULED_RECOMPUTE_DAYS）。原始事件里更早的
+  //    迟到记录不得扩大删除窗口，已经入库的历史日活留着。
   const ltvCron = process.env.LTV_RECOMPUTE_CRON || '7,22,37,52 * * * *';
   const runLtvRecompute = async (trigger: 'cron' | 'startup') => {
     for (const game of getEnabledAnalyticsGames()) {
