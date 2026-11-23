@@ -25,7 +25,7 @@ import {
 } from '../snapshot-db';
 
 const SUPPORTED_GAMES = new Set(['huahua']);
-const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'h5', 'anon']);
+const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'ks', 'h5', 'anon']);
 
 function ensureSupported(gameKey: string): void {
   if (!SUPPORTED_GAMES.has(gameKey)) {

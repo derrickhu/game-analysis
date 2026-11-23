@@ -289,6 +289,7 @@ export function PlayerSnapshotTable({
           { text: 'wx (微信)', value: 'wx' },
           { text: 'h5', value: 'h5' },
           { text: 'dy (抖音)', value: 'dy' },
+          { text: 'ks (快手)', value: 'ks' },
           { text: 'anon (匿名)', value: 'anon' },
         ],
         filterMultiple: false,

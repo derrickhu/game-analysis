@@ -28,7 +28,7 @@ export interface HomePlatformDau {
   label: string;
   dau: number;
   ad_show_cnt: number;
-  /** 该平台昨天（T-1）流量主真实收入，元；Tap / 华为暂无官方接口，固定 0 */
+  /** 该平台昨天（T-1）流量主真实收入，元；Tap / 华为 / 快手暂无官方接口，固定 0 */
   t1_revenue_cny: number;
 }
 
@@ -489,7 +489,7 @@ function buildOnlineWindow(
   };
 }
 
-/** 组装主页矩阵：游戏按 total_dau 降序；平台固定微信→抖音→Tap→华为。 */
+/** 组装主页矩阵：游戏按 total_dau 降序；平台固定微信→抖音→Tap→华为→快手。 */
 export async function getHomeDau(now = Date.now()): Promise<HomeDauResult> {
   const fromTs = startOfLocalDay(now);
   const toTs = now;

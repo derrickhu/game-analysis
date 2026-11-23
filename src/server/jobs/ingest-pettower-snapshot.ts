@@ -3,7 +3,7 @@
  *
  * 云集合约定（CloudBase 集合名按 GAME_KEY.toLowerCase()）：
  *   微信 pettower_playerData / 抖音 pettower_tt_playerData
- *   Tap pettower_tap_playerData / 华为 pettower_hw_playerData
+ *   Tap pettower_tap_playerData / 华为 pettower_hw_playerData / 快手 pettower_ks_playerData
  *
  * payload 里存档键仍是客户端 camelCase：`petTower_tt_save_v2`。
  */
@@ -24,7 +24,7 @@ const PAGE_SIZE = 200;
 const DEFAULT_RETENTION_DAYS = 7;
 const GAME_KEY = 'petTower';
 
-type UserPrefix = 'wx' | 'dy' | 'tap' | 'hw';
+type UserPrefix = 'wx' | 'dy' | 'tap' | 'hw' | 'ks';
 
 export interface PetTowerSnapshotIngestResult {
   ok: boolean;
@@ -213,7 +213,7 @@ async function ingestOneCollection(
 export async function ingestPetTowerSnapshots(options: {
   triggerSource: 'cron' | 'manual';
   retentionDays?: number;
-  /** wechat / douyin / taptap / huawei；不传则 cron 默认口径 */
+  /** wechat / douyin / taptap / huawei / kuaishou；不传则 cron 默认口径 */
   platform?: string;
 }): Promise<PetTowerSnapshotIngestResult> {
   const startedAt = Date.now();
@@ -227,6 +227,7 @@ export async function ingestPetTowerSnapshots(options: {
   const ttCollection = playerDataCollection(GAME_KEY, 'douyin');
   const tapCollection = playerDataCollection(GAME_KEY, 'taptap');
   const hwCollection = playerDataCollection(GAME_KEY, 'huawei');
+  const ksCollection = playerDataCollection(GAME_KEY, 'kuaishou');
 
   let fetched = 0;
   let inserted = 0;
@@ -312,6 +313,15 @@ export async function ingestPetTowerSnapshots(options: {
       fetched += part.fetched;
       inserted += part.inserted;
       if (!part.ok && part.error) errors.push(`${hwCollection}: ${part.error}`);
+    } else if (normalizedPlatform === 'kuaishou') {
+      console.log(`[snapshot] petTower 拉取集合 ${ksCollection} (platform=kuaishou)`);
+      collectionsUsed.push(ksCollection);
+      const part = await ingestOneCollection(db, ksCollection, snapshotDate, options.triggerSource, {
+        forcedUserPrefix: 'ks',
+      });
+      fetched += part.fetched;
+      inserted += part.inserted;
+      if (!part.ok && part.error) errors.push(`${ksCollection}: ${part.error}`);
     } else {
       console.log(`[snapshot] petTower 拉取集合 ${mainCollection} (platform=all)`);
       collectionsUsed.push(mainCollection);
@@ -323,6 +333,7 @@ export async function ingestPetTowerSnapshots(options: {
       await tryOptionalCollection(ttCollection, 'dy', '抖音 tt');
       await tryOptionalCollection(tapCollection, 'tap', 'Tap');
       await tryOptionalCollection(hwCollection, 'hw', '华为');
+      await tryOptionalCollection(ksCollection, 'ks', '快手');
     }
 
     pruned = await pruneOldSnapshots(GAME_KEY, options.retentionDays ?? DEFAULT_RETENTION_DAYS);

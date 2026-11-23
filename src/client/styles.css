@@ -818,6 +818,10 @@ code,
   background: linear-gradient(90deg, #cf0a2c, #f43f5e);
 }
 
+.home-platform-kuaishou .home-metric-dau .home-platform-bar-fill {
+  background: linear-gradient(90deg, #ff4906, #fb923c);
+}
+
 .home-metric-ad .home-platform-bar-fill {
   background: linear-gradient(90deg, #0f766e, #2dd4bf);
 }

@@ -7,7 +7,7 @@ import { getMysqlPool, isMysqlMode } from '../db';
 import { getLatestSnapshotMeta, type PlayerSnapshotRun } from '../snapshot-db';
 
 const SUPPORTED_GAMES = new Set(['petTower']);
-const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'tap', 'hw', 'h5', 'anon']);
+const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'tap', 'hw', 'ks', 'h5', 'anon']);
 
 function ensureSupported(gameKey: string): void {
   if (!SUPPORTED_GAMES.has(gameKey)) {

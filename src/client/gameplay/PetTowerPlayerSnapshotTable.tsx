@@ -328,6 +328,7 @@ export function PetTowerPlayerSnapshotTable({
             { value: 'dy', label: '抖音' },
             { value: 'tap', label: 'TapTap' },
             { value: 'hw', label: '华为' },
+            { value: 'ks', label: '快手' },
           ]}
         />
         <InputNumber

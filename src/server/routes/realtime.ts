@@ -1557,7 +1557,7 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
    */
   const SNAPSHOT_OVERVIEW_GAMES = new Set(['huahua', 'hotpot', 'petTower']);
   /** 玩家档案 user_id 前缀白名单，区别于埋点 platform（wechat/douyin/h5/all） */
-  const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'tap', 'hw', 'h5', 'anon']);
+  const SNAPSHOT_PREFIXES = new Set(['wx', 'dy', 'tap', 'hw', 'ks', 'h5', 'anon']);
 
   app.get('/api/realtime/huahua-snapshot', async (request) => {
     const query = (request.query || {}) as { game?: string; date?: string; platform?: string };
@@ -1675,8 +1675,8 @@ export async function registerRealtimeRoutes(app: FastifyInstance): Promise<void
 
   /**
    * 手动触发一次全量快照拉取（联调和数据修正用）；正常生产由 cron 每天 04:00 自动跑。
-   * body: { game: 'huahua', platform?: 'wechat'|'douyin', retentionDays?: 30 }
-   * huahua 传 platform 时只拉对应云集合；不传则两端都拉（与 cron 一致）。
+   * body: { game: 'huahua', platform?: 'wechat'|'douyin'|'kuaishou', retentionDays?: 30 }
+   * huahua 传 platform 时只拉对应云集合；不传则微信、抖音、快手都拉（与 cron 一致）。
    */
   app.post('/api/realtime/snapshot-now', async (request) => {
     const body = (request.body || {}) as { game?: string; platform?: string; retentionDays?: number };

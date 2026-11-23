@@ -5,6 +5,7 @@
  *   1. 用同款 CloudBase node SDK 凭证连存档集合
  *      - 微信：huahua_playerData（userId 前缀 wx:）
  *      - 抖音：huahua_tt_playerData（userId 前缀 dy:）
+ *      - 快手：huahua_ks_playerData（userId 前缀 ks:）
  *   2. 分页全量扫表（pageSize=200）
  *   3. 每个 doc 通过 parseHuahuaPlayerSnapshot 抽取扁平化字段
  *   4. 批量 upsert 到 huahua_player_snapshots 表，主键 (user_id, snapshot_date)
@@ -12,7 +13,7 @@
  *
  * 用法：
  *   - cron 自动：两端集合都拉
- *   - 手动：POST /api/realtime/snapshot-now { game: 'huahua', platform: 'douyin' }
+ *   - 手动：POST /api/realtime/snapshot-now { game: 'huahua', platform: 'kuaishou' }
  */
 
 import { findAnalyticsGame } from '../config/analytics-games';
@@ -37,10 +38,10 @@ const DEFAULT_RETENTION_DAYS = 7;
 
 interface SnapshotSource {
   /** 埋点/全局筛选口径 */
-  platform: 'wechat' | 'douyin';
+  platform: 'wechat' | 'douyin' | 'kuaishou';
   collection: string;
   /** 档案 user_id 前缀 */
-  userPrefix: 'wx' | 'dy';
+  userPrefix: 'wx' | 'dy' | 'ks';
 }
 
 const HUAHUA_SNAPSHOT_SOURCES: SnapshotSource[] = [
@@ -53,6 +54,11 @@ const HUAHUA_SNAPSHOT_SOURCES: SnapshotSource[] = [
     platform: 'douyin',
     collection: playerDataCollection('huahua', 'douyin'),
     userPrefix: 'dy',
+  },
+  {
+    platform: 'kuaishou',
+    collection: playerDataCollection('huahua', 'kuaishou'),
+    userPrefix: 'ks',
   },
 ];
 
@@ -207,7 +213,7 @@ export function parseHuahuaPlayerSnapshot(
   doc: any,
   snapshotDate: string,
   /** 来源集合对应的档案前缀；写入 platform 列，避免老档 platform 字段不一致 */
-  forcedUserPrefix?: 'wx' | 'dy' | 'h5' | 'anon',
+  forcedUserPrefix?: 'wx' | 'dy' | 'ks' | 'h5' | 'anon',
 ): PlayerSnapshotRow | null {
   let userId = String(doc?.userId || '').trim();
   if (!userId) return null;
@@ -295,7 +301,9 @@ export function parseHuahuaPlayerSnapshot(
       ? 'wx'
       : platformFromDoc === 'douyin' || platformFromDoc === 'dy'
         ? 'dy'
-        : platformFromDoc || 'unknown');
+        : platformFromDoc === 'kuaishou' || platformFromDoc === 'ks'
+          ? 'ks'
+          : platformFromDoc || 'unknown');
 
   return {
     user_id: userId,
@@ -389,7 +397,7 @@ async function ingestOneCollection(
 export async function ingestHuahuaSnapshots(options: {
   triggerSource: 'cron' | 'manual';
   retentionDays?: number;
-  /** wechat / douyin；不传则两端都拉（cron 默认） */
+  /** wechat / douyin / kuaishou；不传则三端都拉（cron 默认） */
   platform?: string;
 }): Promise<SnapshotIngestResult> {
   const startedAt = Date.now();
