@@ -176,6 +176,13 @@ export const ALL_GAMES: GameDescriptor[] = [
     gameplayPanels: ['level_progress'],
     monetization: { ads: true, iap: false, ecpmProfile: 'biehuang' },
   },
+  {
+    gameKey: 'duanju',
+    displayName: '翻盘女王',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    monetization: { ads: true, iap: false, ecpmProfile: 'duanju' },
+  },
 ];
 
 /** 旧客户端 game_key 收到登记游戏的正式 key。xiaochu → petTower。 */

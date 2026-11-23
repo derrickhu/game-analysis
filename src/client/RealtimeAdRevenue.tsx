@@ -299,6 +299,15 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     rescue: '宋江危急 - 看广告作法救回',
     free_item: '摊子 - 看广告免费领取',
   },
+  // duanju 广告位 = game2D_duanju/src/config/AdsConfig.ts
+  duanju: {
+    rushOrder: '急单 - 看广告接一单',
+    liveBoost: '直播 - 看广告开启全场翻倍',
+    offlineDouble: '离线营收 - 看广告双倍入账',
+    rushRenovate: '赶工装修 - 看广告加速',
+    heroExtra: '男主剧情 - 看广告解锁',
+    altEnding: '专属结局 - 看广告解锁',
+  },
   // biehuang 广告位 = code_2 Ads.Show 的入口
   biehuang: {
     shop_ingot: '集市 - 看广告领元宝',

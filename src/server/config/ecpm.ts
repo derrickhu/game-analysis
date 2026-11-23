@@ -106,6 +106,16 @@ const ECPM_TABLE: Record<string, number> = {
   'biehuang.reward': 25,
   'biehuang._default': 15,
 
+  // duanju（翻盘女王）广告位跟 game2D_duanju AdsConfig 的入口对齐
+  'duanju.reward.rushOrder': 26,
+  'duanju.reward.liveBoost': 26,
+  'duanju.reward.offlineDouble': 24,
+  'duanju.reward.rushRenovate': 24,
+  'duanju.reward.heroExtra': 24,
+  'duanju.reward.altEnding': 28,
+  'duanju.reward': 25,
+  'duanju._default': 15,
+
   // dresssort（一裙又一裙）
   'dresssort.reward.energy': 24,
   'dresssort.reward.pack_column': 24,
