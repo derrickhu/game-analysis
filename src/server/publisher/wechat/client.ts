@@ -194,3 +194,55 @@ export async function getWechatPublisherAdunitGeneral(input: {
 
   return { rows, total };
 }
+
+interface WechatAccountBasicInfoResponse extends WechatPublisherBaseResponse {
+  appid?: string;
+  nickname?: string;
+  head_image_info?: {
+    head_image_url?: string;
+  };
+}
+
+export interface WechatMinigameBasicInfo {
+  appId: string;
+  nickname: string;
+  /** 微信公众平台官方正方形高清头像 URL（已规范化为 https + /0 原图尺寸） */
+  headImageUrl: string;
+}
+
+function normalizeWechatHeadImageUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return '';
+  const httpsUrl = trimmed.replace(/^http:\/\//i, 'https://');
+  // 微信 qlogo 头像末尾 /132、/96、/64、/46 为缩略图尺寸，/0 为最高清原图
+  return httpsUrl.replace(/\/(46|64|96|132)(\?.*)?$/, '/0$2');
+}
+
+/**
+ * 通过微信公众平台 getaccountbasicinfo 拉取小游戏官方名称与高清正方形头像 URL。
+ * 复用现有流量主 access_token 缓存（内存 + external_api_tokens 表），不会额外挤占 token 配额。
+ */
+export async function getWechatAccountBasicInfo(
+  mapping: WechatPublisherGameMapping,
+): Promise<WechatMinigameBasicInfo> {
+  const accessToken = await getAccessToken(mapping);
+  const url = new URL('https://api.weixin.qq.com/cgi-bin/account/getaccountbasicinfo');
+  url.searchParams.set('access_token', accessToken);
+
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'GameAnalysisWechatPublisher/1.0' },
+    signal: AbortSignal.timeout(10_000),
+  });
+  const json = (await response.json()) as WechatAccountBasicInfoResponse;
+  assertPublisherResponseOk('getaccountbasicinfo', json);
+
+  const headImageUrl = normalizeWechatHeadImageUrl(json.head_image_info?.head_image_url || '');
+  if (!headImageUrl) {
+    throw new Error(`微信小游戏 ${mapping.appId} 未返回 head_image_url`);
+  }
+  return {
+    appId: json.appid || mapping.appId,
+    nickname: json.nickname || mapping.gameKey,
+    headImageUrl,
+  };
+}

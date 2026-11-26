@@ -300,6 +300,7 @@ const SCENE_LABELS: Record<string, Record<string, string>> = {
     free_item: '摊子 - 看广告免费领取',
   },
   // duanju 广告位 = game2D_duanju/src/config/AdsConfig.ts
+  mori: {},
   duanju: {
     rushOrder: '急单 - 看广告接一单',
     liveBoost: '直播 - 看广告开启全场翻倍',

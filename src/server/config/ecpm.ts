@@ -116,6 +116,10 @@ const ECPM_TABLE: Record<string, number> = {
   'duanju.reward': 25,
   'duanju._default': 15,
 
+  // mori（末日囤货狂）客户端广告位还没接上，先给激励和默认口径
+  'mori.reward': 25,
+  'mori._default': 15,
+
   // dresssort（一裙又一裙）
   'dresssort.reward.energy': 24,
   'dresssort.reward.pack_column': 24,

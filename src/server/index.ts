@@ -24,6 +24,7 @@ import { startScheduler } from './scheduler';
 import { registerRealtimeRoutes } from './routes/realtime';
 import { findAnalyticsGame } from './config/analytics-games';
 import { initSnapshotStorage } from './snapshot-db';
+import { ensureAllGameIcons, resolveServedGameIconFile } from './game-icons';
 
 const config = getConfig();
 const PUBLIC_PREFIX = '/game-analysis';
@@ -85,10 +86,39 @@ app.log.info({
   },
 }, '经分后端使用 MySQL 存储');
 
-app.get('/api/health', async () => ({
-  ok: true,
-  ts: Date.now(),
-}));
+app.get('/api/health', async () => {
+  const icons = await ensureAllGameIcons({ autoPull: false });
+  return {
+    ok: true,
+    ts: Date.now(),
+    icons: {
+      total: icons.total,
+      ready: icons.ready,
+      missing: icons.missing,
+    },
+  };
+});
+
+app.get('/api/games/icons/status', async () => {
+  return ensureAllGameIcons({ autoPull: false });
+});
+
+app.post('/api/games/icons/sync', async (request) => {
+  const query = request.query as { force?: string } | undefined;
+  const body = request.body as { force?: boolean } | null | undefined;
+  const forceRefresh = query?.force === '1' || query?.force === 'true' || body?.force === true;
+  return ensureAllGameIcons({ autoPull: true, forceRefresh });
+});
+
+app.get('/game-icons/:filename', async (request, reply) => {
+  const { filename } = request.params as { filename: string };
+  const resolved = await resolveServedGameIconFile(filename);
+  if (!resolved) {
+    return reply.code(404).type('application/json').send({ error: 'Game icon not found', filename });
+  }
+  reply.header('Cache-Control', 'public, max-age=3600');
+  return reply.type(resolved.mimeType).send(fs.createReadStream(resolved.filePath));
+});
 
 app.get('/api/dashboard', async (request) => {
   const query = request.query as { game?: string };
@@ -132,7 +162,7 @@ async function start(): Promise<void> {
     });
     app.setNotFoundHandler((request, reply) => {
       const urlPath = (request.url || '').split('?')[0];
-      if (urlPath.startsWith('/api/')) {
+      if (urlPath.startsWith('/api/') || urlPath.startsWith('/game-icons/')) {
         return reply.code(404).send({ error: 'Not Found' });
       }
       return reply.sendFile('index.html');
@@ -147,6 +177,25 @@ async function start(): Promise<void> {
     app.log.error(error, '存储初始化失败');
     process.exit(1);
   }
+
+  // 启动时自动校验全部小游戏图标，缺失时从微信公众平台官方头像或本地工程目录补拉并同步 dist/
+  void ensureAllGameIcons({ autoPull: true })
+    .then((report) => {
+      if (report.missing.length > 0) {
+        app.log.warn(
+          { missing: report.missing, ready: report.ready, total: report.total },
+          '检测到部分小游戏图标缺失且自动拉取未成功，请检查 wechatAppId / iconUrl 或 public/game-icons/',
+        );
+      } else {
+        app.log.info(
+          { total: report.total, ready: report.ready, pulled: report.pulled },
+          '全部小游戏图标完整性校验通过',
+        );
+      }
+    })
+    .catch((error) => {
+      app.log.warn(error, '启动时小游戏图标自动检测异常');
+    });
 
   await app.listen({ port: config.apiPort, host: config.apiHost });
   app.log.info(

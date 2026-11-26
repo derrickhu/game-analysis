@@ -22,6 +22,7 @@ import { recomputeRetentionCohorts } from './metrics/retention';
 import { recomputeLevelPassRates } from './metrics/level-pass-rate';
 import { recomputeAttribution } from './metrics/attribution';
 import { runLoggedTask } from './process-lifecycle';
+import { ensureAllGameIcons } from './game-icons';
 
 let started = false;
 
@@ -336,6 +337,18 @@ export function startScheduler(): void {
   setTimeout(() => {
     void runDouyinPublisherIngest('startup');
   }, 20_000);
+
+  // 11) 每日巡检补齐新接入小游戏图标（每天 09:05 检查，缺失时自动从微信公众平台 / 本地工程拉取）
+  cron.schedule('5 9 * * *', () => {
+    runLoggedTask('scheduler/game-icons', async () => {
+      const report = await ensureAllGameIcons({ autoPull: true });
+      if (report.pulled > 0 || report.missing.length > 0) {
+        console.log(
+          `[scheduler] game_icons ready=${report.ready}/${report.total} pulled=${report.pulled} missing=[${report.missing.join(',')}]`,
+        );
+      }
+    });
+  }, { timezone: 'Asia/Shanghai' });
 
   const enabledKeys = getEnabledAnalyticsGames().map((g) => g.gameKey);
   console.log(

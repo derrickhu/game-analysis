@@ -6,10 +6,10 @@
  * - shared/game-config.ts 的 GAME_CONFIGS：玩家存档快照拉取（按 hasSnapshotIngest 翻开关，老链路，未来只剩兜底）
  *
  * 所有游戏 gameKey 必须先在这里登记，新增一款游戏只需要：
- *   1. 这里加一行
+ *   1. 这里加一行（建议顺手填上 wechatAppId / workspaceDir / iconUrl 任一来源）
  *   2. 真正接入了 SDK 就把 hasAnalyticsSdk 翻 true（首页卡片、cron 拉取、业务选择器一起生效；同时云函数 ANALYTICS_GAME_KEYS 加该 key）
  *   3. 还需要老链路存档差分时把 hasSnapshotIngest 翻 true
- *   4. 首页图标：把正方形图标放到 public/game-icons/{gameKey}.png，没有则用 default.svg
+ *   4. 首页图标：构建（npm run build / npm run icons:ensure）及服务启动时会自动检测并从「显式 iconUrl → 微信公众平台官方头像 → 本地子工程目录」拉取到 public/game-icons/{gameKey}.png；缺失会告警并在首次访问时自动重试补拉
  */
 
 /**
@@ -73,12 +73,20 @@ export interface GameDescriptor {
    * 例：灵宠消消塔旧微信包上报 xiaochu，xiaochu2 上报 petTower。
    */
   ingestGameKeys?: string[];
+  /** 微信小游戏 AppID（用于自动匹配微信公众平台官方头像或工作区工程配置） */
+  wechatAppId?: string;
+  /** 对应工作区子工程目录名（相对于 dk_proj 根目录，如 code_2 / game2D_duanju），用于本地构建自动提取图标 */
+  workspaceDir?: string;
+  /** 显式指定的远程正方形图标 URL（最高优先级兜底拉取源） */
+  iconUrl?: string;
 }
 
 export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'hotpot',
     displayName: '别捞水果',
+    wechatAppId: 'wxe56f9e1228fd4b5b',
+    workspaceDir: 'hot-pot',
     hasAnalyticsSdk: true,
     // hot-pot 已完成 SDK 标准化打点（含 level_start/clear/fail），存档差分链路下线
     hasSnapshotIngest: false,
@@ -88,6 +96,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'huahua',
     displayName: '花花妙屋',
+    wechatAppId: 'wx67b4d58810df8bba',
+    workspaceDir: 'game2D_huahua',
     hasAnalyticsSdk: true,
     // 2026-05-10 接入 @gp/analytics-sdk 通用层（session/login/ad/share/tutorial/app_error）。
     // 2026-05-10 补全 17 个业务专属事件（merge/order/decoration/dressup/star/quest/checkin/fountain/affinity/...），
@@ -104,6 +114,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'caizhu',
     displayName: '彩珠五连',
+    wechatAppId: 'wx19255301c4f7232e',
+    workspaceDir: 'caizhu-rosa',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['level_progress', 'caizhu_gameplay'],
@@ -112,6 +124,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'petTower',
     displayName: '灵宠消消塔',
+    wechatAppId: 'wx53b03390106eff65',
+    workspaceDir: 'xiaochu2',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['pet_tower_gameplay', 'level_progress'],
@@ -122,6 +136,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'wujin_wenzhang',
     displayName: '无尽纹章',
+    wechatAppId: 'wx66bc130bc0543621',
+    workspaceDir: 'srpg-rosa',
     // 抖音包 appid tt0dfa7b479384039202。埋点 gameKey 仍用这一档，端别只看 platform=douyin。
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
@@ -131,6 +147,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'cunkou',
     displayName: '村口大战外星人',
+    wechatAppId: 'wx4afec790790030e8',
+    workspaceDir: 'code_1',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['level_progress'],
@@ -139,6 +157,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'jiancai',
     displayName: '扫荡菜场',
+    wechatAppId: 'wx41ac821080ff87f9',
+    workspaceDir: 'jiancai-rosa',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['jiancai_gameplay'],
@@ -147,6 +167,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'blackrosa',
     displayName: '墨字防线',
+    wechatAppId: 'wxad27f529c95e582c',
+    workspaceDir: 'black-rosa',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['level_progress'],
@@ -155,6 +177,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'dresssort',
     displayName: '一裙又一裙',
+    wechatAppId: 'wxd7e8bab5c9f43673',
+    workspaceDir: 'game2D_cat',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['level_progress'],
@@ -163,6 +187,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'songjiang',
     displayName: '营救宋江',
+    wechatAppId: 'wxe1acde0de051578b',
+    workspaceDir: 'code_3',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['level_progress'],
@@ -171,6 +197,8 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'biehuang',
     displayName: '宋江别慌张',
+    wechatAppId: 'wxde332003e4d0ef23',
+    workspaceDir: 'code_2',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     gameplayPanels: ['level_progress'],
@@ -179,9 +207,20 @@ export const ALL_GAMES: GameDescriptor[] = [
   {
     gameKey: 'duanju',
     displayName: '翻盘女王',
+    wechatAppId: 'wx0a212a8e12191122',
+    workspaceDir: 'game2D_duanju',
     hasAnalyticsSdk: true,
     hasSnapshotIngest: false,
     monetization: { ads: true, iap: false, ecpmProfile: 'duanju' },
+  },
+  {
+    gameKey: 'mori',
+    displayName: '末日囤货狂',
+    wechatAppId: 'wx06d4ac75bc87dec2',
+    workspaceDir: 'mori-rosa',
+    hasAnalyticsSdk: true,
+    hasSnapshotIngest: false,
+    monetization: { ads: true, iap: false, ecpmProfile: 'mori' },
   },
 ];
 

@@ -20,8 +20,10 @@
     "verify:mysql": "tsx src/server/jobs/verify-mysql-storage.ts",
     "probe:tencent-ads": "node scripts/probe-tencent-ads.mjs",
     "demo:restart": "node scripts/restart-demo.mjs",
+    "icons:ensure": "tsx scripts/ensure-game-icons.ts",
+    "icons:check": "tsx scripts/ensure-game-icons.ts --check-only --strict",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run typecheck && vite build"
+    "build": "npm run icons:ensure && npm run typecheck && vite build"
   },
   "keywords": [],
   "author": "",
