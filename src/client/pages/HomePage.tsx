@@ -1,17 +1,16 @@
-import { Alert, Button, Segmented, Space, Spin, Typography } from 'antd';
+import { CrownFilled, ReloadOutlined, RightOutlined } from '@ant-design/icons';
+import { Alert, Button, Segmented, Spin } from 'antd';
 import type { EChartsOption } from 'echarts';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import type { PlatformFilter } from '../../shared/platforms';
+import { CHANNEL_PLATFORMS, PLATFORM_LABEL, type PlatformFilter } from '../../shared/platforms';
 import ReactECharts from '../components/AnalyticsChart';
 import { GameIcon } from '../components/GameIcon';
 import { fetchJson } from '../fetchJson';
 
 type RevenueGranularity = 'day' | 'month';
 type RevenueChannel = 'total' | 'wechat' | 'douyin';
-
-const { Text, Title } = Typography;
 
 interface HomePlatformDau {
   platform: PlatformFilter;
@@ -108,17 +107,17 @@ const ACTIVITY_META: Record<
   ActivityMetric,
   { title: string; unit: string; color: string; empty: string }
 > = {
-  dau: { title: '总日活', unit: '人', color: '#0f766e', empty: '暂无日活' },
-  ad: { title: '总曝光', unit: '次', color: '#c2410c', empty: '暂无曝光' },
+  dau: { title: '总日活', unit: '人', color: '#14b8a6', empty: '暂无日活' },
+  ad: { title: '总曝光', unit: '次', color: '#fb923c', empty: '暂无曝光' },
 };
 
 const CHANNEL_META: Record<
   RevenueChannel,
   { title: string; color: string; empty: string }
 > = {
-  total: { title: '总收入', color: '#b45309', empty: '暂无总收益' },
-  wechat: { title: '微信收入', color: '#1d4ed8', empty: '暂无微信收益' },
-  douyin: { title: '抖音收入', color: '#7c3aed', empty: '暂无抖音收益' },
+  total: { title: '总收入', color: '#fbbf25', empty: '暂无总收益' },
+  wechat: { title: '微信收入', color: '#12b982', empty: '暂无微信收益' },
+  douyin: { title: '抖音收入', color: '#f43f5e', empty: '暂无抖音收益' },
 };
 
 function formatCount(n: number): string {
@@ -158,10 +157,6 @@ function formatDayLabel(dateKey: string): string {
   const [, month, day] = dateKey.split('-');
   if (!month || !day) return dateKey;
   return `${Number(month)}/${Number(day)}`;
-}
-
-function barPct(value: number, max: number): number {
-  return Math.round((value / Math.max(1, max)) * 100);
 }
 
 function sumMoney(values: number[] | undefined): number {
@@ -207,7 +202,6 @@ function pickChannelTrend(
 function buildTrendChartOption(input: {
   color: string;
   isDaily: boolean;
-  /** 今天的实时在线：横轴已经是「时:分」，点很密，不再画圆点 */
   clock?: boolean;
   buckets: string[];
   games: Array<{ display_name: string; values: number[] }>;
@@ -225,6 +219,10 @@ function buildTrendChartOption(input: {
   return {
     tooltip: {
       trigger: 'axis',
+      backgroundColor: 'rgba(11, 18, 32, 0.95)',
+      borderColor: 'rgba(251, 191, 36, 0.32)',
+      textStyle: { color: '#f1f5f9', fontSize: 12 },
+      extraCssText: 'border-radius:10px;box-shadow:0 12px 28px rgba(0,0,0,0.45);backdrop-filter:blur(8px);',
       valueFormatter: (value) =>
         typeof value === 'number' ? input.formatValue(value) : String(value ?? ''),
     },
@@ -232,16 +230,28 @@ function buildTrendChartOption(input: {
       type: 'scroll',
       top: 0,
       right: 0,
+      itemHeight: 6,
+      itemWidth: 10,
+      itemGap: 8,
+      inactiveColor: 'rgba(148, 163, 184, 0.38)',
+      textStyle: { fontSize: 10.5, color: '#cbd5e2' },
+      pageIconColor: '#fbbf24',
+      pageIconInactiveColor: '#334156',
+      pageIconSize: 9,
+      pageTextStyle: { color: '#95a4b8', fontSize: 10 },
       selected,
       selectedMode: true,
     },
-    grid: { left: 4, right: input.clock || input.isDaily ? 18 : 8, top: 28, bottom: 2, containLabel: true },
+    grid: { left: 4, right: input.clock || input.isDaily ? 14 : 8, top: 20, bottom: 2, containLabel: true },
     xAxis: {
       type: 'category',
       data: input.buckets,
       boundaryGap: false,
+      axisLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.16)' } },
       axisLabel: {
-        // 按天时不要自动抽稀，否则最后两天的刻度会被藏掉。按月标签较长，重叠的月份交给图表自己藏。
+        fontSize: 10,
+        margin: 5,
+        color: '#95a4b8',
         hideOverlap: Boolean(input.clock) || !input.isDaily,
         interval: input.clock
           ? clockAxisInterval(input.buckets)
@@ -255,30 +265,34 @@ function buildTrendChartOption(input: {
     yAxis: {
       type: 'value',
       min: 0,
+      splitNumber: 2,
       axisLabel: {
+        fontSize: 10,
+        margin: 6,
+        color: '#95a4b8',
         formatter: (value: number) => (value >= 10000 ? `${(value / 10000).toFixed(1)}万` : String(value)),
       },
-      splitLine: { lineStyle: { type: 'dashed' } },
+      splitLine: { lineStyle: { type: 'dashed', color: 'rgba(148, 163, 184, 0.12)' } },
     },
     series: [
       {
         name: '合计',
         type: 'line' as const,
-        smooth: 0.35,
-        showSymbol: !input.clock,
-        symbolSize: input.clock ? 0 : input.isDaily ? 5 : 7,
+        smooth: 0.36,
+        showSymbol: false,
+        symbolSize: 5,
         z: 3,
-        lineStyle: { width: 3, type: 'solid' as const },
+        lineStyle: { width: 2.5, type: 'solid' as const, color: input.color },
         itemStyle: { color: input.color },
-        areaStyle: { opacity: 0.14 },
+        areaStyle: { opacity: 0.24 },
         data: input.totals,
       },
       ...input.games.map((game) => ({
         name: game.display_name,
         type: 'line' as const,
         smooth: 0.35,
-        showSymbol: !input.clock,
-        symbolSize: input.clock ? 0 : 6,
+        showSymbol: false,
+        symbolSize: 4,
         data: game.values,
       })),
     ],
@@ -304,32 +318,134 @@ function buildRevenueChartOption(input: {
   });
 }
 
-function PlatformMetric({
+function SheetNumber({
   kind,
   value,
-  max,
+  inverted = false,
 }: {
   kind: 'dau' | 'ad' | 'rev';
   value: number;
-  max: number;
+  inverted?: boolean;
 }) {
-  const label = kind === 'dau' ? '日活' : kind === 'ad' ? '曝光' : 'T-1';
   const display = kind === 'rev' ? formatYuan(value) : formatCount(value);
   return (
-    <span className={`home-metric home-metric-${kind}`}>
-      <span className="home-metric-head">
-        <span className="home-metric-k">{label}</span>
-        <span className="home-metric-v mono">{display}</span>
-      </span>
-      <span className="home-platform-bar-track" aria-hidden>
-        <span className="home-platform-bar-fill" style={{ width: `${barPct(value, max)}%` }} />
-      </span>
+    <span
+      className={`home-sheet-num home-sheet-num-${kind}${value === 0 ? ' is-zero' : ''}${
+        inverted ? ' is-inverted' : ''
+      }`}
+    >
+      {display}
     </span>
   );
 }
 
 /**
- * 经分总览主页：各游戏今日微信/抖音日活与广告曝光，点击平台进入该游戏看板。
+ * 卡片铭牌右侧内嵌 14 日微缩走势图：优先展示 T-1 收益曲线（鎏金），若无收益则回退日活曲线（翠青）。
+ */
+function GameSparkline({
+  values,
+  tone,
+  title,
+}: {
+  values: number[];
+  tone: 'gold' | 'teal' | 'muted';
+  title: string;
+}) {
+  const gradId = useId().replace(/:/g, '');
+  const width = 62;
+  const height = 22;
+  const padX = 2;
+  const padY = 3;
+  const recent = values.slice(-14);
+  const maxVal = Math.max(0, ...recent);
+
+  if (recent.length < 2 || maxVal <= 0 || tone === 'muted') {
+    return (
+      <svg
+        className="home-sparkline home-sparkline-flat"
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        aria-label={title}
+      >
+        <line
+          x1={padX}
+          y1={height - 5}
+          x2={width - padX}
+          y2={height - 5}
+          stroke="rgba(226, 232, 240, 0.28)"
+          strokeWidth="1.5"
+          strokeDasharray="2.5 2.5"
+        />
+      </svg>
+    );
+  }
+
+  const strokeColor = tone === 'gold' ? '#fbbf24' : '#2dd4bf';
+  const innerW = width - padX * 2;
+  const innerH = height - padY * 2;
+  const pts = recent.map((v, idx) => {
+    const x = padX + (idx / (recent.length - 1)) * innerW;
+    const y = padY + innerH - (Math.max(0, v) / maxVal) * innerH;
+    return [x, y] as const;
+  });
+
+  const linePath = pts
+    .map(([x, y], idx) => `${idx === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(' ');
+  const areaPath = `${linePath} L${pts[pts.length - 1][0].toFixed(1)},${(height - 1).toFixed(
+    1,
+  )} L${pts[0][0].toFixed(1)},${(height - 1).toFixed(1)} Z`;
+  const [lastX, lastY] = pts[pts.length - 1];
+
+  return (
+    <svg
+      className="home-sparkline"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={title}
+    >
+      <title>{title}</title>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={strokeColor} stopOpacity="0.45" />
+          <stop offset="100%" stopColor={strokeColor} stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+      <path d={areaPath} fill={`url(#${gradId})`} />
+      <path
+        d={linePath}
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={lastX} cy={lastY} r="2.3" fill={strokeColor} />
+    </svg>
+  );
+}
+
+function calcPlatformHeatPct(
+  p: HomePlatformDau,
+  maxDau: number,
+  maxAd: number,
+  maxRev: number,
+): number {
+  if (p.dau <= 0 && (p.ad_show_cnt || 0) <= 0 && (p.t1_revenue_cny || 0) <= 0) {
+    return 0;
+  }
+  const dauRatio = maxDau > 0 ? p.dau / maxDau : 0;
+  const revRatio = maxRev > 0 ? (p.t1_revenue_cny || 0) / maxRev : 0;
+  const adRatio = maxAd > 0 ? (p.ad_show_cnt || 0) / maxAd : 0;
+  const dominant = Math.max(dauRatio, revRatio * 0.9, adRatio * 0.75);
+  return Math.max(14, Math.min(100, Math.round(dominant * 100)));
+}
+
+/**
+ * 经分总览主页：深墨曜石全局遥测舱 + 13 款游戏高定分渠道矩阵 + 全盘五渠道母卡。
  */
 export function HomePage() {
   const navigate = useNavigate();
@@ -376,8 +492,13 @@ export function HomePage() {
       setDailyFromDate(data.daily_from_date || '');
       setDailyTrend(data.daily_trend || null);
       setMonthlyTrend(data.monthly_trend || null);
-      setTodayTotalDau(data.today_total_dau ?? (data.games || []).reduce((sum, game) => sum + (game.total_dau || 0), 0));
-      setTodayTotalAdShow(data.today_total_ad_show ?? (data.games || []).reduce((sum, game) => sum + (game.total_ad_show || 0), 0));
+      setTodayTotalDau(
+        data.today_total_dau ?? (data.games || []).reduce((sum, game) => sum + (game.total_dau || 0), 0),
+      );
+      setTodayTotalAdShow(
+        data.today_total_ad_show ??
+          (data.games || []).reduce((sum, game) => sum + (game.total_ad_show || 0), 0),
+      );
       setActivityDaily(data.activity_daily || null);
       setActivityMonthly(data.activity_monthly || null);
       setOnlineToday(data.online_today || null);
@@ -401,13 +522,12 @@ export function HomePage() {
     return () => window.clearInterval(timer);
   }, [load]);
 
-  const maxTotal = Math.max(1, ...games.map((g) => g.total_dau));
   const isDaily = revenueGranularity === 'day';
   const monthHint =
-    monthFromDate && monthT1Date ? `${monthFromDate} ~ ${monthT1Date}` : '当月截至昨天，不含今日';
-  const chartHint = isDaily
-    ? `${dailyFromDate && monthT1Date ? `${dailyFromDate} ~ ${monthT1Date}` : '截止昨天'} · 默认只看合计`
-    : '默认只看合计 · 本月只计到昨天 · 点图例可对比单款游戏';
+    monthFromDate && monthT1Date ? `${monthFromDate.slice(5)}~${monthT1Date.slice(5)}` : '当月T-1';
+  const chartScopeHint = isDaily
+    ? `${dailyFromDate ? `${dailyFromDate.slice(5)}~${(monthT1Date || '').slice(5)}` : '近30天'} · 点图例叠加单游`
+    : '近12个月 · 点图例叠加单游';
 
   const monthByChannel: Record<RevenueChannel, number> = {
     total: monthT1Revenue,
@@ -422,8 +542,8 @@ export function HomePage() {
   const headlineByChannel = isDaily ? monthByChannel : yearByChannel;
   const yearMonths = monthlyTrend?.months || [];
   const yearHint = yearMonths.length
-    ? `${yearMonths[0]} ~ ${yearMonths[yearMonths.length - 1]}`
-    : '近十二个月';
+    ? `${yearMonths[0]}~${yearMonths[yearMonths.length - 1]}`
+    : '近12个月';
 
   const chartOptions = useMemo(() => {
     const channels: RevenueChannel[] = ['total', 'wechat', 'douyin'];
@@ -474,7 +594,7 @@ export function HomePage() {
   const onlineOption = useMemo(
     () =>
       buildTrendChartOption({
-        color: '#0369a1',
+        color: '#38bdf9',
         isDaily: false,
         clock: true,
         buckets: onlineToday?.buckets || [],
@@ -489,6 +609,63 @@ export function HomePage() {
     [onlineLegendSelected, onlineToday],
   );
 
+  /** 每款游戏的近 14 日微缩曲线与当前实时在线人数索引 */
+  const gamePulseMap = useMemo(() => {
+    const revByGame = new Map<string, number[]>();
+    for (const g of dailyTrend?.games || []) {
+      revByGame.set(g.game_key, g.revenue || []);
+    }
+    const dauByGame = new Map<string, number[]>();
+    for (const g of activityDaily?.dau.games || []) {
+      dauByGame.set(g.game_key, g.values || []);
+    }
+    const onlineByGame = new Map<string, number>();
+    for (const g of onlineToday?.games || []) {
+      const vals = g.values || [];
+      onlineByGame.set(g.game_key, vals.length ? vals[vals.length - 1] || 0 : 0);
+    }
+    return { revByGame, dauByGame, onlineByGame };
+  }, [activityDaily, dailyTrend, onlineToday]);
+
+  /** 全盘五渠道纵向汇总（供第 14 格黑曜石母卡展示） */
+  const portfolioPlatforms = useMemo(() => {
+    return CHANNEL_PLATFORMS.map((plat) => {
+      let dau = 0;
+      let ad = 0;
+      let rev = 0;
+      let leadGameKey = games[0]?.game_key || 'huahua';
+      let leadScore = -1;
+      for (const g of games) {
+        const row = g.platforms.find((item) => item.platform === plat);
+        if (!row) continue;
+        dau += row.dau || 0;
+        ad += row.ad_show_cnt || 0;
+        rev += row.t1_revenue_cny || 0;
+        const score = (row.dau || 0) * 1000 + (row.t1_revenue_cny || 0);
+        if (score > leadScore) {
+          leadScore = score;
+          leadGameKey = g.game_key;
+        }
+      }
+      return {
+        platform: plat,
+        label: PLATFORM_LABEL[plat],
+        dau,
+        ad_show_cnt: ad,
+        t1_revenue_cny: Math.round(rev * 100) / 100,
+        leadGameKey,
+      };
+    });
+  }, [games]);
+
+  const activeGameCount = useMemo(
+    () =>
+      games.filter(
+        (g) => g.total_dau > 0 || (g.total_ad_show || 0) > 0 || (g.month_t1_revenue_cny || 0) > 0,
+      ).length,
+    [games],
+  );
+
   const todayByActivity: Record<ActivityMetric, number> = {
     dau: todayTotalDau,
     ad: todayTotalAdShow,
@@ -500,210 +677,364 @@ export function HomePage() {
     );
   };
 
+  const openGamePrimary = (game: HomeGameDau) => {
+    const best = [...game.platforms].sort(
+      (a, b) =>
+        b.dau - a.dau ||
+        (b.t1_revenue_cny || 0) - (a.t1_revenue_cny || 0) ||
+        (b.ad_show_cnt || 0) - (a.ad_show_cnt || 0),
+    )[0];
+    openGamePlatform(game.game_key, best?.platform || 'wechat');
+  };
+
+  const portfolioMaxDau = Math.max(1, ...portfolioPlatforms.map((p) => p.dau));
+  const portfolioMaxAd = Math.max(1, ...portfolioPlatforms.map((p) => p.ad_show_cnt));
+  const portfolioMaxRev = Math.max(1, ...portfolioPlatforms.map((p) => p.t1_revenue_cny));
+
   return (
     <div className="home-page">
-      <div className="home-topbar">
-        <div className="home-toolbar-text">
-          <Title level={4} className="home-heading">
-            今日总览
-          </Title>
-          <Text type="secondary" className="home-sub">
-            {dateKey || '—'} · 按日活降序 · 点平台进看板
-          </Text>
-        </div>
-        <Space className="home-topbar-actions">
-          <Text type="secondary" className="home-meta">
-            {computedAt ? new Date(computedAt).toLocaleTimeString('zh-CN') : '—'}
-          </Text>
-          <Button size="small" onClick={() => void load()} loading={loading}>
-            刷新
-          </Button>
-        </Space>
-      </div>
-
-      <div className="home-month-chart">
-        <div className="home-month-chart-head">
-          <div className="home-month-chart-head-left">
-            <span className="home-month-chart-title">
-              {isDaily ? '近一月日收益 · T-1' : '近一年月度收益'}
+      <section className="home-command-deck">
+        <div className="home-deck-ribbon">
+          <div className="home-deck-ribbon-left">
+            <span className="home-live-pill">
+              <span className="home-live-dot" aria-hidden />
+              <span>今日总览</span>
+              <span className="home-live-date mono">{dateKey || '—'}</span>
             </span>
-            <Text type="secondary" className="home-month-chart-hint">
-              {chartHint}
-            </Text>
-          </div>
-          <Segmented
-            size="small"
-            value={revenueGranularity}
-            options={[
-              { label: '按天', value: 'day' },
-              { label: '按月', value: 'month' },
-            ]}
-            onChange={(next) => setRevenueGranularity(next as RevenueGranularity)}
-          />
-        </div>
-        <div className="home-revenue-grid">
-          {(['total', 'wechat', 'douyin'] as const).map((channel) => {
-            const meta = CHANNEL_META[channel];
-            const picked = pickChannelTrend(channel, dailyTrend, monthlyTrend, isDaily);
-            return (
-              <section key={channel} className={`home-revenue-panel home-revenue-${channel}`}>
-                <div className="home-revenue-panel-head">
-                  <div className="home-revenue-panel-title-row">
-                    <span className="home-revenue-panel-title">{meta.title}</span>
-                    <span className="home-revenue-panel-num mono">{formatYuan(headlineByChannel[channel])}</span>
-                    <span className="home-revenue-panel-unit">元</span>
-                  </div>
-                  <Text type="secondary" className="home-revenue-panel-hint">
-                    {isDaily ? `当月 T-1 · ${monthHint}` : `近一年 · ${yearHint}`}
-                  </Text>
-                </div>
-                {picked.buckets.length ? (
-                  <ReactECharts
-                    option={chartOptions[channel]}
-                    height={148}
-                    framed={false}
-                    onEvents={{
-                      legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
-                        setLegendSelected(event.selected || null);
-                      },
-                    }}
-                  />
-                ) : (
-                  <div className="home-month-chart-empty">{isDaily ? meta.empty : meta.empty}</div>
-                )}
-              </section>
-            );
-          })}
-        </div>
-        <div className="home-activity-head">
-          <span className="home-month-chart-title">全部游戏 · 日活、曝光与在线</span>
-          <Text type="secondary" className="home-month-chart-hint">
-            {isDaily
-              ? '日活和曝光是近 30 天含今天 · 在线是近 24 小时 · 默认只看合计'
-              : '日活和曝光按月 · 在线仍是近 24 小时 · 默认只看合计'}
-          </Text>
-        </div>
-        <div className="home-activity-grid">
-          {(['dau', 'ad'] as const).map((metric) => {
-            const meta = ACTIVITY_META[metric];
-            const buckets = activityWindow?.buckets || [];
-            return (
-              <section key={metric} className={`home-revenue-panel home-activity-${metric}`}>
-                <div className="home-revenue-panel-head">
-                  <div className="home-revenue-panel-title-row">
-                    <span className="home-revenue-panel-title">{meta.title}</span>
-                    <span className="home-revenue-panel-num mono">{formatCount(todayByActivity[metric])}</span>
-                    <span className="home-revenue-panel-unit">{meta.unit}</span>
-                  </div>
-                  <Text type="secondary" className="home-revenue-panel-hint">
-                    今日 · 全部游戏
-                  </Text>
-                </div>
-                {buckets.length ? (
-                  <ReactECharts
-                    option={activityOptions[metric]}
-                    height={148}
-                    framed={false}
-                    onEvents={{
-                      legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
-                        const selected = event.selected || null;
-                        if (metric === 'dau') setDauLegendSelected(selected);
-                        else setAdLegendSelected(selected);
-                      },
-                    }}
-                  />
-                ) : (
-                  <div className="home-month-chart-empty">{meta.empty}</div>
-                )}
-              </section>
-            );
-          })}
-          <section className="home-revenue-panel home-activity-online">
-            <div className="home-revenue-panel-head">
-              <div className="home-revenue-panel-title-row">
-                <span className="home-revenue-panel-title">当前在线</span>
-                <span className="home-revenue-panel-num mono">{formatCount(onlineNow)}</span>
-                <span className="home-revenue-panel-unit">人</span>
-              </div>
-              <Text type="secondary" className="home-revenue-panel-hint">
-                近 24 小时 · 最右是此刻
-              </Text>
+            <div className="home-deck-pills">
+              <span className="home-deck-stat home-deck-stat-gold">
+                <span className="home-deck-stat-k">{isDaily ? '当月T-1总收' : '近一年总收'}</span>
+                <span className="home-deck-stat-v mono">¥{formatYuan(headlineByChannel.total)}</span>
+              </span>
+              <span className="home-deck-stat home-deck-stat-teal">
+                <span className="home-deck-stat-k">今日总日活</span>
+                <span className="home-deck-stat-v mono">{formatCount(todayTotalDau)}</span>
+              </span>
+              <span className="home-deck-stat home-deck-stat-warm">
+                <span className="home-deck-stat-k">今日总曝光</span>
+                <span className="home-deck-stat-v mono">{formatCount(todayTotalAdShow)}</span>
+              </span>
+              <span className="home-deck-stat home-deck-stat-sky">
+                <span className="home-deck-stat-k">实时在线</span>
+                <span className="home-deck-stat-v mono">{formatCount(onlineNow)}人</span>
+              </span>
             </div>
-            {onlineToday?.buckets.length ? (
-              <ReactECharts
-                option={onlineOption}
-                height={148}
-                framed={false}
-                onEvents={{
-                  legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
-                    setOnlineLegendSelected(event.selected || null);
-                  },
-                }}
-              />
-            ) : (
-              <div className="home-month-chart-empty">暂无在线</div>
-            )}
-          </section>
-        </div>
-      </div>
+            <span className="home-deck-hint">{chartScopeHint}</span>
+          </div>
 
-      {error && (
-        <Alert type="error" showIcon className="home-alert" message={error} />
-      )}
+          <div className="home-deck-ribbon-right">
+            <Segmented
+              size="small"
+              className="home-deck-segmented"
+              value={revenueGranularity}
+              options={[
+                { label: '按天', value: 'day' },
+                { label: '按月', value: 'month' },
+              ]}
+              onChange={(next) => setRevenueGranularity(next as RevenueGranularity)}
+            />
+            <span className="home-deck-clock mono">
+              {computedAt ? new Date(computedAt).toLocaleTimeString('zh-CN') : '—'}
+            </span>
+            <Button
+              size="small"
+              className="home-deck-refresh"
+              icon={<ReloadOutlined />}
+              onClick={() => void load()}
+              loading={loading}
+            >
+              刷新
+            </Button>
+          </div>
+        </div>
+
+        <div className="home-telemetry-board">
+          <div className="home-revenue-grid">
+            {(['total', 'wechat', 'douyin'] as const).map((channel) => {
+              const meta = CHANNEL_META[channel];
+              const picked = pickChannelTrend(channel, dailyTrend, monthlyTrend, isDaily);
+              return (
+                <section key={channel} className={`home-revenue-panel home-revenue-${channel}`}>
+                  <div className="home-revenue-panel-head">
+                    <div className="home-revenue-panel-title-row">
+                      <span className="home-revenue-panel-dot" aria-hidden />
+                      <span className="home-revenue-panel-title">{meta.title}</span>
+                      <span className="home-revenue-panel-num mono">
+                        {formatYuan(headlineByChannel[channel])}
+                      </span>
+                      <span className="home-revenue-panel-unit">元</span>
+                    </div>
+                    <span className="home-revenue-panel-scope mono">
+                      {isDaily ? monthHint : yearHint}
+                    </span>
+                  </div>
+                  {picked.buckets.length ? (
+                    <ReactECharts
+                      option={chartOptions[channel]}
+                      height={102}
+                      framed={false}
+                      onEvents={{
+                        legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
+                          setLegendSelected(event.selected || null);
+                        },
+                      }}
+                    />
+                  ) : (
+                    <div className="home-month-chart-empty">{meta.empty}</div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+
+          <div className="home-activity-grid">
+            {(['dau', 'ad'] as const).map((metric) => {
+              const meta = ACTIVITY_META[metric];
+              const buckets = activityWindow?.buckets || [];
+              return (
+                <section key={metric} className={`home-revenue-panel home-activity-${metric}`}>
+                  <div className="home-revenue-panel-head">
+                    <div className="home-revenue-panel-title-row">
+                      <span className="home-revenue-panel-dot" aria-hidden />
+                      <span className="home-revenue-panel-title">{meta.title}</span>
+                      <span className="home-revenue-panel-num mono">
+                        {formatCount(todayByActivity[metric])}
+                      </span>
+                      <span className="home-revenue-panel-unit">{meta.unit}</span>
+                    </div>
+                    <span className="home-revenue-panel-scope">
+                      {isDaily ? '今日 · 近30天趋势' : '今日 · 月度趋势'}
+                    </span>
+                  </div>
+                  {buckets.length ? (
+                    <ReactECharts
+                      option={activityOptions[metric]}
+                      height={102}
+                      framed={false}
+                      onEvents={{
+                        legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
+                          const selected = event.selected || null;
+                          if (metric === 'dau') setDauLegendSelected(selected);
+                          else setAdLegendSelected(selected);
+                        },
+                      }}
+                    />
+                  ) : (
+                    <div className="home-month-chart-empty">{meta.empty}</div>
+                  )}
+                </section>
+              );
+            })}
+
+            <section className="home-revenue-panel home-activity-online">
+              <div className="home-revenue-panel-head">
+                <div className="home-revenue-panel-title-row">
+                  <span className="home-revenue-panel-dot" aria-hidden />
+                  <span className="home-revenue-panel-title">当前在线</span>
+                  <span className="home-revenue-panel-num mono">{formatCount(onlineNow)}</span>
+                  <span className="home-revenue-panel-unit">人</span>
+                </div>
+                <span className="home-revenue-panel-scope">近24小时 · 右端此刻</span>
+              </div>
+              {onlineToday?.buckets.length ? (
+                <ReactECharts
+                  option={onlineOption}
+                  height={102}
+                  framed={false}
+                  onEvents={{
+                    legendselectchanged: (event: { selected?: Record<string, boolean> }) => {
+                      setOnlineLegendSelected(event.selected || null);
+                    },
+                  }}
+                />
+              ) : (
+                <div className="home-month-chart-empty">暂无在线</div>
+              )}
+            </section>
+          </div>
+        </div>
+      </section>
+
+      {error && <Alert type="error" showIcon className="home-alert" message={error} />}
 
       <Spin spinning={loading && games.length === 0}>
         <div className="home-game-grid">
-          {games.map((game) => {
-            const heat = Math.min(1, game.total_dau / maxTotal);
-            const platformDauMax = Math.max(1, ...game.platforms.map((p) => p.dau));
-            const platformAdMax = Math.max(1, ...game.platforms.map((p) => p.ad_show_cnt || 0));
-            const platformRevMax = Math.max(1, ...game.platforms.map((p) => p.t1_revenue_cny || 0));
+          {games.map((game, index) => {
+            const rank = index + 1;
+            const isActive =
+              game.total_dau > 0 ||
+              (game.total_ad_show || 0) > 0 ||
+              (game.month_t1_revenue_cny || 0) > 0;
+            const tierClass =
+              rank === 1
+                ? 'is-rank-1'
+                : rank === 2
+                  ? 'is-rank-2'
+                  : rank === 3
+                    ? 'is-rank-3'
+                    : isActive
+                      ? 'is-active'
+                      : 'is-quiet';
+
+            const revSeries = gamePulseMap.revByGame.get(game.game_key) || [];
+            const dauSeries = gamePulseMap.dauByGame.get(game.game_key) || [];
+            const hasRecentRev = revSeries.slice(-14).some((v) => v > 0);
+            const hasRecentDau = dauSeries.slice(-14).some((v) => v > 0);
+            const sparkValues = hasRecentRev ? revSeries : dauSeries;
+            const sparkTone: 'gold' | 'teal' | 'muted' = hasRecentRev
+              ? 'gold'
+              : hasRecentDau
+                ? 'teal'
+                : 'muted';
+            const sparkTitle = hasRecentRev
+              ? `${game.display_name} 近14日T-1收益走势`
+              : hasRecentDau
+                ? `${game.display_name} 近14日日活走势`
+                : `${game.display_name} 近期暂无波动`;
+
+            const gameOnline = gamePulseMap.onlineByGame.get(game.game_key) || 0;
+            const platMaxDau = Math.max(0, ...game.platforms.map((p) => p.dau));
+            const platMaxAd = Math.max(0, ...game.platforms.map((p) => p.ad_show_cnt || 0));
+            const platMaxRev = Math.max(0, ...game.platforms.map((p) => p.t1_revenue_cny || 0));
+
             return (
-              <article
-                key={game.game_key}
-                className="home-game-card"
-                style={{ ['--home-heat' as string]: String(heat) }}
-              >
-                <header className="home-game-card-head">
-                  <div className="home-game-card-title-row">
+              <article key={game.game_key} className={`home-game-card ${tierClass}`}>
+                <button
+                  type="button"
+                  className="home-card-banner"
+                  onClick={() => openGamePrimary(game)}
+                  title={`进入 ${game.display_name} 经营看板`}
+                >
+                  <div className="home-card-banner-left">
+                    <span className="home-rank-badge mono">
+                      {rank <= 3 ? <CrownFilled className="home-rank-crown" /> : null}
+                      <span>{rank <= 3 ? `TOP ${rank}` : `#${rank}`}</span>
+                    </span>
                     <GameIcon gameKey={game.game_key} name={game.display_name} />
-                    <h2 className="home-game-name">{game.display_name}</h2>
-                  </div>
-                  <div className="home-game-kpis">
-                    <div className="home-game-kpi">
-                      <span className="home-game-kpi-num">{formatCount(game.total_dau)}</span>
-                      <span className="home-game-kpi-label">总日活</span>
-                    </div>
-                    <div className="home-game-kpi home-game-kpi-ad">
-                      <span className="home-game-kpi-num">{formatCount(game.total_ad_show || 0)}</span>
-                      <span className="home-game-kpi-label">总曝光</span>
-                    </div>
-                    <div className="home-game-kpi home-game-kpi-rev">
-                      <span className="home-game-kpi-num">{formatYuan(game.month_t1_revenue_cny || 0)}</span>
-                      <span className="home-game-kpi-label">当月T-1</span>
+                    <div className="home-card-title-wrap">
+                      <h2 className="home-game-name">{game.display_name}</h2>
+                      {gameOnline > 0 ? (
+                        <span className="home-card-online mono">
+                          <i aria-hidden />
+                          {gameOnline}在线
+                        </span>
+                      ) : null}
                     </div>
                   </div>
-                </header>
+                  <div className="home-card-banner-right">
+                    <GameSparkline values={sparkValues} tone={sparkTone} title={sparkTitle} />
+                  </div>
+                </button>
+
+                <div className="home-card-summary">
+                  <div className="home-sheet-grid home-sheet-cols" aria-hidden>
+                    <span className="home-sheet-col-first">渠道</span>
+                    <span>总日活</span>
+                    <span>总曝光</span>
+                    <span>当月T-1</span>
+                  </div>
+                  <div className="home-sheet-grid home-sheet-total">
+                    <span className="home-sheet-tag">合计</span>
+                    <SheetNumber kind="dau" value={game.total_dau} />
+                    <SheetNumber kind="ad" value={game.total_ad_show || 0} />
+                    <SheetNumber kind="rev" value={game.month_t1_revenue_cny || 0} />
+                  </div>
+                </div>
 
                 <div className="home-platform-list">
-                  {game.platforms.map((p) => (
-                    <button
-                      key={p.platform}
-                      type="button"
-                      className={`home-platform-row home-platform-${p.platform}`}
-                      aria-label={`${p.label} 日活 ${formatCount(p.dau)}，曝光 ${formatCount(p.ad_show_cnt || 0)}，T-1 ${formatYuan(p.t1_revenue_cny || 0)} 元`}
-                      onClick={() => openGamePlatform(game.game_key, p.platform)}
-                    >
-                      <span className="home-platform-label">{p.label}</span>
-                      <PlatformMetric kind="dau" value={p.dau} max={platformDauMax} />
-                      <PlatformMetric kind="ad" value={p.ad_show_cnt || 0} max={platformAdMax} />
-                      <PlatformMetric kind="rev" value={p.t1_revenue_cny || 0} max={platformRevMax} />
-                    </button>
-                  ))}
+                  {game.platforms.map((p) => {
+                    const pct = calcPlatformHeatPct(p, platMaxDau, platMaxAd, platMaxRev);
+                    const hasData = pct > 0;
+                    return (
+                      <button
+                        key={p.platform}
+                        type="button"
+                        className={`home-sheet-grid home-sheet-row home-platform-${p.platform}${
+                          hasData ? ' has-data' : ' is-idle'
+                        }`}
+                        style={{ ['--plat-pct' as string]: `${pct}%` }}
+                        aria-label={`${p.label} 日活 ${formatCount(p.dau)}，曝光 ${formatCount(
+                          p.ad_show_cnt || 0,
+                        )}，T-1 ${formatYuan(p.t1_revenue_cny || 0)} 元`}
+                        onClick={() => openGamePlatform(game.game_key, p.platform)}
+                      >
+                        <span className="home-platform-label">
+                          <i className="home-platform-dot" aria-hidden />
+                          <span>{p.label}</span>
+                        </span>
+                        <SheetNumber kind="dau" value={p.dau} />
+                        <SheetNumber kind="ad" value={p.ad_show_cnt || 0} />
+                        <SheetNumber kind="rev" value={p.t1_revenue_cny || 0} />
+                      </button>
+                    );
+                  })}
                 </div>
               </article>
             );
           })}
+
+          {games.length > 0 && (
+            <aside className="home-game-card home-portfolio-card" aria-label="全盘五渠道总计">
+              <div className="home-card-banner home-portfolio-banner">
+                <div className="home-card-banner-left">
+                  <span className="home-rank-badge home-portfolio-badge mono">ALL</span>
+                  <div className="home-card-title-wrap">
+                    <h2 className="home-game-name">全盘渠道总计</h2>
+                    <span className="home-portfolio-sub mono">
+                      活跃 {activeGameCount}/{games.length} 款
+                    </span>
+                  </div>
+                </div>
+                <RightOutlined className="home-portfolio-arrow" />
+              </div>
+
+              <div className="home-card-summary home-portfolio-summary">
+                <div className="home-sheet-grid home-sheet-cols" aria-hidden>
+                  <span className="home-sheet-col-first">渠道</span>
+                  <span>总日活</span>
+                  <span>总曝光</span>
+                  <span>当月T-1</span>
+                </div>
+                <div className="home-sheet-grid home-sheet-total">
+                  <span className="home-sheet-tag">全盘</span>
+                  <SheetNumber kind="dau" value={todayTotalDau} inverted />
+                  <SheetNumber kind="ad" value={todayTotalAdShow} inverted />
+                  <SheetNumber kind="rev" value={monthT1Revenue} inverted />
+                </div>
+              </div>
+
+              <div className="home-platform-list home-portfolio-list">
+                {portfolioPlatforms.map((p) => {
+                  const pct = calcPlatformHeatPct(
+                    p,
+                    portfolioMaxDau,
+                    portfolioMaxAd,
+                    portfolioMaxRev,
+                  );
+                  return (
+                    <button
+                      key={p.platform}
+                      type="button"
+                      className={`home-sheet-grid home-sheet-row home-portfolio-row home-platform-${
+                        p.platform
+                      }${pct > 0 ? ' has-data' : ' is-idle'}`}
+                      style={{ ['--plat-pct' as string]: `${pct}%` }}
+                      onClick={() => openGamePlatform(p.leadGameKey, p.platform)}
+                      title={`进入 ${p.label} 头部游戏看板`}
+                    >
+                      <span className="home-platform-label">
+                        <i className="home-platform-dot" aria-hidden />
+                        <span>{p.label}</span>
+                      </span>
+                      <SheetNumber kind="dau" value={p.dau} inverted />
+                      <SheetNumber kind="ad" value={p.ad_show_cnt} inverted />
+                      <SheetNumber kind="rev" value={p.t1_revenue_cny} inverted />
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
+          )}
         </div>
         {!loading && games.length === 0 && !error && (
           <div className="home-empty">暂无已接入 SDK 的游戏</div>
